@@ -70,5 +70,367 @@
       y="0"
       width="1000"
       height="2400" />
+
+    <!-- Text keyboard slots. Geometry lives in SVG; TOML maps slot IDs to behavior. -->
+
+    <rect
+      id="key_q"
+      data-td-slot="key_q"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="q"
+      x="20"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_w"
+      data-td-slot="key_w"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="w"
+      x="112"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_e"
+      data-td-slot="key_e"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="e"
+      x="204"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_r"
+      data-td-slot="key_r"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="r"
+      x="296"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_t"
+      data-td-slot="key_t"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="t"
+      x="388"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_y"
+      data-td-slot="key_y"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="y"
+      x="480"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_u"
+      data-td-slot="key_u"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="u"
+      x="572"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_i"
+      data-td-slot="key_i"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="i"
+      x="664"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_o"
+      data-td-slot="key_o"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="o"
+      x="756"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_p"
+      data-td-slot="key_p"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="p"
+      x="848"
+      y="1296"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_a"
+      data-td-slot="key_a"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="a"
+      x="80"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_s"
+      data-td-slot="key_s"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="s"
+      x="172"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_d"
+      data-td-slot="key_d"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="d"
+      x="264"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_f"
+      data-td-slot="key_f"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="f"
+      x="356"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_g"
+      data-td-slot="key_g"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="g"
+      x="448"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_h"
+      data-td-slot="key_h"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="h"
+      x="540"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_j"
+      data-td-slot="key_j"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="j"
+      x="632"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_k"
+      data-td-slot="key_k"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="k"
+      x="724"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_l"
+      data-td-slot="key_l"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="l"
+      x="816"
+      y="1560"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_z"
+      data-td-slot="key_z"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="z"
+      x="140"
+      y="1824"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_x"
+      data-td-slot="key_x"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="x"
+      x="232"
+      y="1824"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_c"
+      data-td-slot="key_c"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="c"
+      x="324"
+      y="1824"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_v"
+      data-td-slot="key_v"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="v"
+      x="416"
+      y="1824"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_b"
+      data-td-slot="key_b"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="b"
+      x="508"
+      y="1824"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_n"
+      data-td-slot="key_n"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="n"
+      x="600"
+      y="1824"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_m"
+      data-td-slot="key_m"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="m"
+      x="692"
+      y="1824"
+      width="80"
+      height="220"
+      rx="22" />
+
+    <rect
+      id="key_esc"
+      data-td-slot="key_esc"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="ESC"
+      x="80"
+      y="2088"
+      width="150"
+      height="150"
+      rx="28" />
+
+    <rect
+      id="key_spc"
+      data-td-slot="key_spc"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="SPC"
+      x="260"
+      y="2088"
+      width="300"
+      height="150"
+      rx="28" />
+
+    <rect
+      id="key_del"
+      data-td-slot="key_del"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="DEL"
+      x="590"
+      y="2088"
+      width="150"
+      height="150"
+      rx="28" />
+
+    <rect
+      id="key_ret"
+      data-td-slot="key_ret"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="RET"
+      x="770"
+      y="2088"
+      width="150"
+      height="150"
+      rx="28" />
   </g>
 </svg>

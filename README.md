@@ -100,8 +100,8 @@ Base keyboard bindings:
 - Right-bottom swipe left: virtual keyboard `Backspace`
 - Right-bottom swipe right: virtual keyboard `Enter`
 
-Text mode includes a small built-in QWERTY-ish row layout. Config files can
-replace or extend this with `[[keyboard.rows]]`.
+Text mode uses key slots defined by the active SVG layout. Config files map
+slot IDs to key behavior with `[[keyboard.maps]]`; geometry stays in SVG.
 
 Default niri gestures still exist when no configured binding matches in niri modes:
 
@@ -165,28 +165,28 @@ trigger = { type = "swipe", target = "right_bottom", direction = "up" }
 behavior = { type = "key", key = "C-c" }
 ```
 
-Keyboard rows generate rectangular tap bindings automatically:
+Keyboard maps generate tap bindings from existing SVG slots. They do not define
+geometry:
 
 ```toml
 [keyboard]
 
-[[keyboard.rows]]
+[[keyboard.maps]]
 mode = "text"
 layer = "base"
-x = [0.04, 0.96]
-y = [0.54, 0.64]
-keys = ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]
-gap = 0.006
+
+[keyboard.maps.keys]
+key_q = "q"
+key_w = "w"
+key_spc = "SPC"
+key_del = "DEL"
 ```
 
-Row fields:
+Map fields:
 
 - `mode`: defaults to `text`
 - `layer`: defaults to `base`
-- `x`: normalized horizontal range; defaults to `[0.04, 0.96]`
-- `y`: required normalized vertical range
-- `keys`: required Emacs-style key tokens or key sequences
-- `gap`: normalized gap between generated keys; defaults to `0.0`
+- `keys`: required table mapping slot IDs to Emacs-style key tokens or key sequences
 - `fingers`: defaults to `1`
 - `max_ms`: optional tap time limit
 - `priority`: defaults to `0`

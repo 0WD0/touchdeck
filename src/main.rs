@@ -248,12 +248,10 @@ impl Config {
         }
 
         if let Some(keyboard) = keyboard {
-            if let Some(rows) = keyboard.rows {
-                for (row_index, row) in rows.into_iter().enumerate() {
-                    self.keymap
-                        .bindings
-                        .extend(expand_keyboard_row(row, row_index)?);
-                }
+            if let Some(maps) = keyboard.maps {
+                self.keymap
+                    .bindings
+                    .extend(expand_keyboard_maps(maps, &self.slots)?);
             }
         }
 
@@ -489,9 +487,7 @@ impl Default for Keymap {
                 },
             ];
 
-        for (row_index, row) in default_keyboard_rows().into_iter().enumerate() {
-            bindings.extend(expand_keyboard_row(row, row_index).expect("default keyboard row"));
-        }
+        bindings.extend(expand_keyboard_maps(default_keyboard_maps(), &slots).expect("default keyboard map"));
 
         Self { bindings }
     }
@@ -751,7 +747,54 @@ impl Default for SlotRegistry {
             false,
             Some("SCREEN"),
         );
+        insert_default_key_slots(&mut registry);
         registry
+    }
+}
+
+fn insert_default_key_slots(registry: &mut SlotRegistry) {
+    let rows = [
+        (0.020, 0.540, 0.092, &["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"][..]),
+        (0.080, 0.650, 0.092, &["a", "s", "d", "f", "g", "h", "j", "k", "l"][..]),
+        (0.140, 0.760, 0.092, &["z", "x", "c", "v", "b", "n", "m"][..]),
+    ];
+
+    for (x0, y0, step, keys) in rows {
+        for (index, key) in keys.iter().enumerate() {
+            let x0 = x0 + index as f64 * step;
+            registry.insert_slot(
+                &format!("key_{key}"),
+                RectNorm {
+                    x0,
+                    y0,
+                    x1: x0 + 0.080,
+                    y1: y0 + 0.092,
+                },
+                SlotRole::Key,
+                true,
+                Some(key),
+            );
+        }
+    }
+
+    for (slot, label, x0, y0, w, h) in [
+        ("key_esc", "ESC", 0.080, 0.870, 0.150, 0.063),
+        ("key_spc", "SPC", 0.260, 0.870, 0.300, 0.063),
+        ("key_del", "DEL", 0.590, 0.870, 0.150, 0.063),
+        ("key_ret", "RET", 0.770, 0.870, 0.150, 0.063),
+    ] {
+        registry.insert_slot(
+            slot,
+            RectNorm {
+                x0,
+                y0,
+                x1: x0 + w,
+                y1: y0 + h,
+            },
+            SlotRole::Key,
+            true,
+            Some(label),
+        );
     }
 }
 
@@ -1196,17 +1239,14 @@ struct LayoutFileConfig {
 #[derive(Deserialize)]
 struct KeyboardFileConfig {
     xkb_keymap: Option<String>,
-    rows: Option<Vec<KeyboardRowFileConfig>>,
+    maps: Option<Vec<KeyboardMapFileConfig>>,
 }
 
 #[derive(Deserialize)]
-struct KeyboardRowFileConfig {
+struct KeyboardMapFileConfig {
     mode: Option<String>,
     layer: Option<String>,
-    x: Option<[f64; 2]>,
-    y: [f64; 2],
-    keys: Vec<String>,
-    gap: Option<f64>,
+    keys: HashMap<String, String>,
     fingers: Option<usize>,
     max_ms: Option<u32>,
     priority: Option<i32>,
@@ -1287,155 +1327,83 @@ impl Binding {
     }
 }
 
-fn default_keyboard_rows() -> Vec<KeyboardRowFileConfig> {
-    vec![
-        KeyboardRowFileConfig {
-            mode: Some("text".to_string()),
-            layer: Some("base".to_string()),
-            x: Some([0.04, 0.96]),
-            y: [0.54, 0.64],
-            keys: ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            gap: Some(0.006),
-            fingers: None,
-            max_ms: None,
-            priority: None,
-            consume: None,
-        },
-        KeyboardRowFileConfig {
-            mode: Some("text".to_string()),
-            layer: Some("base".to_string()),
-            x: Some([0.08, 0.92]),
-            y: [0.65, 0.75],
-            keys: ["a", "s", "d", "f", "g", "h", "j", "k", "l"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            gap: Some(0.006),
-            fingers: None,
-            max_ms: None,
-            priority: None,
-            consume: None,
-        },
-        KeyboardRowFileConfig {
-            mode: Some("text".to_string()),
-            layer: Some("base".to_string()),
-            x: Some([0.14, 0.86]),
-            y: [0.76, 0.86],
-            keys: ["z", "x", "c", "v", "b", "n", "m"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            gap: Some(0.006),
-            fingers: None,
-            max_ms: None,
-            priority: None,
-            consume: None,
-        },
-        KeyboardRowFileConfig {
-            mode: Some("text".to_string()),
-            layer: Some("base".to_string()),
-            x: Some([0.08, 0.92]),
-            y: [0.87, 0.94],
-            keys: ["ESC", "SPC", "DEL", "RET"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            gap: Some(0.008),
-            fingers: None,
-            max_ms: None,
-            priority: None,
-            consume: None,
-        },
+fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
+    let keys = [
+        ("key_q", "q"),
+        ("key_w", "w"),
+        ("key_e", "e"),
+        ("key_r", "r"),
+        ("key_t", "t"),
+        ("key_y", "y"),
+        ("key_u", "u"),
+        ("key_i", "i"),
+        ("key_o", "o"),
+        ("key_p", "p"),
+        ("key_a", "a"),
+        ("key_s", "s"),
+        ("key_d", "d"),
+        ("key_f", "f"),
+        ("key_g", "g"),
+        ("key_h", "h"),
+        ("key_j", "j"),
+        ("key_k", "k"),
+        ("key_l", "l"),
+        ("key_z", "z"),
+        ("key_x", "x"),
+        ("key_c", "c"),
+        ("key_v", "v"),
+        ("key_b", "b"),
+        ("key_n", "n"),
+        ("key_m", "m"),
+        ("key_esc", "ESC"),
+        ("key_spc", "SPC"),
+        ("key_del", "DEL"),
+        ("key_ret", "RET"),
     ]
+    .into_iter()
+    .map(|(slot, key)| (slot.to_string(), key.to_string()))
+    .collect();
+
+    vec![KeyboardMapFileConfig {
+        mode: Some("text".to_string()),
+        layer: Some("base".to_string()),
+        keys,
+        fingers: None,
+        max_ms: None,
+        priority: None,
+        consume: None,
+    }]
 }
 
-fn expand_keyboard_row(row: KeyboardRowFileConfig, row_index: usize) -> Result<Vec<Binding>> {
-    let mode = parse_mode(row.mode.as_deref().unwrap_or("text"))?;
-    let layer = parse_layer(row.layer.as_deref().unwrap_or("base"))?;
-    let [x0, x1] = row.x.unwrap_or([0.04, 0.96]);
-    let [y0, y1] = row.y;
-    let gap = row.gap.unwrap_or(0.0);
-    let key_count = row.keys.len();
+fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) -> Result<Vec<Binding>> {
+    let mut bindings = Vec::new();
 
-    if key_count == 0 {
-        return Err(anyhow!("keyboard row {row_index} has no keys"));
-    }
+    for (map_index, map) in maps.into_iter().enumerate() {
+        let mode = parse_mode(map.mode.as_deref().unwrap_or("text"))?;
+        let layer = parse_layer(map.layer.as_deref().unwrap_or("base"))?;
 
-    if !(x0.is_finite()
-        && x1.is_finite()
-        && y0.is_finite()
-        && y1.is_finite()
-        && gap.is_finite()
-        && x0 >= 0.0
-        && y0 >= 0.0
-        && x1 <= 1.0
-        && y1 <= 1.0
-        && x0 < x1
-        && y0 < y1
-        && gap >= 0.0)
-    {
-        return Err(anyhow!(
-            "keyboard row {row_index} must use finite normalized x/y ranges and non-negative gap"
-        ));
-    }
-
-    let total_gap = gap * key_count.saturating_sub(1) as f64;
-    let key_width = (x1 - x0 - total_gap) / key_count as f64;
-    if key_width <= 0.0 {
-        return Err(anyhow!("keyboard row {row_index} gap leaves no room for keys"));
-    }
-
-    let mut bindings = Vec::with_capacity(key_count);
-    for (key_index, key) in row.keys.into_iter().enumerate() {
-        let key_x0 = x0 + key_index as f64 * (key_width + gap);
-        let key_x1 = key_x0 + key_width;
-        let target = SlotTarget {
-            id: keyboard_row_slot_id(row_index, key_index, &key),
-            rect: RectNorm {
-                x0: key_x0,
-                y0,
-                x1: key_x1,
-                y1,
-            },
-            role: SlotRole::Key,
-            capture: true,
-            label: Some(key.clone()),
-        };
-        bindings.push(Binding {
-            mode,
-            layer,
-            trigger: Trigger::Tap {
-                target,
-                fingers: row.fingers.unwrap_or(1),
-                max_ms: row.max_ms,
-            },
-            behavior: Behavior::KeySequence(parse_emacs_key_sequence(&key).with_context(|| {
-                format!("parse keyboard row {row_index} key {key_index} ({key})")
-            })?),
-            priority: row.priority.unwrap_or(0),
-            consume: row.consume.unwrap_or(true),
-        });
+        for (slot_id, key) in map.keys {
+            let target = slots
+                .get(&slot_id)
+                .with_context(|| format!("keyboard map {map_index} target {slot_id}"))?;
+            bindings.push(Binding {
+                mode,
+                layer,
+                trigger: Trigger::Tap {
+                    target,
+                    fingers: map.fingers.unwrap_or(1),
+                    max_ms: map.max_ms,
+                },
+                behavior: Behavior::KeySequence(parse_emacs_key_sequence(&key).with_context(|| {
+                    format!("parse keyboard map {map_index} key for {slot_id} ({key})")
+                })?),
+                priority: map.priority.unwrap_or(0),
+                consume: map.consume.unwrap_or(true),
+            });
+        }
     }
 
     Ok(bindings)
-}
-
-fn keyboard_row_slot_id(row_index: usize, key_index: usize, key: &str) -> String {
-    let normalized = normalize_name(key)
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' { ch } else { '_' })
-        .collect::<String>()
-        .trim_matches('_')
-        .to_string();
-
-    if normalized.is_empty() {
-        format!("key_{row_index}_{key_index}")
-    } else {
-        format!("key_{normalized}")
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -4068,32 +4036,38 @@ behavior = { type = "key", key = "DEL" }
     }
 
     #[test]
-    fn toml_keyboard_row_expands_to_text_bindings() {
+    fn toml_keyboard_map_expands_to_text_bindings() {
         let source = r#"
 [keyboard]
 
-[[keyboard.rows]]
+[[keyboard.maps]]
 mode = "text"
 layer = "base"
-x = [0.10, 0.90]
-y = [0.50, 0.60]
-keys = ["a", "C-c"]
-gap = 0.02
+
+[keyboard.maps.keys]
+key_a = "a"
+key_c = "C-c"
 "#;
         let file_config: FileConfig = toml::from_str(source).unwrap();
-        let row = file_config.keyboard.unwrap().rows.unwrap().remove(0);
-        let bindings = expand_keyboard_row(row, 0).unwrap();
+        let maps = file_config.keyboard.unwrap().maps.unwrap();
+        let bindings = expand_keyboard_maps(maps, &SlotRegistry::default()).unwrap();
 
         assert_eq!(bindings.len(), 2);
-        assert_eq!(bindings[0].mode, Mode::Text);
-        assert_eq!(bindings[0].trigger.target_id(), "key_a");
-        assert_eq!(bindings[1].trigger.target_id(), "key_c_c");
+        let key_a = bindings
+            .iter()
+            .find(|binding| binding.trigger.target_id() == "key_a")
+            .unwrap();
+        let key_c = bindings
+            .iter()
+            .find(|binding| binding.trigger.target_id() == "key_c")
+            .unwrap();
+        assert_eq!(key_a.mode, Mode::Text);
         assert_eq!(
-            bindings[0].behavior,
+            key_a.behavior,
             Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_A] }])
         );
         assert_eq!(
-            bindings[1].behavior,
+            key_c.behavior,
             Behavior::KeySequence(vec![KeyChord {
                 keys: vec![KEY_LEFTCTRL, KEY_C],
             }])
@@ -4153,6 +4127,22 @@ behavior = { type = "key", key = "C-x C-s" }
                 y1: 1.00,
             }
         );
+    }
+
+    #[test]
+    fn checked_in_example_layout_and_config_parse() {
+        let slots = SlotRegistry::from_svg_str(include_str!("../layouts/phone-portrait.svg")).unwrap();
+        assert!(slots.get("key_q").is_ok());
+        assert!(slots.get("key_spc").is_ok());
+
+        let config: FileConfig = toml::from_str(include_str!("../touchdeck.example.toml")).unwrap();
+        assert_eq!(
+            config.layout.unwrap().svg.as_deref(),
+            Some("layouts/phone-portrait.svg")
+        );
+        let maps = config.keyboard.unwrap().maps.unwrap();
+        assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].keys.get("key_q").map(String::as_str), Some("q"));
     }
 
     #[test]

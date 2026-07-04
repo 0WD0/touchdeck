@@ -9,37 +9,41 @@ svg = "layouts/phone-portrait.svg"
 # Optional raw XKB keymap file. If omitted, touchdeck uses a built-in us/pc105 keymap.
 # xkb_keymap = "/path/to/keymap.xkb"
 
-[[keyboard.rows]]
+[[keyboard.maps]]
 mode = "text"
 layer = "base"
-x = [0.04, 0.96]
-y = [0.54, 0.64]
-keys = ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]
-gap = 0.006
 
-[[keyboard.rows]]
-mode = "text"
-layer = "base"
-x = [0.08, 0.92]
-y = [0.65, 0.75]
-keys = ["a", "s", "d", "f", "g", "h", "j", "k", "l"]
-gap = 0.006
-
-[[keyboard.rows]]
-mode = "text"
-layer = "base"
-x = [0.14, 0.86]
-y = [0.76, 0.86]
-keys = ["z", "x", "c", "v", "b", "n", "m"]
-gap = 0.006
-
-[[keyboard.rows]]
-mode = "text"
-layer = "base"
-x = [0.08, 0.92]
-y = [0.87, 0.94]
-keys = ["ESC", "SPC", "DEL", "RET"]
-gap = 0.008
+[keyboard.maps.keys]
+key_q = "q"
+key_w = "w"
+key_e = "e"
+key_r = "r"
+key_t = "t"
+key_y = "y"
+key_u = "u"
+key_i = "i"
+key_o = "o"
+key_p = "p"
+key_a = "a"
+key_s = "s"
+key_d = "d"
+key_f = "f"
+key_g = "g"
+key_h = "h"
+key_j = "j"
+key_k = "k"
+key_l = "l"
+key_z = "z"
+key_x = "x"
+key_c = "c"
+key_v = "v"
+key_b = "b"
+key_n = "n"
+key_m = "m"
+key_esc = "ESC"
+key_spc = "SPC"
+key_del = "DEL"
+key_ret = "RET"
 
 # Macros are reusable backend action sequences.
 # key_sequence uses Emacs kbd style; key_down/key_up/tap_key use one physical key token.
