@@ -282,8 +282,6 @@ enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Layer {
     Base,
-    Symbols,
-    Nav,
     Niri,
 }
 
@@ -371,30 +369,6 @@ impl Default for Keymap {
                         max_ms: None,
                     },
                     behavior: Behavior::Exit,
-                    priority: 100,
-                    consume: true,
-                },
-                Binding {
-                    mode: Mode::Text,
-                    layer: Layer::Base,
-                    trigger: Trigger::Hold {
-                        target: slots.get("key_ret").unwrap(),
-                        fingers: 1,
-                        min_ms: Some(180),
-                    },
-                    behavior: Behavior::LayerMomentary(Layer::Symbols),
-                    priority: 100,
-                    consume: true,
-                },
-                Binding {
-                    mode: Mode::Text,
-                    layer: Layer::Base,
-                    trigger: Trigger::Hold {
-                        target: slots.get("key_esc").unwrap(),
-                        fingers: 1,
-                        min_ms: Some(180),
-                    },
-                    behavior: Behavior::LayerMomentary(Layer::Nav),
                     priority: 100,
                     consume: true,
                 },
@@ -1327,9 +1301,16 @@ struct KeyboardFileConfig {
 struct KeyboardMapFileConfig {
     mode: Option<String>,
     layer: Option<String>,
-    keys: HashMap<String, String>,
+    tap: Option<HashMap<String, String>>,
+    hold: Option<HashMap<String, String>>,
+    swipe_up: Option<HashMap<String, String>>,
+    swipe_down: Option<HashMap<String, String>>,
+    swipe_left: Option<HashMap<String, String>>,
+    swipe_right: Option<HashMap<String, String>>,
     fingers: Option<usize>,
     max_ms: Option<u32>,
+    hold_ms: Option<u32>,
+    min_px: Option<f64>,
     priority: Option<i32>,
     consume: Option<bool>,
 }
@@ -1409,118 +1390,104 @@ impl Binding {
 }
 
 fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
-    vec![
-        keyboard_map_config(
-            "base",
-            &[
-                ("key_q", "q"),
-                ("key_w", "w"),
-                ("key_e", "e"),
-                ("key_r", "r"),
-                ("key_t", "t"),
-                ("key_y", "y"),
-                ("key_u", "u"),
-                ("key_i", "i"),
-                ("key_o", "o"),
-                ("key_p", "p"),
-                ("key_a", "a"),
-                ("key_s", "s"),
-                ("key_d", "d"),
-                ("key_f", "f"),
-                ("key_g", "g"),
-                ("key_h", "h"),
-                ("key_j", "j"),
-                ("key_k", "k"),
-                ("key_l", "l"),
-                ("key_z", "z"),
-                ("key_x", "x"),
-                ("key_c", "c"),
-                ("key_v", "v"),
-                ("key_b", "b"),
-                ("key_n", "n"),
-                ("key_m", "m"),
-                ("key_esc", "ESC"),
-                ("key_spc", "SPC"),
-                ("key_del", "DEL"),
-                ("key_ret", "RET"),
-            ],
-        ),
-        keyboard_map_config(
-            "symbols",
-            &[
-                ("key_q", "1"),
-                ("key_w", "2"),
-                ("key_e", "3"),
-                ("key_r", "4"),
-                ("key_t", "5"),
-                ("key_y", "6"),
-                ("key_u", "7"),
-                ("key_i", "8"),
-                ("key_o", "9"),
-                ("key_p", "0"),
-                ("key_a", "!"),
-                ("key_s", "@"),
-                ("key_d", "#"),
-                ("key_f", "$"),
-                ("key_g", "%"),
-                ("key_h", "^"),
-                ("key_j", "&"),
-                ("key_k", "*"),
-                ("key_l", "("),
-                ("key_z", ")"),
-                ("key_x", "-"),
-                ("key_c", "="),
-                ("key_v", "["),
-                ("key_b", "]"),
-                ("key_n", "/"),
-                ("key_m", "?"),
-                ("key_esc", "ESC"),
-                ("key_spc", "SPC"),
-                ("key_del", "DEL"),
-                ("key_ret", "RET"),
-            ],
-        ),
-        keyboard_map_config(
-            "nav",
-            &[
-                ("key_q", "ESC"),
-                ("key_w", "<up>"),
-                ("key_e", "C-<up>"),
-                ("key_a", "<left>"),
-                ("key_s", "<down>"),
-                ("key_d", "<right>"),
-                ("key_h", "<left>"),
-                ("key_j", "<down>"),
-                ("key_k", "<up>"),
-                ("key_l", "<right>"),
-                ("key_u", "C-<left>"),
-                ("key_o", "C-<right>"),
-                ("key_z", "C-a"),
-                ("key_x", "C-e"),
-                ("key_c", "C-c"),
-                ("key_v", "C-v"),
-                ("key_esc", "ESC"),
-                ("key_spc", "SPC"),
-                ("key_del", "DEL"),
-                ("key_ret", "RET"),
-            ],
-        ),
-    ]
+    vec![keyboard_map_config(
+        &[
+            ("key_q", "q"),
+            ("key_w", "w"),
+            ("key_e", "e"),
+            ("key_r", "r"),
+            ("key_t", "t"),
+            ("key_y", "y"),
+            ("key_u", "u"),
+            ("key_i", "i"),
+            ("key_o", "o"),
+            ("key_p", "p"),
+            ("key_a", "a"),
+            ("key_s", "s"),
+            ("key_d", "d"),
+            ("key_f", "f"),
+            ("key_g", "g"),
+            ("key_h", "h"),
+            ("key_j", "j"),
+            ("key_k", "k"),
+            ("key_l", "l"),
+            ("key_z", "z"),
+            ("key_x", "x"),
+            ("key_c", "c"),
+            ("key_v", "v"),
+            ("key_b", "b"),
+            ("key_n", "n"),
+            ("key_m", "m"),
+            ("key_esc", "ESC"),
+            ("key_spc", "SPC"),
+            ("key_del", "DEL"),
+            ("key_ret", "RET"),
+        ],
+        &[
+            ("key_q", "`"),
+            ("key_w", "1"),
+            ("key_e", "2"),
+            ("key_r", "3"),
+            ("key_t", "#"),
+            ("key_y", "^"),
+            ("key_u", "&"),
+            ("key_i", "-"),
+            ("key_o", "="),
+            ("key_p", "*"),
+            ("key_a", "!"),
+            ("key_s", "4"),
+            ("key_d", "5"),
+            ("key_f", "6"),
+            ("key_g", "$"),
+            ("key_h", "["),
+            ("key_j", "("),
+            ("key_k", "<up>"),
+            ("key_l", "]"),
+            ("key_z", "@"),
+            ("key_x", "7"),
+            ("key_c", "8"),
+            ("key_v", "9"),
+            ("key_b", "%"),
+            ("key_n", ","),
+            ("key_m", "."),
+            ("key_spc", "0"),
+        ],
+        &[("key_j", "<down>")],
+        &[("key_h", "<left>"), ("key_del", "C-<left>")],
+        &[("key_l", "<right>"), ("key_ret", "C-<right>")],
+    )]
 }
 
-fn keyboard_map_config(layer: &str, pairs: &[(&str, &str)]) -> KeyboardMapFileConfig {
+fn keyboard_map_config(
+    tap: &[(&str, &str)],
+    swipe_up: &[(&str, &str)],
+    swipe_down: &[(&str, &str)],
+    swipe_left: &[(&str, &str)],
+    swipe_right: &[(&str, &str)],
+) -> KeyboardMapFileConfig {
     KeyboardMapFileConfig {
         mode: Some("text".to_string()),
-        layer: Some(layer.to_string()),
-        keys: pairs
-            .iter()
-            .map(|(slot, key)| ((*slot).to_string(), (*key).to_string()))
-            .collect(),
+        layer: Some("base".to_string()),
+        tap: Some(key_pairs(tap)),
+        hold: None,
+        swipe_up: Some(key_pairs(swipe_up)),
+        swipe_down: Some(key_pairs(swipe_down)),
+        swipe_left: Some(key_pairs(swipe_left)),
+        swipe_right: Some(key_pairs(swipe_right)),
         fingers: None,
         max_ms: None,
+        hold_ms: None,
+        min_px: None,
         priority: None,
         consume: None,
     }
+}
+
+fn key_pairs(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(slot, key)| ((*slot).to_string(), (*key).to_string()))
+        .collect()
 }
 
 fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) -> Result<Vec<Binding>> {
@@ -1529,29 +1496,158 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
     for (map_index, map) in maps.into_iter().enumerate() {
         let mode = parse_mode(map.mode.as_deref().unwrap_or("text"))?;
         let layer = parse_layer(map.layer.as_deref().unwrap_or("base"))?;
+        let fingers = map.fingers.unwrap_or(1);
+        let max_ms = map.max_ms;
+        let hold_ms = map.hold_ms;
+        let min_px = map.min_px;
+        let priority = map.priority.unwrap_or(0);
+        let consume = map.consume.unwrap_or(true);
 
-        for (slot_id, key) in map.keys {
-            let target = slots
-                .get(&slot_id)
-                .with_context(|| format!("keyboard map {map_index} target {slot_id}"))?;
-            bindings.push(Binding {
-                mode,
-                layer,
-                trigger: Trigger::Tap {
-                    target,
-                    fingers: map.fingers.unwrap_or(1),
-                    max_ms: map.max_ms,
-                },
-                behavior: Behavior::KeySequence(parse_emacs_key_sequence(&key).with_context(|| {
-                    format!("parse keyboard map {map_index} key for {slot_id} ({key})")
-                })?),
-                priority: map.priority.unwrap_or(0),
-                consume: map.consume.unwrap_or(true),
-            });
-        }
+        expand_keyboard_gesture_map(
+            &mut bindings,
+            slots,
+            map_index,
+            mode,
+            layer,
+            "tap",
+            map.tap,
+            |target| Trigger::Tap {
+                target,
+                fingers,
+                max_ms,
+            },
+            priority,
+            consume,
+        )?;
+        expand_keyboard_gesture_map(
+            &mut bindings,
+            slots,
+            map_index,
+            mode,
+            layer,
+            "hold",
+            map.hold,
+            |target| Trigger::Hold {
+                target,
+                fingers,
+                min_ms: hold_ms,
+            },
+            priority,
+            consume,
+        )?;
+        expand_keyboard_gesture_map(
+            &mut bindings,
+            slots,
+            map_index,
+            mode,
+            layer,
+            "swipe_up",
+            map.swipe_up,
+            |target| Trigger::Swipe {
+                target,
+                fingers,
+                direction: SwipeDirection::Up,
+                min_px,
+                max_ms,
+            },
+            priority,
+            consume,
+        )?;
+        expand_keyboard_gesture_map(
+            &mut bindings,
+            slots,
+            map_index,
+            mode,
+            layer,
+            "swipe_down",
+            map.swipe_down,
+            |target| Trigger::Swipe {
+                target,
+                fingers,
+                direction: SwipeDirection::Down,
+                min_px,
+                max_ms,
+            },
+            priority,
+            consume,
+        )?;
+        expand_keyboard_gesture_map(
+            &mut bindings,
+            slots,
+            map_index,
+            mode,
+            layer,
+            "swipe_left",
+            map.swipe_left,
+            |target| Trigger::Swipe {
+                target,
+                fingers,
+                direction: SwipeDirection::Left,
+                min_px,
+                max_ms,
+            },
+            priority,
+            consume,
+        )?;
+        expand_keyboard_gesture_map(
+            &mut bindings,
+            slots,
+            map_index,
+            mode,
+            layer,
+            "swipe_right",
+            map.swipe_right,
+            |target| Trigger::Swipe {
+                target,
+                fingers,
+                direction: SwipeDirection::Right,
+                min_px,
+                max_ms,
+            },
+            priority,
+            consume,
+        )?;
     }
 
     Ok(bindings)
+}
+
+fn expand_keyboard_gesture_map<F>(
+    bindings: &mut Vec<Binding>,
+    slots: &SlotRegistry,
+    map_index: usize,
+    mode: Mode,
+    layer: Layer,
+    gesture_name: &str,
+    keys: Option<HashMap<String, String>>,
+    make_trigger: F,
+    priority: i32,
+    consume: bool,
+) -> Result<()>
+where
+    F: Fn(SlotTarget) -> Trigger,
+{
+    let Some(keys) = keys else {
+        return Ok(());
+    };
+
+    for (slot_id, key) in keys {
+        let target = slots
+            .get(&slot_id)
+            .with_context(|| format!("keyboard map {map_index} {gesture_name} target {slot_id}"))?;
+        bindings.push(Binding {
+            mode,
+            layer,
+            trigger: make_trigger(target),
+            behavior: Behavior::KeySequence(parse_emacs_key_sequence(&key).with_context(|| {
+                format!("parse keyboard map {map_index} {gesture_name} key for {slot_id} ({key})")
+            })?),
+            priority,
+            consume,
+        });
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2883,8 +2979,6 @@ fn mode_name(mode: Mode) -> &'static str {
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Base => "base",
-        Layer::Symbols => "symbols",
-        Layer::Nav => "nav",
         Layer::Niri => "niri",
     }
 }
@@ -3052,8 +3146,6 @@ fn parse_mode(value: &str) -> Result<Mode> {
 fn parse_layer(value: &str) -> Result<Layer> {
     match normalize_name(value).as_str() {
         "base" => Ok(Layer::Base),
-        "symbol" | "symbols" | "sym" => Ok(Layer::Symbols),
-        "nav" | "navigation" => Ok(Layer::Nav),
         "niri" => Ok(Layer::Niri),
         _ => Err(anyhow!("unknown layer {value}")),
     }
@@ -4690,22 +4782,52 @@ behavior = { type = "key", key = "DEL" }
 mode = "text"
 layer = "base"
 
-[keyboard.maps.keys]
+[keyboard.maps.tap]
 key_a = "a"
 key_c = "C-c"
+
+[keyboard.maps.swipe_up]
+key_a = "!"
+
+[keyboard.maps.swipe_left]
+key_c = "<left>"
 "#;
         let file_config: FileConfig = toml::from_str(source).unwrap();
         let maps = file_config.keyboard.unwrap().maps.unwrap();
         let bindings = expand_keyboard_maps(maps, &SlotRegistry::default()).unwrap();
 
-        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings.len(), 4);
         let key_a = bindings
             .iter()
-            .find(|binding| binding.trigger.target_id() == "key_a")
+            .find(|binding| matches!(binding.trigger, Trigger::Tap { .. }) && binding.trigger.target_id() == "key_a")
             .unwrap();
         let key_c = bindings
             .iter()
-            .find(|binding| binding.trigger.target_id() == "key_c")
+            .find(|binding| matches!(binding.trigger, Trigger::Tap { .. }) && binding.trigger.target_id() == "key_c")
+            .unwrap();
+        let key_a_up = bindings
+            .iter()
+            .find(|binding| {
+                matches!(
+                    binding.trigger,
+                    Trigger::Swipe {
+                        direction: SwipeDirection::Up,
+                        ..
+                    }
+                ) && binding.trigger.target_id() == "key_a"
+            })
+            .unwrap();
+        let key_c_left = bindings
+            .iter()
+            .find(|binding| {
+                matches!(
+                    binding.trigger,
+                    Trigger::Swipe {
+                        direction: SwipeDirection::Left,
+                        ..
+                    }
+                ) && binding.trigger.target_id() == "key_c"
+            })
             .unwrap();
         assert_eq!(key_a.mode, Mode::Text);
         assert_eq!(
@@ -4718,10 +4840,20 @@ key_c = "C-c"
                 keys: vec![KEY_LEFTCTRL, KEY_C],
             }])
         );
+        assert_eq!(
+            key_a_up.behavior,
+            Behavior::KeySequence(vec![KeyChord {
+                keys: vec![KEY_LEFTSHIFT, KEY_1],
+            }])
+        );
+        assert_eq!(
+            key_c_left.behavior,
+            Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_LEFT] }])
+        );
     }
 
     #[test]
-    fn default_keyboard_label_follows_active_text_layer() {
+    fn default_keyboard_label_uses_tap_binding() {
         let keymap = Keymap::default();
 
         assert_eq!(
@@ -4729,29 +4861,42 @@ key_c = "C-c"
             Some("q".to_string())
         );
         assert_eq!(
-            keymap.slot_label(Mode::Text, &[Layer::Base, Layer::Symbols], "key_q"),
-            Some("1".to_string())
-        );
-        assert_eq!(
-            keymap.slot_label(Mode::Text, &[Layer::Base, Layer::Nav], "key_h"),
-            Some("LEFT".to_string())
+            keymap.slot_label(Mode::Text, &[Layer::Base], "key_h"),
+            Some("h".to_string())
         );
     }
 
     #[test]
-    fn symbols_layer_tap_uses_symbols_keyboard_map() {
+    fn default_text_keyboard_swipe_up_sends_symbol_key() {
         let config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
         let mut effects = Vec::new();
         engine.set_mode(Mode::Text, &mut effects, &config);
-        engine.perform_action(GestureAction::LayerToggle(Layer::Symbols), &mut effects, &config, None);
 
         engine.handle_down(0, 0, 1, 84.0, 1180.0, &config, size);
+        engine.handle_motion(1, 60, 84.0, 980.0, &config);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![
-            KeyChord { keys: vec![KEY_1] },
+            KeyChord { keys: vec![KEY_GRAVE] },
+        ])));
+    }
+
+    #[test]
+    fn default_text_keyboard_home_row_swipe_sends_arrow_key() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        let mut effects = Vec::new();
+        engine.set_mode(Mode::Text, &mut effects, &config);
+
+        engine.handle_down(0, 0, 1, 580.0, 1400.0, &config, size);
+        engine.handle_motion(1, 60, 380.0, 1400.0, &config);
+        let effects = engine.handle_up(80, 80, 1, &config, size);
+
+        assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![
+            KeyChord { keys: vec![KEY_LEFT] },
         ])));
     }
 
@@ -4838,10 +4983,19 @@ behavior = { type = "key", key = "C-x C-s" }
             Some("layouts/phone-portrait.svg")
         );
         let maps = config.keyboard.unwrap().maps.unwrap();
-        assert_eq!(maps.len(), 3);
-        assert_eq!(maps[0].keys.get("key_q").map(String::as_str), Some("q"));
-        assert_eq!(maps[1].layer.as_deref(), Some("symbols"));
-        assert_eq!(maps[2].layer.as_deref(), Some("nav"));
+        assert_eq!(maps.len(), 1);
+        assert_eq!(
+            maps[0].tap.as_ref().unwrap().get("key_q").map(String::as_str),
+            Some("q")
+        );
+        assert_eq!(
+            maps[0].swipe_up.as_ref().unwrap().get("key_w").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            maps[0].swipe_left.as_ref().unwrap().get("key_h").map(String::as_str),
+            Some("<left>")
+        );
     }
 
     #[test]

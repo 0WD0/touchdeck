@@ -13,7 +13,7 @@ svg = "layouts/phone-portrait.svg"
 mode = "text"
 layer = "base"
 
-[keyboard.maps.keys]
+[keyboard.maps.tap]
 key_q = "q"
 key_w = "w"
 key_e = "e"
@@ -45,67 +45,45 @@ key_spc = "SPC"
 key_del = "DEL"
 key_ret = "RET"
 
-[[keyboard.maps]]
-mode = "text"
-layer = "symbols"
-
-[keyboard.maps.keys]
-key_q = "1"
-key_w = "2"
-key_e = "3"
-key_r = "4"
-key_t = "5"
-key_y = "6"
-key_u = "7"
-key_i = "8"
-key_o = "9"
-key_p = "0"
+[keyboard.maps.swipe_up]
+key_q = "`"
+key_w = "1"
+key_e = "2"
+key_r = "3"
+key_t = "#"
+key_y = "^"
+key_u = "&"
+key_i = "-"
+key_o = "="
+key_p = "*"
 key_a = "!"
-key_s = "@"
-key_d = "#"
-key_f = "$"
-key_g = "%"
-key_h = "^"
-key_j = "&"
-key_k = "*"
-key_l = "("
-key_z = ")"
-key_x = "-"
-key_c = "="
-key_v = "["
-key_b = "]"
-key_n = "/"
-key_m = "?"
-key_esc = "ESC"
-key_spc = "SPC"
-key_del = "DEL"
-key_ret = "RET"
-
-[[keyboard.maps]]
-mode = "text"
-layer = "nav"
-
-[keyboard.maps.keys]
-key_q = "ESC"
-key_w = "<up>"
-key_e = "C-<up>"
-key_a = "<left>"
-key_s = "<down>"
-key_d = "<right>"
-key_h = "<left>"
-key_j = "<down>"
+key_s = "4"
+key_d = "5"
+key_f = "6"
+key_g = "$"
+key_h = "["
+key_j = "("
 key_k = "<up>"
+key_l = "]"
+key_z = "@"
+key_x = "7"
+key_c = "8"
+key_v = "9"
+key_b = "%"
+key_n = ","
+key_m = "."
+key_spc = "0"
+
+[keyboard.maps.swipe_down]
+key_j = "<down>"
+
+[keyboard.maps.swipe_left]
+key_h = "<left>"
+key_del = "C-<left>"
+
+[keyboard.maps.swipe_right]
 key_l = "<right>"
-key_u = "C-<left>"
-key_o = "C-<right>"
-key_z = "C-a"
-key_x = "C-e"
-key_c = "C-c"
-key_v = "C-v"
-key_esc = "ESC"
-key_spc = "SPC"
-key_del = "DEL"
-key_ret = "RET"
+key_ret = "C-<right>"
 
 # Macros are reusable backend action sequences.
 # key_sequence uses Emacs kbd style; key_down/key_up/tap_key use one physical key token.
@@ -201,18 +179,6 @@ mode = "text"
 layer = "base"
 trigger = { type = "tap", target = "top_left" }
 behavior = { type = "exit" }
-
-[[bindings]]
-mode = "text"
-layer = "base"
-trigger = { type = "hold", target = "key_ret", min_ms = 180 }
-behavior = { type = "layer_momentary", layer = "symbols" }
-
-[[bindings]]
-mode = "text"
-layer = "base"
-trigger = { type = "hold", target = "key_esc", min_ms = 180 }
-behavior = { type = "layer_momentary", layer = "nav" }
 
 # Base keyboard output. Keys use Emacs kbd/read-kbd-macro style.
 

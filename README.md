@@ -22,8 +22,6 @@ The prototype separates input ownership from application passthrough:
 There is also a layer stack:
 
 - `base`: default key bindings.
-- `symbols`: text-mode symbol/number keyboard layer.
-- `nav`: text-mode navigation/editing keyboard layer.
 - `niri`: niri control bindings.
 - Layer resolution checks the top layer first, then lower layers.
 - `layer_momentary` pushes a layer and restores the previous stack on release.
@@ -94,8 +92,6 @@ Mode ownership controls are now represented as default bindings:
 - `base/base`, bottom-edge swipe up: `mode_toggle:text`
 - `passthrough/base`, bottom-edge swipe up: `mode:text`
 - `text/base`, bottom-edge swipe down: `mode:base`
-- `text/base`, key-ret hold: `layer_momentary:symbols`
-- `text/base`, key-esc hold: `layer_momentary:nav`
 - Top-left tap in base, text, passthrough, or niri locked: `exit`
 
 Base keyboard bindings:
@@ -105,15 +101,16 @@ Base keyboard bindings:
 - Right-bottom swipe right: virtual keyboard `Enter`
 
 Text mode uses key slots defined by the active SVG layout. Config files map
-slot IDs to key behavior with `[[keyboard.maps]]`; geometry stays in SVG. Text
-mode draws keycaps even when debug draw is disabled, and labels are resolved
-from the active mode/layer keymap rather than from static SVG metadata.
+slot IDs to key behavior with `[[keyboard.maps]]`; geometry stays in SVG.
+`keyboard.maps` supports direct per-slot gestures: tap, hold, and four swipe
+directions. Text mode draws keycaps even when debug draw is disabled, and labels
+are resolved from the active tap binding rather than from static SVG metadata.
 
-The built-in text keyboard currently has three layers:
+The built-in text keyboard follows the current Charybdis keymap direction:
 
-- `base`: alphabetic QWERTY layer.
-- `symbols`: numbers and common US-keyboard punctuation.
-- `nav`: arrows and a few Emacs-style editing chords.
+- tap: alphabetic QWERTY keys plus `ESC`, `SPC`, `DEL`, `RET`
+- swipe up: numbers and common symbol positions inspired by the Charybdis space layer
+- directional swipes on selected home/special keys: arrows and word movement
 
 Default niri gestures still exist when no configured binding matches in niri modes:
 
@@ -177,8 +174,8 @@ trigger = { type = "swipe", target = "right_bottom", direction = "up" }
 behavior = { type = "key", key = "C-c" }
 ```
 
-Keyboard maps generate tap bindings from existing SVG slots. They do not define
-geometry:
+Keyboard maps generate tap/hold/swipe bindings from existing SVG slots. They do
+not define geometry:
 
 ```toml
 [keyboard]
@@ -187,30 +184,26 @@ geometry:
 mode = "text"
 layer = "base"
 
-[keyboard.maps.keys]
+[keyboard.maps.tap]
 key_q = "q"
 key_w = "w"
 key_spc = "SPC"
 key_del = "DEL"
 
-[[keyboard.maps]]
-mode = "text"
-layer = "symbols"
-
-[keyboard.maps.keys]
-key_q = "1"
-key_w = "2"
+[keyboard.maps.swipe_up]
+key_q = "`"
+key_w = "1"
 key_a = "!"
 key_s = "@"
-
-[[keyboard.maps]]
-mode = "text"
-layer = "nav"
-
-[keyboard.maps.keys]
-key_h = "<left>"
-key_j = "<down>"
 key_k = "<up>"
+
+[keyboard.maps.swipe_left]
+key_h = "<left>"
+
+[keyboard.maps.swipe_down]
+key_j = "<down>"
+
+[keyboard.maps.swipe_right]
 key_l = "<right>"
 ```
 
@@ -218,15 +211,38 @@ Map fields:
 
 - `mode`: defaults to `text`
 - `layer`: defaults to `base`
-- `keys`: required table mapping slot IDs to Emacs-style key tokens or key sequences
+- `tap`: optional table mapping slot IDs to Emacs-style key tokens or key sequences
+- `hold`: optional table mapping slot IDs to keys; uses `hold_ms`
+- `swipe_up`: optional table mapping slot IDs to keys
+- `swipe_down`: optional table mapping slot IDs to keys
+- `swipe_left`: optional table mapping slot IDs to keys
+- `swipe_right`: optional table mapping slot IDs to keys
 - `fingers`: defaults to `1`
-- `max_ms`: optional tap time limit
+- `max_ms`: optional tap/swipe time limit
+- `hold_ms`: optional hold threshold
+- `min_px`: optional swipe distance threshold
 - `priority`: defaults to `0`
 - `consume`: defaults to `true`
 
-The same slot can be bound in multiple layers. Label rendering uses the topmost
-active layer first and falls back to lower layers when no binding exists or the
-top binding is transparent.
+For example, this gives vim-style arrows without a nav layer:
+
+```toml
+[keyboard.maps.swipe_left]
+key_h = "<left>"
+
+[keyboard.maps.swipe_down]
+key_j = "<down>"
+
+[keyboard.maps.swipe_up]
+key_k = "<up>"
+
+[keyboard.maps.swipe_right]
+key_l = "<right>"
+```
+
+The same slot can be bound to multiple gestures. Label rendering prefers the
+active tap binding so directional gesture bindings do not change the main keycap
+label.
 
 Supported trigger types:
 
