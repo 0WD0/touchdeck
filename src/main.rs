@@ -285,6 +285,16 @@ enum Layer {
     Niri,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotGestureKind {
+    Tap,
+    Hold,
+    SwipeUp,
+    SwipeDown,
+    SwipeLeft,
+    SwipeRight,
+}
+
 #[derive(Clone, Debug)]
 struct Keymap {
     bindings: Vec<Binding>,
@@ -661,6 +671,41 @@ impl Keymap {
     fn slot_label(&self, mode: Mode, layers: &[Layer], slot_id: &str) -> Option<String> {
         self.slot_label_from_bindings(mode, layers, slot_id, true)
             .or_else(|| self.slot_label_from_bindings(mode, layers, slot_id, false))
+    }
+
+    fn slot_gesture_label(
+        &self,
+        mode: Mode,
+        layers: &[Layer],
+        slot_id: &str,
+        gesture: SlotGestureKind,
+    ) -> Option<String> {
+        for layer in layers.iter().rev() {
+            let mut matches = self
+                .bindings
+                .iter()
+                .filter(|binding| {
+                    binding.mode == mode
+                        && binding.layer == *layer
+                        && binding.consume
+                        && binding.trigger.target_id() == slot_id
+                        && binding.trigger.matches_slot_gesture(gesture)
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by_key(|binding| std::cmp::Reverse(binding.priority));
+
+            for binding in matches {
+                if binding.behavior.is_transparent() {
+                    continue;
+                }
+
+                if let Some(label) = behavior_label(&binding.behavior) {
+                    return Some(label);
+                }
+            }
+        }
+
+        None
     }
 
     fn slot_label_from_bindings(
@@ -1154,6 +1199,42 @@ impl Trigger {
 
     fn is_tap(&self) -> bool {
         matches!(self, Self::Tap { .. })
+    }
+
+    fn matches_slot_gesture(&self, gesture: SlotGestureKind) -> bool {
+        match (self, gesture) {
+            (Self::Tap { .. }, SlotGestureKind::Tap) => true,
+            (Self::Hold { .. }, SlotGestureKind::Hold) => true,
+            (
+                Self::Swipe {
+                    direction: SwipeDirection::Up,
+                    ..
+                },
+                SlotGestureKind::SwipeUp,
+            ) => true,
+            (
+                Self::Swipe {
+                    direction: SwipeDirection::Down,
+                    ..
+                },
+                SlotGestureKind::SwipeDown,
+            ) => true,
+            (
+                Self::Swipe {
+                    direction: SwipeDirection::Left,
+                    ..
+                },
+                SlotGestureKind::SwipeLeft,
+            ) => true,
+            (
+                Self::Swipe {
+                    direction: SwipeDirection::Right,
+                    ..
+                },
+                SlotGestureKind::SwipeRight,
+            ) => true,
+            _ => false,
+        }
     }
 
     fn max_ms(&self) -> Option<u32> {
@@ -2217,18 +2298,68 @@ impl App {
                 continue;
             }
 
-            let Some(label) =
-                self.config
-                    .keymap
-                    .slot_label(Mode::Text, &self.engine.layer_stack, &slot.id)
-            else {
+            let tap_label = self.config.keymap.slot_gesture_label(
+                Mode::Text,
+                &self.engine.layer_stack,
+                &slot.id,
+                SlotGestureKind::Tap,
+            );
+            let hold_label = self.config.keymap.slot_gesture_label(
+                Mode::Text,
+                &self.engine.layer_stack,
+                &slot.id,
+                SlotGestureKind::Hold,
+            );
+            let up_label = self.config.keymap.slot_gesture_label(
+                Mode::Text,
+                &self.engine.layer_stack,
+                &slot.id,
+                SlotGestureKind::SwipeUp,
+            );
+            let down_label = self.config.keymap.slot_gesture_label(
+                Mode::Text,
+                &self.engine.layer_stack,
+                &slot.id,
+                SlotGestureKind::SwipeDown,
+            );
+            let left_label = self.config.keymap.slot_gesture_label(
+                Mode::Text,
+                &self.engine.layer_stack,
+                &slot.id,
+                SlotGestureKind::SwipeLeft,
+            );
+            let right_label = self.config.keymap.slot_gesture_label(
+                Mode::Text,
+                &self.engine.layer_stack,
+                &slot.id,
+                SlotGestureKind::SwipeRight,
+            );
+
+            if tap_label.is_none()
+                && hold_label.is_none()
+                && up_label.is_none()
+                && down_label.is_none()
+                && left_label.is_none()
+                && right_label.is_none()
+            {
                 continue;
-            };
+            }
 
             let rect = slot.rect.to_px(size);
             fill_rect(mmap, width, height, rect, [0x12, 0x34, 0x2a, 0xa8]);
             draw_rect_frame(mmap, width, height, rect, [0x80, 0xff, 0xc8, 0xb0]);
-            draw_label_in_rect(mmap, width, height, rect, &label, [0xff, 0xff, 0xff, 0xe8]);
+            draw_keycap_labels(
+                mmap,
+                width,
+                height,
+                rect,
+                tap_label.as_deref(),
+                hold_label.as_deref(),
+                up_label.as_deref(),
+                down_label.as_deref(),
+                left_label.as_deref(),
+                right_label.as_deref(),
+            );
         }
     }
 
@@ -4010,6 +4141,128 @@ fn draw_rect_frame(buf: &mut [u8], width: u32, height: u32, rect: RectPx, color:
     );
 }
 
+fn draw_keycap_labels(
+    buf: &mut [u8],
+    width: u32,
+    height: u32,
+    rect: RectPx,
+    tap: Option<&str>,
+    hold: Option<&str>,
+    up: Option<&str>,
+    down: Option<&str>,
+    left: Option<&str>,
+    right: Option<&str>,
+) {
+    let hint_color = [0xa8, 0xff, 0xd8, 0xc8];
+    let hold_color = [0xff, 0xe0, 0x90, 0xc8];
+    let center_color = [0xff, 0xff, 0xff, 0xf0];
+    let margin = (rect.w.min(rect.h) / 12).clamp(2, 10);
+    let hint_h = (rect.h / 4).max(10);
+    let side_w = (rect.w / 3).max(12);
+
+    if let Some(label) = up {
+        draw_label_in_rect_limited(
+            buf,
+            width,
+            height,
+            RectPx {
+                x: rect.x + margin,
+                y: rect.y + margin,
+                w: rect.w - margin * 2,
+                h: hint_h,
+            },
+            label,
+            hint_color,
+            3,
+        );
+    }
+
+    if let Some(label) = down {
+        draw_label_in_rect_limited(
+            buf,
+            width,
+            height,
+            RectPx {
+                x: rect.x + margin,
+                y: rect.y + rect.h - hint_h - margin,
+                w: rect.w - margin * 2,
+                h: hint_h,
+            },
+            label,
+            hint_color,
+            3,
+        );
+    }
+
+    if let Some(label) = left {
+        draw_label_in_rect_limited(
+            buf,
+            width,
+            height,
+            RectPx {
+                x: rect.x + margin,
+                y: rect.y + rect.h / 3,
+                w: side_w,
+                h: rect.h / 3,
+            },
+            label,
+            hint_color,
+            3,
+        );
+    }
+
+    if let Some(label) = right {
+        draw_label_in_rect_limited(
+            buf,
+            width,
+            height,
+            RectPx {
+                x: rect.x + rect.w - side_w - margin,
+                y: rect.y + rect.h / 3,
+                w: side_w,
+                h: rect.h / 3,
+            },
+            label,
+            hint_color,
+            3,
+        );
+    }
+
+    if let Some(label) = hold {
+        draw_label_in_rect_limited(
+            buf,
+            width,
+            height,
+            RectPx {
+                x: rect.x + margin,
+                y: rect.y + rect.h - hint_h - margin,
+                w: side_w,
+                h: hint_h,
+            },
+            label,
+            hold_color,
+            2,
+        );
+    }
+
+    if let Some(label) = tap {
+        draw_label_in_rect_limited(
+            buf,
+            width,
+            height,
+            RectPx {
+                x: rect.x + rect.w / 4,
+                y: rect.y + rect.h / 3,
+                w: rect.w / 2,
+                h: rect.h / 3,
+            },
+            label,
+            center_color,
+            8,
+        );
+    }
+}
+
 fn draw_label_in_rect(
     buf: &mut [u8],
     width: u32,
@@ -4017,6 +4270,18 @@ fn draw_label_in_rect(
     rect: RectPx,
     label: &str,
     color: [u8; 4],
+) {
+    draw_label_in_rect_limited(buf, width, height, rect, label, color, 8);
+}
+
+fn draw_label_in_rect_limited(
+    buf: &mut [u8],
+    width: u32,
+    height: u32,
+    rect: RectPx,
+    label: &str,
+    color: [u8; 4],
+    max_scale: i32,
 ) {
     let text = label
         .chars()
@@ -4034,7 +4299,7 @@ fn draw_label_in_rect(
     let total_units = text.len() as i32 * glyph_w + (text.len() as i32 - 1) * spacing;
     let scale_x = (rect.w / (total_units + 2)).max(1);
     let scale_y = (rect.h / (glyph_h + 2)).max(1);
-    let scale = scale_x.min(scale_y).clamp(1, 8);
+    let scale = scale_x.min(scale_y).clamp(1, max_scale.max(1));
     let total_w = total_units * scale;
     let total_h = glyph_h * scale;
     let mut x = rect.x + (rect.w - total_w) / 2;
@@ -4863,6 +5128,24 @@ key_c = "<left>"
         assert_eq!(
             keymap.slot_label(Mode::Text, &[Layer::Base], "key_h"),
             Some("h".to_string())
+        );
+        assert_eq!(
+            keymap.slot_gesture_label(
+                Mode::Text,
+                &[Layer::Base],
+                "key_q",
+                SlotGestureKind::SwipeUp
+            ),
+            Some("`".to_string())
+        );
+        assert_eq!(
+            keymap.slot_gesture_label(
+                Mode::Text,
+                &[Layer::Base],
+                "key_h",
+                SlotGestureKind::SwipeLeft
+            ),
+            Some("LEFT".to_string())
         );
     }
 

@@ -104,7 +104,16 @@ Text mode uses key slots defined by the active SVG layout. Config files map
 slot IDs to key behavior with `[[keyboard.maps]]`; geometry stays in SVG.
 `keyboard.maps` supports direct per-slot gestures: tap, hold, and four swipe
 directions. Text mode draws keycaps even when debug draw is disabled, and labels
-are resolved from the active tap binding rather than from static SVG metadata.
+are resolved from behavior bindings rather than from static SVG metadata.
+
+Text keycap labels are laid out as gesture hints:
+
+- Center: tap binding
+- Top edge: swipe up binding
+- Bottom edge: swipe down binding
+- Left edge: swipe left binding
+- Right edge: swipe right binding
+- Small lower-left hint: hold binding, when present
 
 The built-in text keyboard follows the current Charybdis keymap direction:
 
@@ -240,9 +249,8 @@ key_k = "<up>"
 key_l = "<right>"
 ```
 
-The same slot can be bound to multiple gestures. Label rendering prefers the
-active tap binding so directional gesture bindings do not change the main keycap
-label.
+The same slot can be bound to multiple gestures. The main keycap label remains
+the active tap binding; directional gesture bindings are rendered as edge hints.
 
 Supported trigger types:
 
