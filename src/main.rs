@@ -1,0 +1,4404 @@
+use std::collections::HashMap;
+use std::env;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use anyhow::{anyhow, Context, Result};
+use memmap2::MmapMut;
+use serde::{Deserialize, Serialize};
+use tempfile::tempfile;
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface, wl_touch,
+};
+use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+    zwp_virtual_keyboard_manager_v1, zwp_virtual_keyboard_v1,
+};
+use wayland_protocols_wlr::layer_shell::v1::client::{
+    zwlr_layer_shell_v1, zwlr_layer_surface_v1,
+};
+
+const NAMESPACE: &str = "touchdeck-prototype";
+const KEY_ESC: u32 = 1;
+const KEY_1: u32 = 2;
+const KEY_2: u32 = 3;
+const KEY_3: u32 = 4;
+const KEY_4: u32 = 5;
+const KEY_5: u32 = 6;
+const KEY_6: u32 = 7;
+const KEY_7: u32 = 8;
+const KEY_8: u32 = 9;
+const KEY_9: u32 = 10;
+const KEY_0: u32 = 11;
+const KEY_BACKSPACE: u32 = 14;
+const KEY_TAB: u32 = 15;
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_Q: u32 = 16;
+const KEY_W: u32 = 17;
+const KEY_E: u32 = 18;
+const KEY_R: u32 = 19;
+const KEY_T: u32 = 20;
+const KEY_Y: u32 = 21;
+const KEY_U: u32 = 22;
+const KEY_I: u32 = 23;
+const KEY_O: u32 = 24;
+const KEY_P: u32 = 25;
+const KEY_ENTER: u32 = 28;
+const KEY_A: u32 = 30;
+const KEY_S: u32 = 31;
+const KEY_D: u32 = 32;
+const KEY_F: u32 = 33;
+const KEY_G: u32 = 34;
+const KEY_H: u32 = 35;
+const KEY_J: u32 = 36;
+const KEY_K: u32 = 37;
+const KEY_L: u32 = 38;
+const KEY_Z: u32 = 44;
+const KEY_LEFTSHIFT: u32 = 42;
+const KEY_X: u32 = 45;
+const KEY_C: u32 = 46;
+const KEY_V: u32 = 47;
+const KEY_B: u32 = 48;
+const KEY_N: u32 = 49;
+const KEY_M: u32 = 50;
+const KEY_SPACE: u32 = 57;
+const KEY_LEFTALT: u32 = 56;
+const KEY_LEFT: u32 = 105;
+const KEY_RIGHT: u32 = 106;
+const KEY_UP: u32 = 103;
+const KEY_DOWN: u32 = 108;
+const KEY_DELETE: u32 = 111;
+const KEY_LEFTMETA: u32 = 125;
+
+struct App {
+    compositor: Option<wl_compositor::WlCompositor>,
+    shm: Option<wl_shm::WlShm>,
+    layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
+    virtual_keyboard_manager: Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
+    virtual_keyboard: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
+    virtual_keyboard_keymap: Option<File>,
+    seat: Option<wl_seat::WlSeat>,
+    touch: Option<wl_touch::WlTouch>,
+    surface: Option<wl_surface::WlSurface>,
+    layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+    buffers: Vec<BufferBacking>,
+    config: Config,
+    width: u32,
+    height: u32,
+    engine: Engine,
+    capture_policy: CapturePolicy,
+    trace: Option<TraceRecorder>,
+    started_at: Option<Instant>,
+    running: bool,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        let engine = Engine::default();
+        Self {
+            compositor: None,
+            shm: None,
+            layer_shell: None,
+            virtual_keyboard_manager: None,
+            virtual_keyboard: None,
+            virtual_keyboard_keymap: None,
+            seat: None,
+            touch: None,
+            surface: None,
+            layer_surface: None,
+            buffers: Vec::new(),
+            config: Config::default(),
+            width: 0,
+            height: 0,
+            capture_policy: engine.capture_policy(),
+            engine,
+            trace: None,
+            started_at: None,
+            running: false,
+        }
+    }
+}
+
+struct BufferBacking {
+    _file: File,
+    _mmap: MmapMut,
+    _pool: wl_shm_pool::WlShmPool,
+    _buffer: wl_buffer::WlBuffer,
+}
+
+#[derive(Clone)]
+struct Config {
+    action_swipe_left: Option<NiriAction>,
+    action_swipe_right: Option<NiriAction>,
+    action_swipe_up: Option<NiriAction>,
+    action_swipe_down: Option<NiriAction>,
+    action_two_finger_tap: Option<NiriAction>,
+    tap_radius: f64,
+    two_finger_tap_ms: u32,
+    exit_tap_ms: u32,
+    hold_ms: u32,
+    double_tap_ms: u32,
+    swipe_threshold_ratio: f64,
+    swipe_threshold_min: f64,
+    swipe_threshold_max: f64,
+    debug_alpha: u8,
+    debug_draw: bool,
+    log_touch: bool,
+    record_trace_path: Option<PathBuf>,
+    xkb_keymap_path: Option<PathBuf>,
+    slots: SlotRegistry,
+    keymap: Keymap,
+    macros: MacroRegistry,
+    exit_corner_enabled: bool,
+    exit_corner_ratio: f64,
+    exit_corner_tap_ms: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let mut config = Self {
+            action_swipe_left: env_niri_action("TOUCHDECK_ACTION_SWIPE_LEFT", "focus-column-left"),
+            action_swipe_right: env_niri_action("TOUCHDECK_ACTION_SWIPE_RIGHT", "focus-column-right"),
+            action_swipe_up: env_niri_action("TOUCHDECK_ACTION_SWIPE_UP", "focus-workspace-up"),
+            action_swipe_down: env_niri_action("TOUCHDECK_ACTION_SWIPE_DOWN", "focus-workspace-down"),
+            action_two_finger_tap: env_niri_action("TOUCHDECK_ACTION_TWO_FINGER_TAP", "toggle-overview"),
+            tap_radius: env_f64("TOUCHDECK_TAP_RADIUS", 48.0),
+            two_finger_tap_ms: env_u32("TOUCHDECK_TWO_FINGER_TAP_MS", 350),
+            exit_tap_ms: env_u32("TOUCHDECK_EXIT_TAP_MS", 450),
+            hold_ms: env_u32("TOUCHDECK_HOLD_MS", 180),
+            double_tap_ms: env_u32("TOUCHDECK_DOUBLE_TAP_MS", 280),
+            swipe_threshold_ratio: env_f64("TOUCHDECK_SWIPE_THRESHOLD_RATIO", 0.08),
+            swipe_threshold_min: env_f64("TOUCHDECK_SWIPE_THRESHOLD_MIN", 64.0),
+            swipe_threshold_max: env_f64("TOUCHDECK_SWIPE_THRESHOLD_MAX", 140.0),
+            debug_alpha: env_u8("TOUCHDECK_DEBUG_ALPHA", 0),
+            debug_draw: env_bool("TOUCHDECK_DEBUG_DRAW", false),
+            log_touch: env_bool("TOUCHDECK_LOG_TOUCH", false),
+            record_trace_path: env::var_os("TOUCHDECK_RECORD_TRACE").map(PathBuf::from),
+            xkb_keymap_path: env::var_os("TOUCHDECK_XKB_KEYMAP").map(PathBuf::from),
+            slots: SlotRegistry::default(),
+            keymap: Keymap::default(),
+            macros: MacroRegistry::default(),
+            exit_corner_enabled: env_bool("TOUCHDECK_EXIT_CORNER_ENABLED", true),
+            exit_corner_ratio: env_f64("TOUCHDECK_EXIT_CORNER_RATIO", 0.12),
+            exit_corner_tap_ms: env_u32("TOUCHDECK_EXIT_CORNER_TAP_MS", 350),
+        };
+
+        if let Err(err) = config.load_file_overrides() {
+            eprintln!("touchdeck: failed to load config file: {err:?}");
+        }
+
+        config
+    }
+}
+
+impl Config {
+    fn load_file_overrides(&mut self) -> Result<()> {
+        let path = if let Some(path) = env::var_os("TOUCHDECK_CONFIG") {
+            PathBuf::from(path)
+        } else {
+            let default_path = PathBuf::from("touchdeck.toml");
+            if !default_path.exists() {
+                return Ok(());
+            }
+            default_path
+        };
+
+        let source = fs::read_to_string(&path)
+            .with_context(|| format!("read config file {}", path.display()))?;
+        let file_config: FileConfig = toml::from_str(&source)
+            .with_context(|| format!("parse config file {}", path.display()))?;
+        let keyboard = file_config.keyboard;
+
+        if let Some(keyboard) = &keyboard {
+            if let Some(path) = &keyboard.xkb_keymap {
+                self.xkb_keymap_path = Some(PathBuf::from(path));
+            }
+        }
+
+        if let Some(layout) = &file_config.layout {
+            if let Some(svg) = &layout.svg {
+                let svg_path = resolve_config_relative(&path, svg);
+                self.slots = SlotRegistry::from_svg_file(&svg_path)?;
+            }
+        }
+
+        if let Some(macros) = file_config.macros {
+            self.macros.clear();
+            for (name, macro_config) in macros {
+                self.macros
+                    .insert(&name, parse_action_steps(macro_config.steps)?);
+            }
+        }
+
+        if let Some(bindings) = file_config.bindings {
+            self.keymap.bindings.clear();
+            for binding in bindings {
+                self.keymap
+                    .bindings
+                    .push(Binding::from_file_config(binding, &self.slots, &self.macros)?);
+            }
+        }
+
+        if let Some(keyboard) = keyboard {
+            if let Some(rows) = keyboard.rows {
+                for (row_index, row) in rows.into_iter().enumerate() {
+                    self.keymap
+                        .bindings
+                        .extend(expand_keyboard_row(row, row_index)?);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Base,
+    Text,
+    NiriMomentary,
+    NiriLocked,
+    Passthrough,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layer {
+    Base,
+    Niri,
+}
+
+#[derive(Clone, Debug)]
+struct Keymap {
+    bindings: Vec<Binding>,
+}
+
+impl Default for Keymap {
+    fn default() -> Self {
+        let slots = SlotRegistry::default();
+        let mut bindings = vec![
+                Binding {
+                    mode: Mode::Base,
+                    layer: Layer::Base,
+                    trigger: Trigger::Hold {
+                        target: slots.get("left_bottom").unwrap(),
+                        fingers: 1,
+                        min_ms: None,
+                    },
+                    behavior: Behavior::ModeMomentary(Mode::NiriMomentary),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Passthrough,
+                    layer: Layer::Base,
+                    trigger: Trigger::Hold {
+                        target: slots.get("left_bottom").unwrap(),
+                        fingers: 1,
+                        min_ms: None,
+                    },
+                    behavior: Behavior::ModeMomentary(Mode::NiriMomentary),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Base,
+                    layer: Layer::Base,
+                    trigger: Trigger::Swipe {
+                        target: slots.get("bottom_edge").unwrap(),
+                        fingers: 1,
+                        direction: SwipeDirection::Up,
+                        min_px: None,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::ModeToggle(Mode::Text),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Passthrough,
+                    layer: Layer::Base,
+                    trigger: Trigger::Swipe {
+                        target: slots.get("bottom_edge").unwrap(),
+                        fingers: 1,
+                        direction: SwipeDirection::Up,
+                        min_px: None,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::ModeSet(Mode::Text),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Text,
+                    layer: Layer::Base,
+                    trigger: Trigger::Swipe {
+                        target: slots.get("bottom_edge").unwrap(),
+                        fingers: 1,
+                        direction: SwipeDirection::Down,
+                        min_px: None,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::ModeSet(Mode::Base),
+                    priority: 100,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Text,
+                    layer: Layer::Base,
+                    trigger: Trigger::Tap {
+                        target: slots.get("top_left").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::Exit,
+                    priority: 100,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Base,
+                    layer: Layer::Base,
+                    trigger: Trigger::DoubleTap {
+                        target: slots.get("left_bottom").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::ModeToggle(Mode::NiriLocked),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::NiriLocked,
+                    layer: Layer::Niri,
+                    trigger: Trigger::DoubleTap {
+                        target: slots.get("left_bottom").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::ModeSet(Mode::Base),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Base,
+                    layer: Layer::Base,
+                    trigger: Trigger::DoubleTap {
+                        target: slots.get("bottom_edge").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::ModeToggle(Mode::Passthrough),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Passthrough,
+                    layer: Layer::Base,
+                    trigger: Trigger::DoubleTap {
+                        target: slots.get("bottom_edge").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::ModeSet(Mode::Base),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Base,
+                    layer: Layer::Base,
+                    trigger: Trigger::Tap {
+                        target: slots.get("top_left").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::Exit,
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Passthrough,
+                    layer: Layer::Base,
+                    trigger: Trigger::Tap {
+                        target: slots.get("top_left").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::Exit,
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::NiriLocked,
+                    layer: Layer::Niri,
+                    trigger: Trigger::Tap {
+                        target: slots.get("top_left").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::Exit,
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Base,
+                    layer: Layer::Base,
+                    trigger: Trigger::Tap {
+                        target: slots.get("right_bottom").unwrap(),
+                        fingers: 1,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::Key(KEY_SPACE),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Base,
+                    layer: Layer::Base,
+                    trigger: Trigger::Swipe {
+                        target: slots.get("right_bottom").unwrap(),
+                        fingers: 1,
+                        direction: SwipeDirection::Left,
+                        min_px: None,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::Key(KEY_BACKSPACE),
+                    priority: 0,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Base,
+                    layer: Layer::Base,
+                    trigger: Trigger::Swipe {
+                        target: slots.get("right_bottom").unwrap(),
+                        fingers: 1,
+                        direction: SwipeDirection::Right,
+                        min_px: None,
+                        max_ms: None,
+                    },
+                    behavior: Behavior::Key(KEY_ENTER),
+                    priority: 0,
+                    consume: true,
+                },
+            ];
+
+        for (row_index, row) in default_keyboard_rows().into_iter().enumerate() {
+            bindings.extend(expand_keyboard_row(row, row_index).expect("default keyboard row"));
+        }
+
+        Self { bindings }
+    }
+}
+
+impl Keymap {
+    fn resolve_hold(
+        &self,
+        mode: Mode,
+        layers: &[Layer],
+        size: SurfaceSize,
+        x: f64,
+        y: f64,
+        default_hold_ms: u32,
+    ) -> Option<(GestureAction, u32)> {
+        for layer in layers.iter().rev() {
+            let mut matches = self
+                .bindings
+                .iter()
+                .filter(|binding| {
+                    binding.mode == mode
+                        && binding.layer == *layer
+                        && binding.trigger.matches_hold(size, x, y)
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by_key(|binding| std::cmp::Reverse(binding.priority));
+
+            for binding in matches {
+                if binding.behavior.is_transparent() || !binding.consume {
+                    continue;
+                }
+
+                return Some((
+                    binding.behavior.clone().into_action(),
+                    binding.trigger.hold_ms().unwrap_or(default_hold_ms),
+                ));
+            }
+        }
+
+        None
+    }
+
+    fn resolve_release(
+        &self,
+        mode: Mode,
+        layers: &[Layer],
+        gesture: &Gesture,
+        config: &Config,
+        size: SurfaceSize,
+        last_tap: &mut Option<TapRecord>,
+        now_ms: u64,
+    ) -> GestureAction {
+        let Some(kind) = recognize_gesture_kind(gesture, config, size) else {
+            return GestureAction::None;
+        };
+
+        let Some(contact) = gesture.finished.first() else {
+            return GestureAction::None;
+        };
+
+        if kind == GestureKind::Tap {
+            let double_tap_binding = self.find_release_binding(
+                mode,
+                layers,
+                |binding| {
+                    binding.trigger.matches_double_tap_start(
+                        size,
+                        contact.start_x,
+                        contact.start_y,
+                        gesture.max_active,
+                    )
+                },
+            );
+
+            if let Some(binding) = double_tap_binding {
+                let max_ms = binding.trigger.max_ms().unwrap_or(config.double_tap_ms);
+                let is_double_tap = last_tap.is_some_and(|last| {
+                    now_ms.saturating_sub(last.t_ms) <= u64::from(max_ms)
+                        && (contact.start_x - last.x).hypot(contact.start_y - last.y)
+                            <= config.tap_radius * 2.0
+                        && binding.trigger.rect().contains_px(size, last.x, last.y)
+                });
+
+                if is_double_tap {
+                    *last_tap = None;
+                    return binding.behavior.clone().into_action();
+                }
+
+                *last_tap = Some(TapRecord {
+                    t_ms: now_ms,
+                    x: contact.start_x,
+                    y: contact.start_y,
+                });
+                return GestureAction::None;
+            }
+        } else {
+            *last_tap = None;
+        }
+
+        self.find_release_binding(mode, layers, |binding| {
+            binding.trigger.matches_release(kind, gesture, config, size)
+        })
+            .map(|binding| binding.behavior.clone().into_action())
+            .unwrap_or(GestureAction::None)
+    }
+
+    fn find_release_binding<F>(
+        &self,
+        mode: Mode,
+        layers: &[Layer],
+        mut predicate: F,
+    ) -> Option<&Binding>
+    where
+        F: FnMut(&Binding) -> bool,
+    {
+        for layer in layers.iter().rev() {
+            let mut matches = self
+                .bindings
+                .iter()
+                .filter(|binding| binding.mode == mode && binding.layer == *layer && predicate(binding))
+                .collect::<Vec<_>>();
+            matches.sort_by_key(|binding| std::cmp::Reverse(binding.priority));
+
+            for binding in matches {
+                if binding.behavior.is_transparent() || !binding.consume {
+                    continue;
+                }
+                return Some(binding);
+            }
+        }
+
+        None
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Binding {
+    mode: Mode,
+    layer: Layer,
+    trigger: Trigger,
+    behavior: Behavior,
+    priority: i32,
+    consume: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeyChord {
+    keys: Vec<u32>,
+}
+
+#[derive(Clone, Debug)]
+struct Layout {
+    slots: HashMap<String, Slot>,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct Slot {
+    id: String,
+    rect: RectNorm,
+    role: SlotRole,
+    capture: bool,
+    label: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+enum SlotRole {
+    Key,
+    Zone,
+    GestureArea,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SlotTarget {
+    id: String,
+    rect: RectNorm,
+}
+
+#[derive(Clone, Debug)]
+struct SlotRegistry {
+    layout: Layout,
+}
+
+impl Default for SlotRegistry {
+    fn default() -> Self {
+        let mut registry = Self {
+            layout: Layout {
+                slots: HashMap::new(),
+            },
+        };
+        registry.insert_slot("left_bottom", left_bottom_rect(), SlotRole::Zone, true, Some("NIRI"));
+        registry.insert_slot("right_bottom", right_bottom_rect(), SlotRole::Zone, true, Some("KEY"));
+        registry.insert_slot("bottom_edge", bottom_edge_rect(), SlotRole::GestureArea, true, Some("TEXT"));
+        registry.insert_slot("top_left", top_left_rect(), SlotRole::Zone, true, Some("EXIT"));
+        registry.insert_slot(
+            "center",
+            RectNorm {
+                x0: 0.18,
+                y0: 0.12,
+                x1: 0.82,
+                y1: 0.82,
+            },
+            SlotRole::GestureArea,
+            false,
+            None,
+        );
+        registry.insert_slot(
+            "full",
+            RectNorm {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 1.0,
+                y1: 1.0,
+            },
+            SlotRole::GestureArea,
+            false,
+            Some("SCREEN"),
+        );
+        registry.insert_slot(
+            "fullscreen",
+            RectNorm {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 1.0,
+                y1: 1.0,
+            },
+            SlotRole::GestureArea,
+            false,
+            Some("SCREEN"),
+        );
+        registry
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct MacroRegistry {
+    macros: HashMap<String, Vec<ActionStep>>,
+}
+
+impl MacroRegistry {
+    fn clear(&mut self) {
+        self.macros.clear();
+    }
+
+    fn insert(&mut self, name: &str, steps: Vec<ActionStep>) {
+        self.macros.insert(normalize_name(name), steps);
+    }
+
+    fn get(&self, name: &str) -> Result<Vec<ActionStep>> {
+        self.macros
+            .get(&normalize_name(name))
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown macro {name}"))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ActionStep {
+    KeyDown(u32),
+    KeyUp(u32),
+    TapKey(u32),
+    KeySequence(Vec<KeyChord>),
+    Niri(NiriAction),
+    DelayMs(u32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NiriAction {
+    FocusColumnLeft,
+    FocusColumnRight,
+    FocusWorkspaceUp,
+    FocusWorkspaceDown,
+    ToggleOverview,
+}
+
+impl NiriAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::FocusColumnLeft => "focus-column-left",
+            Self::FocusColumnRight => "focus-column-right",
+            Self::FocusWorkspaceUp => "focus-workspace-up",
+            Self::FocusWorkspaceDown => "focus-workspace-down",
+            Self::ToggleOverview => "toggle-overview",
+        }
+    }
+
+    fn ipc_request_json(self) -> &'static str {
+        match self {
+            Self::FocusColumnLeft => r#"{"Action":{"FocusColumnLeft":{}}}"#,
+            Self::FocusColumnRight => r#"{"Action":{"FocusColumnRight":{}}}"#,
+            Self::FocusWorkspaceUp => r#"{"Action":{"FocusWorkspaceUp":{}}}"#,
+            Self::FocusWorkspaceDown => r#"{"Action":{"FocusWorkspaceDown":{}}}"#,
+            Self::ToggleOverview => r#"{"Action":{"ToggleOverview":{}}}"#,
+        }
+    }
+}
+
+impl std::fmt::Display for NiriAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl SlotRegistry {
+    fn from_svg_file(path: &Path) -> Result<Self> {
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("read SVG layout {}", path.display()))?;
+        Self::from_svg_str(&source).with_context(|| format!("parse SVG layout {}", path.display()))
+    }
+
+    fn from_svg_str(source: &str) -> Result<Self> {
+        let document = roxmltree::Document::parse(source).context("parse SVG XML")?;
+        let root = document
+            .descendants()
+            .find(|node| node.is_element() && node.tag_name().name() == "svg")
+            .ok_or_else(|| anyhow!("SVG layout is missing root <svg> element"))?;
+        let (view_x, view_y, view_w, view_h) = svg_canvas(root)?;
+        let mut registry = Self {
+            layout: Layout {
+                slots: HashMap::new(),
+            },
+        };
+
+        for node in document
+            .descendants()
+            .filter(|node| node.is_element() && node.tag_name().name() == "rect")
+        {
+            let Some(slot_id) = node.attribute("data-td-slot") else {
+                continue;
+            };
+
+            let x = svg_number_attr(node, "x")?;
+            let y = svg_number_attr(node, "y")?;
+            let width = svg_number_attr(node, "width")?;
+            let height = svg_number_attr(node, "height")?;
+            let rect = validate_rect(
+                RectNorm {
+                    x0: (x - view_x) / view_w,
+                    y0: (y - view_y) / view_h,
+                    x1: (x + width - view_x) / view_w,
+                    y1: (y + height - view_y) / view_h,
+                },
+                "SVG slot",
+            )?;
+            let role = parse_slot_role(node.attribute("data-td-role"))?;
+            let capture = parse_optional_bool(node.attribute("data-td-capture"))?.unwrap_or(true);
+            let label = node.attribute("data-td-label");
+            let id = normalize_name(slot_id);
+
+            if registry.layout.slots.contains_key(&id) {
+                return Err(anyhow!("duplicate SVG slot {slot_id}"));
+            }
+
+            registry.insert_slot(&id, rect, role, capture, label);
+        }
+
+        if registry.layout.slots.is_empty() {
+            return Err(anyhow!("SVG layout contains no rect with data-td-slot"));
+        }
+
+        Ok(registry)
+    }
+
+    fn get(&self, name: &str) -> Result<SlotTarget> {
+        let key = normalize_name(name);
+        self.layout
+            .slots
+            .get(&key)
+            .map(|slot| SlotTarget {
+                id: slot.id.clone(),
+                rect: slot.rect,
+            })
+            .ok_or_else(|| anyhow!("unknown slot {name}"))
+    }
+
+    fn insert_slot(
+        &mut self,
+        name: &str,
+        rect: RectNorm,
+        role: SlotRole,
+        capture: bool,
+        label: Option<&str>,
+    ) {
+        let id = normalize_name(name);
+        self.layout.slots.insert(
+            id.clone(),
+            Slot {
+                id,
+                rect,
+                role,
+                capture,
+                label: label.map(str::to_string),
+            },
+        );
+    }
+}
+
+fn svg_canvas(root: roxmltree::Node<'_, '_>) -> Result<(f64, f64, f64, f64)> {
+    if let Some(view_box) = root.attribute("viewBox") {
+        let values = view_box
+            .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+            .filter(|value| !value.is_empty())
+            .map(parse_svg_number)
+            .collect::<Result<Vec<_>>>()?;
+        if values.len() != 4 {
+            return Err(anyhow!("SVG viewBox must contain four numbers"));
+        }
+        if values[2] <= 0.0 || values[3] <= 0.0 {
+            return Err(anyhow!("SVG viewBox width/height must be positive"));
+        }
+        return Ok((values[0], values[1], values[2], values[3]));
+    }
+
+    let width = svg_number_attr(root, "width")?;
+    let height = svg_number_attr(root, "height")?;
+    if width <= 0.0 || height <= 0.0 {
+        return Err(anyhow!("SVG width/height must be positive"));
+    }
+    Ok((0.0, 0.0, width, height))
+}
+
+fn svg_number_attr(node: roxmltree::Node<'_, '_>, name: &str) -> Result<f64> {
+    parse_svg_number(
+        node.attribute(name)
+            .ok_or_else(|| anyhow!("SVG <{}> is missing {name}", node.tag_name().name()))?,
+    )
+}
+
+fn parse_svg_number(value: &str) -> Result<f64> {
+    let value = value.trim();
+    if value.is_empty() || value.contains('%') {
+        return Err(anyhow!("unsupported SVG numeric value {value:?}"));
+    }
+    let value = value.strip_suffix("px").unwrap_or(value).trim();
+    value
+        .parse::<f64>()
+        .with_context(|| format!("parse SVG numeric value {value:?}"))
+}
+
+fn parse_slot_role(value: Option<&str>) -> Result<SlotRole> {
+    match value.map(normalize_name).as_deref() {
+        None | Some("") | Some("zone") => Ok(SlotRole::Zone),
+        Some("key") => Ok(SlotRole::Key),
+        Some("gesture") | Some("gesture_area") => Ok(SlotRole::GestureArea),
+        Some(other) => Err(anyhow!("unknown SVG slot role {other}")),
+    }
+}
+
+fn parse_optional_bool(value: Option<&str>) -> Result<Option<bool>> {
+    match value.map(normalize_name).as_deref() {
+        None | Some("") => Ok(None),
+        Some("1") | Some("true") | Some("yes") | Some("on") => Ok(Some(true)),
+        Some("0") | Some("false") | Some("no") | Some("off") => Ok(Some(false)),
+        Some(other) => Err(anyhow!("invalid boolean value {other}")),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GestureKind {
+    Tap,
+    SwipeLeft,
+    SwipeRight,
+    SwipeUp,
+    SwipeDown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SwipeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl SwipeDirection {
+    fn as_gesture_kind(self) -> GestureKind {
+        match self {
+            Self::Left => GestureKind::SwipeLeft,
+            Self::Right => GestureKind::SwipeRight,
+            Self::Up => GestureKind::SwipeUp,
+            Self::Down => GestureKind::SwipeDown,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Trigger {
+    Tap {
+        target: SlotTarget,
+        fingers: usize,
+        max_ms: Option<u32>,
+    },
+    DoubleTap {
+        target: SlotTarget,
+        fingers: usize,
+        max_ms: Option<u32>,
+    },
+    Hold {
+        target: SlotTarget,
+        fingers: usize,
+        min_ms: Option<u32>,
+    },
+    Swipe {
+        target: SlotTarget,
+        fingers: usize,
+        direction: SwipeDirection,
+        min_px: Option<f64>,
+        max_ms: Option<u32>,
+    },
+}
+
+impl Trigger {
+    fn rect(&self) -> RectNorm {
+        match self {
+            Self::Tap { target, .. }
+            | Self::DoubleTap { target, .. }
+            | Self::Hold { target, .. }
+            | Self::Swipe { target, .. } => target.rect,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn target_id(&self) -> &str {
+        match self {
+            Self::Tap { target, .. }
+            | Self::DoubleTap { target, .. }
+            | Self::Hold { target, .. }
+            | Self::Swipe { target, .. } => &target.id,
+        }
+    }
+
+    fn max_ms(&self) -> Option<u32> {
+        match self {
+            Self::Tap { max_ms, .. }
+            | Self::DoubleTap { max_ms, .. }
+            | Self::Swipe { max_ms, .. } => *max_ms,
+            Self::Hold { .. } => None,
+        }
+    }
+
+    fn hold_ms(&self) -> Option<u32> {
+        match self {
+            Self::Hold { min_ms, .. } => *min_ms,
+            _ => None,
+        }
+    }
+
+    fn matches_hold(&self, size: SurfaceSize, x: f64, y: f64) -> bool {
+        match self {
+            Self::Hold {
+                target, fingers, ..
+            } => *fingers == 1 && target.rect.contains_px(size, x, y),
+            _ => false,
+        }
+    }
+
+    fn matches_double_tap_start(
+        &self,
+        size: SurfaceSize,
+        x: f64,
+        y: f64,
+        fingers: usize,
+    ) -> bool {
+        match self {
+            Self::DoubleTap {
+                target,
+                fingers: expected_fingers,
+                ..
+            } => *expected_fingers == fingers && target.rect.contains_px(size, x, y),
+            _ => false,
+        }
+    }
+
+    fn matches_release(
+        &self,
+        kind: GestureKind,
+        gesture: &Gesture,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> bool {
+        let Some(contact) = gesture.finished.first() else {
+            return false;
+        };
+
+        match self {
+            Self::Tap {
+                target,
+                fingers,
+                max_ms,
+            } => {
+                kind == GestureKind::Tap
+                    && gesture.max_active == *fingers
+                    && target.rect.contains_px(size, contact.start_x, contact.start_y)
+                    && is_tap_like(gesture, config.tap_radius, max_ms.unwrap_or(config.two_finger_tap_ms))
+            }
+            Self::DoubleTap { .. } | Self::Hold { .. } => false,
+            Self::Swipe {
+                target,
+                fingers,
+                direction,
+                min_px,
+                max_ms,
+            } => {
+                kind == direction.as_gesture_kind()
+                    && gesture.max_active == *fingers
+                    && target.rect.contains_px(size, contact.start_x, contact.start_y)
+                    && min_px.is_none_or(|threshold| contact_movement(contact) >= threshold)
+                    && max_ms.is_none_or(|limit| contact.last_time.saturating_sub(contact.start_time) <= limit)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Behavior {
+    Niri(NiriAction),
+    Key(u32),
+    KeySequence(Vec<KeyChord>),
+    Sequence(Vec<ActionStep>),
+    ModeSet(Mode),
+    ModeToggle(Mode),
+    ModeMomentary(Mode),
+    LayerSet(Layer),
+    LayerToggle(Layer),
+    LayerMomentary(Layer),
+    Transparent,
+    NoOp,
+    Exit,
+}
+
+impl Behavior {
+    fn is_transparent(&self) -> bool {
+        matches!(self, Self::Transparent)
+    }
+
+    fn into_action(self) -> GestureAction {
+        match self {
+            Self::Niri(action) => GestureAction::Niri(action),
+            Self::Key(key) => GestureAction::Key(key),
+            Self::KeySequence(sequence) => GestureAction::KeySequence(sequence),
+            Self::Sequence(steps) => GestureAction::Sequence(steps),
+            Self::ModeSet(mode) => GestureAction::ModeSet(mode),
+            Self::ModeToggle(mode) => GestureAction::ModeToggle(mode),
+            Self::ModeMomentary(mode) => GestureAction::ModeMomentary(mode),
+            Self::LayerSet(layer) => GestureAction::LayerSet(layer),
+            Self::LayerToggle(layer) => GestureAction::LayerToggle(layer),
+            Self::LayerMomentary(layer) => GestureAction::LayerMomentary(layer),
+            Self::Exit => GestureAction::Exit,
+            Self::Transparent | Self::NoOp => GestureAction::None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct FileConfig {
+    layout: Option<LayoutFileConfig>,
+    keyboard: Option<KeyboardFileConfig>,
+    macros: Option<HashMap<String, MacroFileConfig>>,
+    bindings: Option<Vec<BindingFileConfig>>,
+}
+
+#[derive(Deserialize)]
+struct LayoutFileConfig {
+    svg: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct KeyboardFileConfig {
+    xkb_keymap: Option<String>,
+    rows: Option<Vec<KeyboardRowFileConfig>>,
+}
+
+#[derive(Deserialize)]
+struct KeyboardRowFileConfig {
+    mode: Option<String>,
+    layer: Option<String>,
+    x: Option<[f64; 2]>,
+    y: [f64; 2],
+    keys: Vec<String>,
+    gap: Option<f64>,
+    fingers: Option<usize>,
+    max_ms: Option<u32>,
+    priority: Option<i32>,
+    consume: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct MacroFileConfig {
+    steps: Vec<ActionStepFileConfig>,
+}
+
+#[derive(Deserialize)]
+struct ActionStepFileConfig {
+    #[serde(rename = "type")]
+    kind: String,
+    key: Option<String>,
+    keys: Option<String>,
+    action: Option<String>,
+    ms: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct BindingFileConfig {
+    mode: Option<String>,
+    layer: Option<String>,
+    trigger: TriggerFileConfig,
+    behavior: BehaviorFileConfig,
+    priority: Option<i32>,
+    consume: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct TriggerFileConfig {
+    #[serde(rename = "type")]
+    kind: String,
+    target: String,
+    direction: Option<String>,
+    fingers: Option<usize>,
+    min_ms: Option<u32>,
+    max_ms: Option<u32>,
+    min_px: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct BehaviorFileConfig {
+    #[serde(rename = "type")]
+    kind: String,
+    key: Option<String>,
+    keys: Option<String>,
+    action: Option<String>,
+    macro_name: Option<String>,
+    #[serde(rename = "macro")]
+    macro_alias: Option<String>,
+    steps: Option<Vec<ActionStepFileConfig>>,
+    mode: Option<String>,
+    layer: Option<String>,
+}
+
+impl Binding {
+    fn from_file_config(
+        value: BindingFileConfig,
+        slots: &SlotRegistry,
+        macros: &MacroRegistry,
+    ) -> Result<Self> {
+        let mode = parse_mode(value.mode.as_deref().unwrap_or("base"))?;
+        let layer = parse_layer(value.layer.as_deref().unwrap_or("base"))?;
+        let trigger = parse_trigger(value.trigger, slots)?;
+        let behavior = parse_behavior(value.behavior, macros)?;
+
+        Ok(Self {
+            mode,
+            layer,
+            trigger,
+            behavior,
+            priority: value.priority.unwrap_or(0),
+            consume: value.consume.unwrap_or(true),
+        })
+    }
+}
+
+fn default_keyboard_rows() -> Vec<KeyboardRowFileConfig> {
+    vec![
+        KeyboardRowFileConfig {
+            mode: Some("text".to_string()),
+            layer: Some("base".to_string()),
+            x: Some([0.04, 0.96]),
+            y: [0.54, 0.64],
+            keys: ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            gap: Some(0.006),
+            fingers: None,
+            max_ms: None,
+            priority: None,
+            consume: None,
+        },
+        KeyboardRowFileConfig {
+            mode: Some("text".to_string()),
+            layer: Some("base".to_string()),
+            x: Some([0.08, 0.92]),
+            y: [0.65, 0.75],
+            keys: ["a", "s", "d", "f", "g", "h", "j", "k", "l"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            gap: Some(0.006),
+            fingers: None,
+            max_ms: None,
+            priority: None,
+            consume: None,
+        },
+        KeyboardRowFileConfig {
+            mode: Some("text".to_string()),
+            layer: Some("base".to_string()),
+            x: Some([0.14, 0.86]),
+            y: [0.76, 0.86],
+            keys: ["z", "x", "c", "v", "b", "n", "m"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            gap: Some(0.006),
+            fingers: None,
+            max_ms: None,
+            priority: None,
+            consume: None,
+        },
+        KeyboardRowFileConfig {
+            mode: Some("text".to_string()),
+            layer: Some("base".to_string()),
+            x: Some([0.08, 0.92]),
+            y: [0.87, 0.94],
+            keys: ["ESC", "SPC", "DEL", "RET"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            gap: Some(0.008),
+            fingers: None,
+            max_ms: None,
+            priority: None,
+            consume: None,
+        },
+    ]
+}
+
+fn expand_keyboard_row(row: KeyboardRowFileConfig, row_index: usize) -> Result<Vec<Binding>> {
+    let mode = parse_mode(row.mode.as_deref().unwrap_or("text"))?;
+    let layer = parse_layer(row.layer.as_deref().unwrap_or("base"))?;
+    let [x0, x1] = row.x.unwrap_or([0.04, 0.96]);
+    let [y0, y1] = row.y;
+    let gap = row.gap.unwrap_or(0.0);
+    let key_count = row.keys.len();
+
+    if key_count == 0 {
+        return Err(anyhow!("keyboard row {row_index} has no keys"));
+    }
+
+    if !(x0.is_finite()
+        && x1.is_finite()
+        && y0.is_finite()
+        && y1.is_finite()
+        && gap.is_finite()
+        && x0 >= 0.0
+        && y0 >= 0.0
+        && x1 <= 1.0
+        && y1 <= 1.0
+        && x0 < x1
+        && y0 < y1
+        && gap >= 0.0)
+    {
+        return Err(anyhow!(
+            "keyboard row {row_index} must use finite normalized x/y ranges and non-negative gap"
+        ));
+    }
+
+    let total_gap = gap * key_count.saturating_sub(1) as f64;
+    let key_width = (x1 - x0 - total_gap) / key_count as f64;
+    if key_width <= 0.0 {
+        return Err(anyhow!("keyboard row {row_index} gap leaves no room for keys"));
+    }
+
+    let mut bindings = Vec::with_capacity(key_count);
+    for (key_index, key) in row.keys.into_iter().enumerate() {
+        let key_x0 = x0 + key_index as f64 * (key_width + gap);
+        let key_x1 = key_x0 + key_width;
+        let target = SlotTarget {
+            id: keyboard_row_slot_id(row_index, key_index, &key),
+            rect: RectNorm {
+                x0: key_x0,
+                y0,
+                x1: key_x1,
+                y1,
+            },
+        };
+        bindings.push(Binding {
+            mode,
+            layer,
+            trigger: Trigger::Tap {
+                target,
+                fingers: row.fingers.unwrap_or(1),
+                max_ms: row.max_ms,
+            },
+            behavior: Behavior::KeySequence(parse_emacs_key_sequence(&key).with_context(|| {
+                format!("parse keyboard row {row_index} key {key_index} ({key})")
+            })?),
+            priority: row.priority.unwrap_or(0),
+            consume: row.consume.unwrap_or(true),
+        });
+    }
+
+    Ok(bindings)
+}
+
+fn keyboard_row_slot_id(row_index: usize, key_index: usize, key: &str) -> String {
+    let normalized = normalize_name(key)
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' { ch } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+
+    if normalized.is_empty() {
+        format!("key_{row_index}_{key_index}")
+    } else {
+        format!("key_{normalized}")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum CapturePolicy {
+    Fullscreen,
+    Zones(Vec<RectNorm>),
+    #[allow(dead_code)]
+    None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RectNorm {
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+}
+
+impl RectNorm {
+    fn contains_px(self, size: SurfaceSize, x: f64, y: f64) -> bool {
+        let width = f64::from(size.width.max(1));
+        let height = f64::from(size.height.max(1));
+        x >= width * self.x0
+            && x <= width * self.x1
+            && y >= height * self.y0
+            && y <= height * self.y1
+    }
+
+    fn to_px(self, size: SurfaceSize) -> RectPx {
+        let width = f64::from(size.width.max(1));
+        let height = f64::from(size.height.max(1));
+        let x0 = (width * self.x0).floor().max(0.0) as i32;
+        let y0 = (height * self.y0).floor().max(0.0) as i32;
+        let x1 = (width * self.x1).ceil().max(0.0) as i32;
+        let y1 = (height * self.y1).ceil().max(0.0) as i32;
+
+        RectPx {
+            x: x0,
+            y: y0,
+            w: (x1 - x0).max(0),
+            h: (y1 - y0).max(0),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RectPx {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+#[derive(Clone, Copy)]
+struct SurfaceSize {
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Copy)]
+struct ControlZone {
+    kind: ZoneKind,
+    rect: RectNorm,
+}
+
+#[derive(Clone, Copy)]
+enum ZoneKind {
+    TopLeft,
+    LeftBottom,
+    BottomEdge,
+}
+
+#[derive(Clone, Debug)]
+struct Contact {
+    id: i32,
+    start_x: f64,
+    start_y: f64,
+    last_x: f64,
+    last_y: f64,
+    start_time: u32,
+    last_time: u32,
+}
+
+#[derive(Debug, Default)]
+struct Gesture {
+    finished: Vec<Contact>,
+    max_active: usize,
+}
+
+#[derive(Clone, Debug)]
+struct HoldCandidate {
+    id: i32,
+    deadline_ms: u64,
+    action: GestureAction,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TapRecord {
+    t_ms: u64,
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, Debug)]
+struct MomentaryState {
+    hold_id: i32,
+    return_mode: Mode,
+    return_layer_stack: Vec<Layer>,
+}
+
+#[derive(Debug)]
+struct Engine {
+    mode: Mode,
+    layer_stack: Vec<Layer>,
+    active: HashMap<i32, Contact>,
+    finished: Vec<Contact>,
+    max_active: usize,
+    hold_candidate: Option<HoldCandidate>,
+    momentary: Option<MomentaryState>,
+    last_tap: Option<TapRecord>,
+    last_action: Option<String>,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self {
+            mode: Mode::Base,
+            layer_stack: vec![Layer::Base],
+            active: HashMap::new(),
+            finished: Vec::new(),
+            max_active: 0,
+            hold_candidate: None,
+            momentary: None,
+            last_tap: None,
+            last_action: None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum EngineEffect {
+    SetCapture(CapturePolicy),
+    Dispatch(GestureAction),
+    Redraw,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum GestureAction {
+    Niri(NiriAction),
+    Key(u32),
+    KeySequence(Vec<KeyChord>),
+    Sequence(Vec<ActionStep>),
+    ModeSet(Mode),
+    ModeToggle(Mode),
+    ModeMomentary(Mode),
+    LayerSet(Layer),
+    LayerToggle(Layer),
+    LayerMomentary(Layer),
+    Exit,
+    None,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TraceEvent {
+    Down {
+        t: u64,
+        wl_time: u32,
+        id: i32,
+        x: f64,
+        y: f64,
+    },
+    Motion {
+        t: u64,
+        wl_time: u32,
+        id: i32,
+        x: f64,
+        y: f64,
+    },
+    Up {
+        t: u64,
+        wl_time: u32,
+        id: i32,
+    },
+    Cancel {
+        t: u64,
+    },
+}
+
+impl TraceEvent {
+    #[cfg(test)]
+    fn t(&self) -> u64 {
+        match self {
+            TraceEvent::Down { t, .. }
+            | TraceEvent::Motion { t, .. }
+            | TraceEvent::Up { t, .. }
+            | TraceEvent::Cancel { t } => *t,
+        }
+    }
+}
+
+struct TraceRecorder {
+    file: File,
+}
+
+impl TraceRecorder {
+    fn new(path: &PathBuf) -> Result<Self> {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(path)
+            .with_context(|| format!("open trace file {}", path.display()))?;
+        Ok(Self { file })
+    }
+
+    fn record(&mut self, event: &TraceEvent) -> Result<()> {
+        serde_json::to_writer(&mut self.file, event).context("write trace event")?;
+        self.file.write_all(b"\n").context("write trace newline")?;
+        Ok(())
+    }
+}
+
+fn main() -> Result<()> {
+    let config = Config::default();
+    let trace = if let Some(path) = &config.record_trace_path {
+        Some(TraceRecorder::new(path)?)
+    } else {
+        None
+    };
+
+    let conn = Connection::connect_to_env().context("connect to Wayland display")?;
+    let display = conn.display();
+    let mut event_queue = conn.new_event_queue();
+    let qh = event_queue.handle();
+
+    let mut app = App {
+        config,
+        trace,
+        started_at: Some(Instant::now()),
+        running: true,
+        ..Default::default()
+    };
+
+    display.get_registry(&qh, ());
+    event_queue
+        .roundtrip(&mut app)
+        .context("collect Wayland globals")?;
+
+    app.init_overlay(&qh)?;
+    eprintln!(
+        "touchdeck: overlay initialized; base mode captures fullscreen; double-tap bottom edge for passthrough"
+    );
+
+    while app.running {
+        event_queue
+            .dispatch_pending(&mut app)
+            .context("dispatch pending Wayland events")?;
+
+        let now_ms = app.now_ms();
+        let size = app.surface_size();
+        let config = app.config.clone();
+        let effects = app.engine.process_timers(now_ms, &config, size);
+        app.apply_effects_or_stop(&qh, effects);
+
+        if !app.running {
+            break;
+        }
+
+        event_queue.flush().context("flush Wayland requests")?;
+        let timeout = app.poll_timeout();
+        let wayland_fd = event_queue.as_fd().as_raw_fd();
+
+        let Some(guard) = event_queue.prepare_read() else {
+            continue;
+        };
+
+        event_queue.flush().context("flush Wayland requests")?;
+        if poll_fd(wayland_fd, timeout).context("poll Wayland fd")? {
+            guard.read().context("read Wayland events")?;
+        }
+    }
+
+    Ok(())
+}
+
+impl App {
+    fn init_overlay(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        let compositor = self
+            .compositor
+            .as_ref()
+            .ok_or_else(|| anyhow!("Wayland compositor global is unavailable"))?;
+        let layer_shell = self
+            .layer_shell
+            .as_ref()
+            .ok_or_else(|| anyhow!("zwlr_layer_shell_v1 global is unavailable"))?;
+        self.touch
+            .as_ref()
+            .ok_or_else(|| anyhow!("wl_touch is unavailable on this Wayland seat"))?;
+
+        let surface = compositor.create_surface(qh, ());
+        let layer_surface = layer_shell.get_layer_surface(
+            &surface,
+            None,
+            zwlr_layer_shell_v1::Layer::Overlay,
+            String::from(NAMESPACE),
+            qh,
+            (),
+        );
+
+        layer_surface.set_anchor(
+            zwlr_layer_surface_v1::Anchor::Top
+                | zwlr_layer_surface_v1::Anchor::Bottom
+                | zwlr_layer_surface_v1::Anchor::Left
+                | zwlr_layer_surface_v1::Anchor::Right,
+        );
+        layer_surface.set_size(0, 0);
+        layer_surface.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
+
+        surface.commit();
+
+        self.surface = Some(surface);
+        self.layer_surface = Some(layer_surface);
+
+        self.init_virtual_keyboard(qh)?;
+
+        Ok(())
+    }
+
+    fn init_virtual_keyboard(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        let Some(manager) = self.virtual_keyboard_manager.as_ref() else {
+            eprintln!("touchdeck: zwp_virtual_keyboard_manager_v1 is unavailable; key actions will be ignored");
+            return Ok(());
+        };
+        let seat = self
+            .seat
+            .as_ref()
+            .ok_or_else(|| anyhow!("wl_seat is unavailable for virtual keyboard"))?;
+
+        let keyboard = manager.create_virtual_keyboard(seat, qh, ());
+        let keymap_bytes = load_xkb_keymap(&self.config)?;
+        let mut file = tempfile().context("create virtual keyboard keymap file")?;
+        file.write_all(&keymap_bytes)
+            .context("write virtual keyboard keymap")?;
+        file.flush().context("flush virtual keyboard keymap")?;
+        keyboard.keymap(1, file.as_fd(), keymap_bytes.len() as u32);
+
+        self.virtual_keyboard = Some(keyboard);
+        self.virtual_keyboard_keymap = Some(file);
+        eprintln!("touchdeck: virtual keyboard initialized");
+
+        Ok(())
+    }
+
+    fn surface_size(&self) -> SurfaceSize {
+        SurfaceSize {
+            width: self.width.max(1),
+            height: self.height.max(1),
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        self.started_at
+            .map(|started_at| started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+
+    fn poll_timeout(&self) -> Option<Duration> {
+        self.engine.next_timer_deadline_ms().map(|deadline_ms| {
+            let now_ms = self.now_ms();
+            Duration::from_millis(deadline_ms.saturating_sub(now_ms))
+        })
+    }
+
+    fn attach_overlay_buffer(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let shm = self
+            .shm
+            .as_ref()
+            .ok_or_else(|| anyhow!("wl_shm global is unavailable"))?;
+        let surface = self
+            .surface
+            .as_ref()
+            .ok_or_else(|| anyhow!("overlay surface is not initialized"))?;
+
+        let width = width.max(1);
+        let height = height.max(1);
+        let stride = width
+            .checked_mul(4)
+            .ok_or_else(|| anyhow!("invalid buffer stride"))?;
+        let size = stride
+            .checked_mul(height)
+            .ok_or_else(|| anyhow!("invalid buffer size"))?;
+
+        let file = tempfile().context("create shm backing file")?;
+        file.set_len(u64::from(size))
+            .context("resize shm backing file")?;
+
+        let mut mmap = unsafe { MmapMut::map_mut(&file).context("map shm backing file")? };
+        self.render_overlay(&mut mmap, width, height);
+
+        let pool = shm.create_pool(file.as_fd(), size as i32, qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Argb8888,
+            qh,
+            (),
+        );
+
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, width as i32, height as i32);
+        surface.commit();
+
+        self.buffers.push(BufferBacking {
+            _file: file,
+            _mmap: mmap,
+            _pool: pool,
+            _buffer: buffer,
+        });
+
+        Ok(())
+    }
+
+    fn render_overlay(&self, mmap: &mut [u8], width: u32, height: u32) {
+        mmap.fill(0);
+
+        let size = SurfaceSize { width, height };
+        if self.config.debug_alpha != 0 && !self.config.debug_draw {
+            fill_rect(
+                mmap,
+                width,
+                height,
+                RectPx {
+                    x: 0,
+                    y: 0,
+                    w: width as i32,
+                    h: height as i32,
+                },
+                [0x00, 0x80, 0xff, self.config.debug_alpha],
+            );
+            return;
+        }
+
+        if !self.config.debug_draw {
+            return;
+        }
+
+        match self.engine.mode {
+            Mode::Base => {}
+            Mode::Text => fill_rect(
+                mmap,
+                width,
+                height,
+                RectPx {
+                    x: 0,
+                    y: 0,
+                    w: width as i32,
+                    h: height as i32,
+                },
+                [0x10, 0x90, 0x70, 0x30],
+            ),
+            Mode::Passthrough => {}
+            Mode::NiriMomentary => fill_rect(
+                mmap,
+                width,
+                height,
+                RectPx {
+                    x: 0,
+                    y: 0,
+                    w: width as i32,
+                    h: height as i32,
+                },
+                [0x90, 0x40, 0x10, 0x30],
+            ),
+            Mode::NiriLocked => fill_rect(
+                mmap,
+                width,
+                height,
+                RectPx {
+                    x: 0,
+                    y: 0,
+                    w: width as i32,
+                    h: height as i32,
+                },
+                [0x10, 0x50, 0xe0, 0x38],
+            ),
+        }
+
+        for zone in control_zones() {
+            let color = match zone.kind {
+                ZoneKind::TopLeft => [0x20, 0x20, 0xff, 0x90],
+                ZoneKind::LeftBottom => [0x20, 0xff, 0x80, 0x90],
+                ZoneKind::BottomEdge => [0xff, 0x90, 0x20, 0x70],
+            };
+            fill_rect(mmap, width, height, zone.rect.to_px(size), color);
+        }
+
+        if self.engine.mode == Mode::Text {
+            for binding in self
+                .config
+                .keymap
+                .bindings
+                .iter()
+                .filter(|binding| binding.mode == Mode::Text && self.engine.layer_stack.contains(&binding.layer))
+            {
+                fill_rect(
+                    mmap,
+                    width,
+                    height,
+                    binding.trigger.rect().to_px(size),
+                    [0x10, 0xff, 0xb0, 0x48],
+                );
+            }
+        }
+
+        if let Some(candidate) = &self.engine.hold_candidate {
+            if let Some(contact) = self.engine.active.get(&candidate.id) {
+                draw_circle(
+                    mmap,
+                    width,
+                    height,
+                    contact.last_x.round() as i32,
+                    contact.last_y.round() as i32,
+                    42,
+                    [0x00, 0xc0, 0xff, 0xb0],
+                );
+            }
+        }
+
+        for contact in self.engine.active.values() {
+            draw_circle(
+                mmap,
+                width,
+                height,
+                contact.last_x.round() as i32,
+                contact.last_y.round() as i32,
+                24,
+                [0xff, 0xff, 0xff, 0xd0],
+            );
+        }
+    }
+
+    fn apply_input_region(&self, qh: &QueueHandle<Self>, policy: &CapturePolicy) -> Result<()> {
+        let surface = self
+            .surface
+            .as_ref()
+            .ok_or_else(|| anyhow!("overlay surface is not initialized"))?;
+        let compositor = self
+            .compositor
+            .as_ref()
+            .ok_or_else(|| anyhow!("Wayland compositor global is unavailable"))?;
+        let size = self.surface_size();
+
+        match policy {
+            CapturePolicy::Fullscreen => {
+                surface.set_input_region(None);
+            }
+            CapturePolicy::Zones(rects) => {
+                let region = compositor.create_region(qh, ());
+                for rect in rects {
+                    let rect = rect.to_px(size);
+                    if rect.w > 0 && rect.h > 0 {
+                        region.add(rect.x, rect.y, rect.w, rect.h);
+                    }
+                }
+                surface.set_input_region(Some(&region));
+                region.destroy();
+            }
+            CapturePolicy::None => {
+                let region = compositor.create_region(qh, ());
+                surface.set_input_region(Some(&region));
+                region.destroy();
+            }
+        }
+
+        surface.commit();
+        Ok(())
+    }
+
+    fn apply_effects_or_stop(&mut self, qh: &QueueHandle<Self>, effects: Vec<EngineEffect>) {
+        for effect in effects {
+            let result = match effect {
+                EngineEffect::SetCapture(policy) => {
+                    self.capture_policy = policy.clone();
+                    self.apply_input_region(qh, &policy)
+                }
+                EngineEffect::Dispatch(action) => {
+                    self.dispatch_action(action);
+                    Ok(())
+                }
+                EngineEffect::Redraw => {
+                    if self.width != 0 && self.height != 0 {
+                        self.attach_overlay_buffer(qh, self.width, self.height)
+                    } else {
+                        Ok(())
+                    }
+                }
+            };
+
+            if let Err(err) = result {
+                eprintln!("touchdeck: failed to apply effect: {err:?}");
+                self.running = false;
+                break;
+            }
+        }
+    }
+
+    fn dispatch_action(&mut self, action: GestureAction) {
+        match action {
+            GestureAction::Niri(action) => {
+                self.engine.last_action = Some(action.as_str().to_string());
+                eprintln!("touchdeck: niri action {action}");
+                spawn_niri_action(action);
+            }
+            GestureAction::Key(key) => {
+                self.send_key(key);
+            }
+            GestureAction::KeySequence(sequence) => {
+                self.send_key_sequence(&sequence);
+            }
+            GestureAction::Sequence(steps) => {
+                self.run_action_steps(&steps);
+            }
+            GestureAction::Exit => {
+                eprintln!("touchdeck: exit gesture");
+                self.running = false;
+            }
+            GestureAction::ModeSet(_)
+            | GestureAction::ModeToggle(_)
+            | GestureAction::ModeMomentary(_)
+            | GestureAction::LayerSet(_)
+            | GestureAction::LayerToggle(_)
+            | GestureAction::LayerMomentary(_) => {}
+            GestureAction::None => {}
+        }
+    }
+
+    fn send_key(&mut self, key: u32) {
+        let Some(keyboard) = self.virtual_keyboard.as_ref() else {
+            eprintln!("touchdeck: virtual keyboard unavailable; ignored key {key}");
+            return;
+        };
+
+        let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
+        eprintln!("touchdeck: key {key}");
+        keyboard.key(time, key, 1);
+        keyboard.key(time.saturating_add(1), key, 0);
+    }
+
+    fn send_key_sequence(&mut self, sequence: &[KeyChord]) {
+        let Some(keyboard) = self.virtual_keyboard.as_ref() else {
+            eprintln!("touchdeck: virtual keyboard unavailable; ignored key sequence {sequence:?}");
+            return;
+        };
+
+        let mut time = self.now_ms().min(u64::from(u32::MAX)) as u32;
+        eprintln!("touchdeck: key sequence {sequence:?}");
+        for chord in sequence {
+            for key in &chord.keys {
+                keyboard.key(time, *key, 1);
+                time = time.saturating_add(1);
+            }
+            for key in chord.keys.iter().rev() {
+                keyboard.key(time, *key, 0);
+                time = time.saturating_add(1);
+            }
+        }
+    }
+
+    fn run_action_steps(&mut self, steps: &[ActionStep]) {
+        for step in steps {
+            match step {
+                ActionStep::KeyDown(key) => self.send_key_state(*key, true),
+                ActionStep::KeyUp(key) => self.send_key_state(*key, false),
+                ActionStep::TapKey(key) => self.send_key(*key),
+                ActionStep::KeySequence(sequence) => self.send_key_sequence(sequence),
+                ActionStep::Niri(action) => spawn_niri_action(action.clone()),
+                ActionStep::DelayMs(ms) => std::thread::sleep(Duration::from_millis(u64::from(*ms))),
+            }
+        }
+    }
+
+    fn send_key_state(&mut self, key: u32, pressed: bool) {
+        let Some(keyboard) = self.virtual_keyboard.as_ref() else {
+            eprintln!("touchdeck: virtual keyboard unavailable; ignored key state {key}");
+            return;
+        };
+
+        let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
+        keyboard.key(time, key, if pressed { 1 } else { 0 });
+    }
+
+    fn record_trace(&mut self, event: TraceEvent) {
+        if let Some(trace) = self.trace.as_mut() {
+            if let Err(err) = trace.record(&event) {
+                eprintln!("touchdeck: failed to record trace: {err:?}");
+                self.trace = None;
+            }
+        }
+    }
+
+    fn touch_down(&mut self, qh: &QueueHandle<Self>, id: i32, time: u32, x: f64, y: f64) {
+        let now_ms = self.now_ms();
+        self.record_trace(TraceEvent::Down {
+            t: now_ms,
+            wl_time: time,
+            id,
+            x,
+            y,
+        });
+        if self.config.log_touch {
+            eprintln!("touchdeck: touch down id={id} time={time} x={x:.1} y={y:.1}");
+        }
+
+        let config = self.config.clone();
+        let size = self.surface_size();
+        let effects = self.engine.handle_down(now_ms, time, id, x, y, &config, size);
+        self.apply_effects_or_stop(qh, effects);
+    }
+
+    fn touch_motion(&mut self, qh: &QueueHandle<Self>, id: i32, time: u32, x: f64, y: f64) {
+        let now_ms = self.now_ms();
+        self.record_trace(TraceEvent::Motion {
+            t: now_ms,
+            wl_time: time,
+            id,
+            x,
+            y,
+        });
+        if self.config.log_touch {
+            eprintln!("touchdeck: touch motion id={id} time={time} x={x:.1} y={y:.1}");
+        }
+
+        let config = self.config.clone();
+        let effects = self.engine.handle_motion(id, time, x, y, &config);
+        self.apply_effects_or_stop(qh, effects);
+    }
+
+    fn touch_up(&mut self, qh: &QueueHandle<Self>, id: i32, time: u32) {
+        let now_ms = self.now_ms();
+        self.record_trace(TraceEvent::Up {
+            t: now_ms,
+            wl_time: time,
+            id,
+        });
+        if self.config.log_touch {
+            eprintln!("touchdeck: touch up id={id} time={time}");
+        }
+
+        let config = self.config.clone();
+        let size = self.surface_size();
+        let effects = self.engine.handle_up(now_ms, time, id, &config, size);
+        self.apply_effects_or_stop(qh, effects);
+    }
+
+    fn touch_cancel(&mut self, qh: &QueueHandle<Self>) {
+        let now_ms = self.now_ms();
+        self.record_trace(TraceEvent::Cancel { t: now_ms });
+        if self.config.log_touch {
+            eprintln!("touchdeck: touch cancel");
+        }
+
+        let effects = self.engine.handle_cancel();
+        self.apply_effects_or_stop(qh, effects);
+    }
+}
+
+impl Engine {
+    fn capture_policy(&self) -> CapturePolicy {
+        match self.mode {
+            Mode::Passthrough => {
+                CapturePolicy::Zones(control_zones().iter().map(|zone| zone.rect).collect())
+            }
+            Mode::NiriMomentary | Mode::NiriLocked => CapturePolicy::Fullscreen,
+            Mode::Base | Mode::Text => CapturePolicy::Fullscreen,
+        }
+    }
+
+    fn next_timer_deadline_ms(&self) -> Option<u64> {
+        self.hold_candidate
+            .as_ref()
+            .map(|candidate| candidate.deadline_ms)
+    }
+
+    fn process_timers(
+        &mut self,
+        now_ms: u64,
+        config: &Config,
+        _size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        let Some(candidate) = self.hold_candidate.clone() else {
+            return Vec::new();
+        };
+
+        if now_ms < candidate.deadline_ms {
+            return Vec::new();
+        }
+
+        let Some(contact) = self.active.get_mut(&candidate.id) else {
+            self.hold_candidate = None;
+            return Vec::new();
+        };
+
+        if contact_movement(contact) > config.tap_radius {
+            self.hold_candidate = None;
+            return Vec::new();
+        }
+
+        contact.start_x = contact.last_x;
+        contact.start_y = contact.last_y;
+        contact.start_time = contact.last_time;
+        self.finished.clear();
+        self.max_active = 1;
+        let action = candidate.action.clone();
+        self.hold_candidate = None;
+        self.last_tap = None;
+
+        let mut effects = Vec::new();
+        self.perform_action(action, &mut effects, Some(candidate.id));
+        effects
+    }
+
+    fn handle_down(
+        &mut self,
+        now_ms: u64,
+        time: u32,
+        id: i32,
+        x: f64,
+        y: f64,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        self.active.insert(
+            id,
+            Contact {
+                id,
+                start_x: x,
+                start_y: y,
+                last_x: x,
+                last_y: y,
+                start_time: time,
+                last_time: time,
+            },
+        );
+        self.max_active = self.max_active.max(self.active.len());
+
+        if let Some((action, min_ms)) =
+            config
+                .keymap
+                .resolve_hold(self.mode, &self.layer_stack, size, x, y, config.hold_ms)
+        {
+            self.hold_candidate = Some(HoldCandidate {
+                id,
+                deadline_ms: now_ms + u64::from(min_ms),
+                action,
+            });
+        }
+
+        redraw_if_debug(config)
+    }
+
+    fn handle_motion(
+        &mut self,
+        id: i32,
+        time: u32,
+        x: f64,
+        y: f64,
+        config: &Config,
+    ) -> Vec<EngineEffect> {
+        if let Some(contact) = self.active.get_mut(&id) {
+            contact.last_x = x;
+            contact.last_y = y;
+            contact.last_time = time;
+
+            if let Some(candidate) = &self.hold_candidate {
+                if candidate.id == id && contact_movement(contact) > config.tap_radius {
+                    self.hold_candidate = None;
+                }
+            }
+        }
+
+        redraw_if_debug(config)
+    }
+
+    fn handle_up(
+        &mut self,
+        now_ms: u64,
+        time: u32,
+        id: i32,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        if let Some(candidate) = &self.hold_candidate {
+            if candidate.id == id {
+                self.hold_candidate = None;
+            }
+        }
+
+        let Some(mut contact) = self.active.remove(&id) else {
+            return Vec::new();
+        };
+        contact.last_time = time;
+
+        if self.mode != Mode::NiriMomentary
+            && self
+                .momentary
+                .as_ref()
+                .is_some_and(|momentary| momentary.hold_id == id)
+        {
+            let mut effects = Vec::new();
+            self.return_from_momentary(&mut effects);
+            self.reset_contacts();
+            return effects;
+        }
+
+        match self.mode {
+            Mode::Base | Mode::Text => {
+                self.finished.push(contact);
+                if self.active.is_empty() {
+                    let gesture = self.take_current_gesture();
+                    self.resolve_base_gesture(now_ms, gesture, config, size)
+                } else {
+                    redraw_if_debug(config)
+                }
+            }
+            Mode::Passthrough => {
+                self.finished.push(contact);
+                if self.active.is_empty() {
+                    let gesture = self.take_current_gesture();
+                    self.resolve_passthrough_gesture(now_ms, gesture, config, size)
+                } else {
+                    redraw_if_debug(config)
+                }
+            }
+            Mode::NiriLocked => {
+                self.finished.push(contact);
+                if self.active.is_empty() {
+                    let gesture = self.take_current_gesture();
+                    self.resolve_locked_gesture(now_ms, gesture, config, size)
+                } else {
+                    redraw_if_debug(config)
+                }
+            }
+            Mode::NiriMomentary => {
+                if self
+                    .momentary
+                    .as_ref()
+                    .is_some_and(|momentary| momentary.hold_id == id)
+                {
+                    let mut effects = Vec::new();
+                    let gesture = Gesture {
+                        finished: vec![contact],
+                        max_active: 1,
+                    };
+                    let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
+                    self.perform_action(action, &mut effects, None);
+                    self.return_from_momentary(&mut effects);
+                    self.reset_contacts();
+                    effects
+                } else {
+                    self.finished.push(contact);
+                    if self.active_non_hold_count() == 0 {
+                        let gesture = self.take_finished_non_hold_gesture();
+                        let mut effects = redraw_if_debug(config);
+                        let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
+                        self.perform_action(action, &mut effects, None);
+                        effects
+                    } else {
+                        redraw_if_debug(config)
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_cancel(&mut self) -> Vec<EngineEffect> {
+        let mut effects = Vec::new();
+        self.set_mode(Mode::Base, &mut effects);
+        self.reset_contacts();
+        effects.push(EngineEffect::Redraw);
+        effects
+    }
+
+    #[cfg(test)]
+    fn handle_trace_event(
+        &mut self,
+        event: TraceEvent,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        match event {
+            TraceEvent::Down {
+                t,
+                wl_time,
+                id,
+                x,
+                y,
+            } => self.handle_down(t, wl_time, id, x, y, config, size),
+            TraceEvent::Motion {
+                wl_time,
+                id,
+                x,
+                y,
+                ..
+            } => self.handle_motion(id, wl_time, x, y, config),
+            TraceEvent::Up { t, wl_time, id } => self.handle_up(t, wl_time, id, config, size),
+            TraceEvent::Cancel { .. } => self.handle_cancel(),
+        }
+    }
+
+    fn resolve_base_gesture(
+        &mut self,
+        now_ms: u64,
+        gesture: Gesture,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        let mut effects = redraw_if_debug(config);
+
+        if is_exit_gesture(&gesture, config, size) {
+            push_dispatch_effect(&mut effects, GestureAction::Exit);
+            return effects;
+        }
+
+        let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
+        self.perform_action(action, &mut effects, None);
+
+        effects
+    }
+
+    fn resolve_passthrough_gesture(
+        &mut self,
+        now_ms: u64,
+        gesture: Gesture,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        let mut effects = redraw_if_debug(config);
+
+        if is_exit_gesture(&gesture, config, size) {
+            push_dispatch_effect(&mut effects, GestureAction::Exit);
+            return effects;
+        }
+
+        let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
+        self.perform_action(action, &mut effects, None);
+
+        effects
+    }
+
+    fn resolve_locked_gesture(
+        &mut self,
+        now_ms: u64,
+        gesture: Gesture,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        let mut effects = redraw_if_debug(config);
+
+        if is_exit_gesture(&gesture, config, size) {
+            push_dispatch_effect(&mut effects, GestureAction::Exit);
+            return effects;
+        }
+
+        let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
+        self.perform_action(action, &mut effects, None);
+        effects
+    }
+
+    fn resolve_configured_or_niri(
+        &mut self,
+        gesture: &Gesture,
+        config: &Config,
+        size: SurfaceSize,
+        now_ms: u64,
+    ) -> GestureAction {
+        let action = config.keymap.resolve_release(
+            self.mode,
+            &self.layer_stack,
+            gesture,
+            config,
+            size,
+            &mut self.last_tap,
+            now_ms,
+        );
+        if action != GestureAction::None {
+            return action;
+        }
+
+        if matches!(self.mode, Mode::NiriMomentary | Mode::NiriLocked) {
+            resolve_niri_gesture(gesture, config, size)
+        } else {
+            GestureAction::None
+        }
+    }
+
+    fn perform_action(
+        &mut self,
+        action: GestureAction,
+        effects: &mut Vec<EngineEffect>,
+        hold_id: Option<i32>,
+    ) {
+        match action {
+            GestureAction::Niri(_) | GestureAction::Key(_) | GestureAction::KeySequence(_) | GestureAction::Exit => {
+                effects.push(EngineEffect::Dispatch(action));
+            }
+            GestureAction::Sequence(_) => {
+                effects.push(EngineEffect::Dispatch(action));
+            }
+            GestureAction::ModeSet(mode) => {
+                self.set_mode(mode, effects);
+            }
+            GestureAction::ModeToggle(mode) => {
+                if self.mode == mode {
+                    self.set_mode(Mode::Base, effects);
+                } else {
+                    self.set_mode(mode, effects);
+                }
+            }
+            GestureAction::ModeMomentary(mode) => {
+                if let Some(hold_id) = hold_id {
+                    self.start_momentary(hold_id, Some(mode), None, effects);
+                } else {
+                    self.set_mode(mode, effects);
+                }
+            }
+            GestureAction::LayerSet(layer) => {
+                self.set_layer(layer, effects);
+            }
+            GestureAction::LayerToggle(layer) => {
+                if self.layer_stack.contains(&layer) {
+                    self.pop_layer(layer, effects);
+                } else {
+                    self.push_layer(layer, effects);
+                }
+            }
+            GestureAction::LayerMomentary(layer) => {
+                if let Some(hold_id) = hold_id {
+                    self.start_momentary(hold_id, None, Some(layer), effects);
+                } else {
+                    self.set_layer(layer, effects);
+                }
+            }
+            GestureAction::None => {}
+        }
+    }
+
+    fn start_momentary(
+        &mut self,
+        hold_id: i32,
+        mode: Option<Mode>,
+        layer: Option<Layer>,
+        effects: &mut Vec<EngineEffect>,
+    ) {
+        self.momentary = Some(MomentaryState {
+            hold_id,
+            return_mode: self.mode,
+            return_layer_stack: self.layer_stack.clone(),
+        });
+
+        if let Some(mode) = mode {
+            self.mode = mode;
+            self.layer_stack = default_layer_stack_for_mode(mode);
+            eprintln!("touchdeck: mode {}", mode_name(mode));
+        }
+
+        if let Some(layer) = layer {
+            self.push_layer(layer, effects);
+            eprintln!("touchdeck: layer {}", layer_name(layer));
+        }
+
+        self.last_tap = None;
+        effects.push(EngineEffect::SetCapture(self.capture_policy()));
+        effects.push(EngineEffect::Redraw);
+    }
+
+    fn return_from_momentary(&mut self, effects: &mut Vec<EngineEffect>) {
+        let Some(momentary) = self.momentary.take() else {
+            return;
+        };
+
+        self.mode = momentary.return_mode;
+        self.layer_stack = momentary.return_layer_stack;
+        self.hold_candidate = None;
+        self.last_tap = None;
+        eprintln!(
+            "touchdeck: return mode {} layer {}",
+            mode_name(self.mode),
+            layer_name(self.current_layer())
+        );
+        effects.push(EngineEffect::SetCapture(self.capture_policy()));
+        effects.push(EngineEffect::Redraw);
+    }
+
+    fn set_mode(&mut self, mode: Mode, effects: &mut Vec<EngineEffect>) {
+        self.mode = mode;
+        self.layer_stack = default_layer_stack_for_mode(mode);
+        self.momentary = None;
+        self.hold_candidate = None;
+        self.last_tap = None;
+        eprintln!("touchdeck: mode {}", mode_name(mode));
+        effects.push(EngineEffect::SetCapture(self.capture_policy()));
+        effects.push(EngineEffect::Redraw);
+    }
+
+    fn set_layer(&mut self, layer: Layer, effects: &mut Vec<EngineEffect>) {
+        self.layer_stack = if layer == Layer::Base {
+            vec![Layer::Base]
+        } else {
+            vec![Layer::Base, layer]
+        };
+        self.momentary = None;
+        self.hold_candidate = None;
+        self.last_tap = None;
+        eprintln!("touchdeck: layer {}", layer_name(layer));
+        effects.push(EngineEffect::Redraw);
+    }
+
+    fn push_layer(&mut self, layer: Layer, effects: &mut Vec<EngineEffect>) {
+        if layer == Layer::Base {
+            self.set_layer(Layer::Base, effects);
+            return;
+        }
+
+        self.layer_stack.retain(|existing| *existing != layer);
+        if !self.layer_stack.contains(&Layer::Base) {
+            self.layer_stack.insert(0, Layer::Base);
+        }
+        self.layer_stack.push(layer);
+        self.last_tap = None;
+        eprintln!("touchdeck: push layer {}", layer_name(layer));
+        effects.push(EngineEffect::Redraw);
+    }
+
+    fn pop_layer(&mut self, layer: Layer, effects: &mut Vec<EngineEffect>) {
+        if layer == Layer::Base {
+            self.set_layer(Layer::Base, effects);
+            return;
+        }
+
+        self.layer_stack.retain(|existing| *existing != layer);
+        if self.layer_stack.is_empty() {
+            self.layer_stack.push(Layer::Base);
+        }
+        self.last_tap = None;
+        eprintln!("touchdeck: pop layer {}", layer_name(layer));
+        effects.push(EngineEffect::Redraw);
+    }
+
+    fn current_layer(&self) -> Layer {
+        self.layer_stack.last().copied().unwrap_or(Layer::Base)
+    }
+}
+
+impl Default for Mode {
+    fn default() -> Self {
+        Self::Base
+    }
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Self::Base
+    }
+}
+
+fn default_layer_stack_for_mode(mode: Mode) -> Vec<Layer> {
+    match mode {
+        Mode::NiriMomentary | Mode::NiriLocked => vec![Layer::Niri],
+        Mode::Base | Mode::Text | Mode::Passthrough => vec![Layer::Base],
+    }
+}
+
+fn mode_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Base => "base",
+        Mode::Text => "text",
+        Mode::NiriMomentary => "niri-momentary",
+        Mode::NiriLocked => "niri-locked",
+        Mode::Passthrough => "passthrough",
+    }
+}
+
+fn layer_name(layer: Layer) -> &'static str {
+    match layer {
+        Layer::Base => "base",
+        Layer::Niri => "niri",
+    }
+}
+
+impl Engine {
+    fn active_non_hold_count(&self) -> usize {
+        let hold_id = self.momentary.as_ref().map(|momentary| momentary.hold_id);
+        self.active
+            .keys()
+            .filter(|id| Some(**id) != hold_id)
+            .count()
+    }
+
+    fn take_finished_non_hold_gesture(&mut self) -> Gesture {
+        let hold_id = self.momentary.as_ref().map(|momentary| momentary.hold_id);
+        let mut finished = Vec::new();
+        self.finished.retain(|contact| {
+            if Some(contact.id) == hold_id {
+                true
+            } else {
+                finished.push(contact.clone());
+                false
+            }
+        });
+
+        Gesture {
+            max_active: finished.len().max(1),
+            finished,
+        }
+    }
+
+    fn take_current_gesture(&mut self) -> Gesture {
+        let finished = std::mem::take(&mut self.finished);
+        let max_active = self.max_active;
+        self.max_active = 0;
+        Gesture {
+            finished,
+            max_active,
+        }
+    }
+
+    fn reset_contacts(&mut self) {
+        self.active.clear();
+        self.finished.clear();
+        self.max_active = 0;
+        self.hold_candidate = None;
+    }
+}
+
+fn poll_fd(fd: RawFd, timeout: Option<Duration>) -> Result<bool> {
+    let timeout_ms = timeout
+        .map(|timeout| timeout.as_millis().min(i32::MAX as u128) as i32)
+        .unwrap_or(-1);
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+
+    loop {
+        let rc = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        if rc > 0 {
+            return Ok(true);
+        }
+        if rc == 0 {
+            return Ok(false);
+        }
+
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(false);
+        }
+        return Err(err.into());
+    }
+}
+
+fn spawn_niri_action(action: NiriAction) {
+    thread::spawn(move || {
+        if let Err(err) = send_niri_action_socket(action) {
+            eprintln!("touchdeck: failed to send niri action {action}: {err:?}");
+        }
+    });
+}
+
+fn send_niri_action_socket(action: NiriAction) -> Result<()> {
+    let request = niri_action_request_json(action);
+    let socket_path = env::var_os("NIRI_SOCKET")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("NIRI_SOCKET is not set"))?;
+    let mut stream = UnixStream::connect(&socket_path)
+        .with_context(|| format!("connect niri IPC socket {}", socket_path.display()))?;
+
+    stream
+        .write_all(request.as_bytes())
+        .context("write niri IPC request")?;
+    stream.write_all(b"\n").context("write niri IPC newline")?;
+    stream.flush().context("flush niri IPC request")?;
+
+    let mut reader = BufReader::new(stream);
+    let mut reply = String::new();
+    let bytes = reader
+        .read_line(&mut reply)
+        .context("read niri IPC response")?;
+    if bytes == 0 {
+        return Err(anyhow!("empty niri IPC response"));
+    }
+
+    let reply = reply.trim();
+    let value: serde_json::Value = serde_json::from_str(reply)
+        .with_context(|| format!("parse niri IPC response {reply}"))?;
+    if let Some(err) = value.get("Err") {
+        return Err(anyhow!("niri IPC error: {err}"));
+    }
+
+    Ok(())
+}
+
+fn niri_action_request_json(action: NiriAction) -> &'static str {
+    action.ipc_request_json()
+}
+
+fn control_zones() -> [ControlZone; 3] {
+    [
+        ControlZone {
+            kind: ZoneKind::LeftBottom,
+            rect: left_bottom_rect(),
+        },
+        ControlZone {
+            kind: ZoneKind::BottomEdge,
+            rect: bottom_edge_rect(),
+        },
+        ControlZone {
+            kind: ZoneKind::TopLeft,
+            rect: top_left_rect(),
+        },
+    ]
+}
+
+#[cfg(test)]
+fn named_target(name: &str) -> Option<SlotTarget> {
+    SlotRegistry::default().get(name).ok()
+}
+
+fn left_bottom_rect() -> RectNorm {
+    RectNorm {
+        x0: 0.00,
+        y0: 0.82,
+        x1: 0.18,
+        y1: 1.00,
+    }
+}
+
+fn right_bottom_rect() -> RectNorm {
+    RectNorm {
+        x0: 0.82,
+        y0: 0.82,
+        x1: 1.00,
+        y1: 1.00,
+    }
+}
+
+fn bottom_edge_rect() -> RectNorm {
+    RectNorm {
+        x0: 0.18,
+        y0: 0.94,
+        x1: 0.82,
+        y1: 1.00,
+    }
+}
+
+fn parse_mode(value: &str) -> Result<Mode> {
+    match normalize_name(value).as_str() {
+        "base" => Ok(Mode::Base),
+        "text" | "keyboard" => Ok(Mode::Text),
+        "niri_momentary" | "niri" => Ok(Mode::NiriMomentary),
+        "niri_locked" => Ok(Mode::NiriLocked),
+        "passthrough" => Ok(Mode::Passthrough),
+        _ => Err(anyhow!("unknown mode {value}")),
+    }
+}
+
+fn parse_layer(value: &str) -> Result<Layer> {
+    match normalize_name(value).as_str() {
+        "base" => Ok(Layer::Base),
+        "niri" => Ok(Layer::Niri),
+        _ => Err(anyhow!("unknown layer {value}")),
+    }
+}
+
+fn validate_rect(rect: RectNorm, context: &str) -> Result<RectNorm> {
+    if !(rect.x0.is_finite()
+        && rect.x1.is_finite()
+        && rect.y0.is_finite()
+        && rect.y1.is_finite()
+        && rect.x0 >= 0.0
+        && rect.y0 >= 0.0
+        && rect.x1 <= 1.0
+        && rect.y1 <= 1.0
+        && rect.x0 < rect.x1
+        && rect.y0 < rect.y1)
+    {
+        return Err(anyhow!(
+            "{context} coordinates must be finite normalized ranges with x0 < x1 and y0 < y1"
+        ));
+    }
+
+    Ok(rect)
+}
+
+fn resolve_config_relative(config_path: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        path
+    } else {
+        config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path)
+    }
+}
+
+fn parse_trigger(value: TriggerFileConfig, slots: &SlotRegistry) -> Result<Trigger> {
+    let target = slots.get(&value.target)?;
+    let fingers = value.fingers.unwrap_or(1);
+
+    match normalize_name(&value.kind).as_str() {
+        "tap" => Ok(Trigger::Tap {
+            target,
+            fingers,
+            max_ms: value.max_ms,
+        }),
+        "double_tap" | "doubletap" => Ok(Trigger::DoubleTap {
+            target,
+            fingers,
+            max_ms: value.max_ms,
+        }),
+        "hold" | "long_press" | "longpress" => Ok(Trigger::Hold {
+            target,
+            fingers,
+            min_ms: value.min_ms,
+        }),
+        "swipe" => Ok(Trigger::Swipe {
+            target,
+            fingers,
+            direction: parse_swipe_direction(
+                value
+                    .direction
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("swipe trigger is missing direction"))?,
+            )?,
+            min_px: value.min_px,
+            max_ms: value.max_ms,
+        }),
+        other => Err(anyhow!("unknown trigger type {other}")),
+    }
+}
+
+fn parse_swipe_direction(value: &str) -> Result<SwipeDirection> {
+    match normalize_name(value).as_str() {
+        "left" => Ok(SwipeDirection::Left),
+        "right" => Ok(SwipeDirection::Right),
+        "up" => Ok(SwipeDirection::Up),
+        "down" => Ok(SwipeDirection::Down),
+        _ => Err(anyhow!("unknown swipe direction {value}")),
+    }
+}
+
+fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<Behavior> {
+    match normalize_name(&value.kind).as_str() {
+        "key" | "key_sequence" | "keys" => {
+            let keys = value
+                .key
+                .or(value.keys)
+                .ok_or_else(|| anyhow!("key behavior is missing key/keys"))?;
+            Ok(Behavior::KeySequence(parse_emacs_key_sequence(&keys)?))
+        }
+        "sequence" => Ok(Behavior::Sequence(parse_action_steps(
+            value
+                .steps
+                .ok_or_else(|| anyhow!("sequence behavior is missing steps"))?,
+        )?)),
+        "macro" => {
+            let name = value
+                .macro_alias
+                .or(value.macro_name)
+                .ok_or_else(|| anyhow!("macro behavior is missing macro name"))?;
+            Ok(Behavior::Sequence(macros.get(&name)?))
+        }
+        "niri" => Ok(Behavior::Niri(
+            parse_niri_action(
+                value
+                    .action
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("niri behavior is missing action"))?,
+            )?,
+        )),
+        "mode" | "mode_set" => Ok(Behavior::ModeSet(parse_mode(
+            value
+                .mode
+                .as_deref()
+                .ok_or_else(|| anyhow!("mode behavior is missing mode"))?,
+        )?)),
+        "mode_toggle" => Ok(Behavior::ModeToggle(parse_mode(
+            value
+                .mode
+                .as_deref()
+                .ok_or_else(|| anyhow!("mode_toggle behavior is missing mode"))?,
+        )?)),
+        "mode_momentary" => Ok(Behavior::ModeMomentary(parse_mode(
+            value
+                .mode
+                .as_deref()
+                .ok_or_else(|| anyhow!("mode_momentary behavior is missing mode"))?,
+        )?)),
+        "layer" | "layer_set" => Ok(Behavior::LayerSet(parse_layer(
+            value
+                .layer
+                .as_deref()
+                .ok_or_else(|| anyhow!("layer behavior is missing layer"))?,
+        )?)),
+        "layer_toggle" => Ok(Behavior::LayerToggle(parse_layer(
+            value
+                .layer
+                .as_deref()
+                .ok_or_else(|| anyhow!("layer_toggle behavior is missing layer"))?,
+        )?)),
+        "layer_momentary" => Ok(Behavior::LayerMomentary(parse_layer(
+            value
+                .layer
+                .as_deref()
+                .ok_or_else(|| anyhow!("layer_momentary behavior is missing layer"))?,
+        )?)),
+        "transparent" => Ok(Behavior::Transparent),
+        "noop" | "no_op" => Ok(Behavior::NoOp),
+        "exit" => Ok(Behavior::Exit),
+        other => Err(anyhow!("unknown behavior type {other}")),
+    }
+}
+
+fn parse_action_steps(steps: Vec<ActionStepFileConfig>) -> Result<Vec<ActionStep>> {
+    steps.into_iter().map(parse_action_step).collect()
+}
+
+fn parse_action_step(value: ActionStepFileConfig) -> Result<ActionStep> {
+    match normalize_name(&value.kind).as_str() {
+        "key_down" => Ok(ActionStep::KeyDown(parse_single_emacs_key(
+            value
+                .key
+                .as_deref()
+                .ok_or_else(|| anyhow!("key_down step is missing key"))?,
+        )?)),
+        "key_up" => Ok(ActionStep::KeyUp(parse_single_emacs_key(
+            value
+                .key
+                .as_deref()
+                .ok_or_else(|| anyhow!("key_up step is missing key"))?,
+        )?)),
+        "tap_key" => Ok(ActionStep::TapKey(parse_single_emacs_key(
+            value
+                .key
+                .as_deref()
+                .ok_or_else(|| anyhow!("tap_key step is missing key"))?,
+        )?)),
+        "key_sequence" | "keys" => Ok(ActionStep::KeySequence(parse_emacs_key_sequence(
+            value
+                .keys
+                .or(value.key)
+                .as_deref()
+                .ok_or_else(|| anyhow!("key_sequence step is missing key/keys"))?,
+        )?)),
+        "niri" => Ok(ActionStep::Niri(
+            parse_niri_action(
+                value
+                    .action
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("niri step is missing action"))?,
+            )?,
+        )),
+        "delay" | "delay_ms" => Ok(ActionStep::DelayMs(
+            value
+                .ms
+                .ok_or_else(|| anyhow!("delay step is missing ms"))?,
+        )),
+        other => Err(anyhow!("unknown action step type {other}")),
+    }
+}
+
+fn parse_single_emacs_key(value: &str) -> Result<u32> {
+    let sequence = parse_emacs_key_sequence(value)?;
+    if sequence.len() != 1 || sequence[0].keys.len() != 1 {
+        return Err(anyhow!("expected a single key, got {value}"));
+    }
+    Ok(sequence[0].keys[0])
+}
+
+fn parse_emacs_key_sequence(value: &str) -> Result<Vec<KeyChord>> {
+    let sequence = value
+        .split_whitespace()
+        .map(parse_emacs_key_chord)
+        .collect::<Result<Vec<_>>>()?;
+
+    if sequence.is_empty() {
+        Err(anyhow!("empty key sequence"))
+    } else {
+        Ok(sequence)
+    }
+}
+
+fn parse_emacs_key_chord(token: &str) -> Result<KeyChord> {
+    let mut rest = token;
+    let mut last_modifier_index = None;
+    let mut keys = Vec::new();
+
+    loop {
+        let Some((index, modifier_key, prefix_len)) = parse_emacs_modifier_prefix(rest) else {
+            break;
+        };
+
+        if last_modifier_index.is_some_and(|last| index < last) {
+            return Err(anyhow!(
+                "invalid Emacs modifier order in {token}; expected A-C-H-M-S-s"
+            ));
+        }
+
+        if !keys.contains(&modifier_key) {
+            keys.push(modifier_key);
+        }
+        last_modifier_index = Some(index);
+        rest = &rest[prefix_len..];
+    }
+
+    let (base_key, implicit_modifiers) = parse_emacs_base_key(rest)
+        .ok_or_else(|| anyhow!("unknown Emacs key token {token}"))?;
+    for modifier in implicit_modifiers {
+        if !keys.contains(&modifier) {
+            keys.push(modifier);
+        }
+    }
+    keys.push(base_key);
+
+    Ok(KeyChord { keys })
+}
+
+fn parse_emacs_modifier_prefix(value: &str) -> Option<(usize, u32, usize)> {
+    let prefixes = [
+        ("A-", KEY_LEFTALT),
+        ("C-", KEY_LEFTCTRL),
+        ("H-", KEY_LEFTMETA),
+        ("M-", KEY_LEFTALT),
+        ("S-", KEY_LEFTSHIFT),
+        ("s-", KEY_LEFTMETA),
+    ];
+
+    prefixes
+        .iter()
+        .enumerate()
+        .find_map(|(index, (prefix, key))| value.starts_with(prefix).then_some((index, *key, prefix.len())))
+}
+
+fn parse_emacs_base_key(value: &str) -> Option<(u32, Vec<u32>)> {
+    if value.is_empty() {
+        return None;
+    }
+
+    let key_name = if value.starts_with('<') && value.ends_with('>') && value.len() > 2 {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    };
+
+    if key_name.len() == 1 {
+        let ch = key_name.chars().next()?;
+        if ch.is_ascii_uppercase() {
+            return parse_key_name(&ch.to_ascii_lowercase().to_string())
+                .map(|key| (key, vec![KEY_LEFTSHIFT]));
+        }
+    }
+
+    parse_key_name(key_name).map(|key| (key, Vec::new()))
+}
+
+fn parse_key_name(value: &str) -> Option<u32> {
+    match normalize_name(value).as_str() {
+        "ctrl" | "control" | "leftctrl" | "left_control" => Some(KEY_LEFTCTRL),
+        "shift" | "leftshift" | "left_shift" => Some(KEY_LEFTSHIFT),
+        "alt" | "leftalt" | "left_alt" => Some(KEY_LEFTALT),
+        "super" | "meta" | "win" | "leftmeta" | "left_meta" => Some(KEY_LEFTMETA),
+        "esc" | "escape" => Some(KEY_ESC),
+        "ret" | "return" => Some(KEY_ENTER),
+        "1" => Some(KEY_1),
+        "2" => Some(KEY_2),
+        "3" => Some(KEY_3),
+        "4" => Some(KEY_4),
+        "5" => Some(KEY_5),
+        "6" => Some(KEY_6),
+        "7" => Some(KEY_7),
+        "8" => Some(KEY_8),
+        "9" => Some(KEY_9),
+        "0" => Some(KEY_0),
+        "backspace" | "bs" => Some(KEY_BACKSPACE),
+        "del" => Some(KEY_BACKSPACE),
+        "delete" => Some(KEY_DELETE),
+        "tab" => Some(KEY_TAB),
+        "enter" => Some(KEY_ENTER),
+        "spc" | "space" => Some(KEY_SPACE),
+        "left" | "arrow_left" => Some(KEY_LEFT),
+        "right" | "arrow_right" => Some(KEY_RIGHT),
+        "up" | "arrow_up" => Some(KEY_UP),
+        "down" | "arrow_down" => Some(KEY_DOWN),
+        "a" => Some(KEY_A),
+        "b" => Some(KEY_B),
+        "c" => Some(KEY_C),
+        "d" => Some(KEY_D),
+        "e" => Some(KEY_E),
+        "f" => Some(KEY_F),
+        "g" => Some(KEY_G),
+        "h" => Some(KEY_H),
+        "i" => Some(KEY_I),
+        "j" => Some(KEY_J),
+        "k" => Some(KEY_K),
+        "l" => Some(KEY_L),
+        "m" => Some(KEY_M),
+        "n" => Some(KEY_N),
+        "o" => Some(KEY_O),
+        "p" => Some(KEY_P),
+        "q" => Some(KEY_Q),
+        "r" => Some(KEY_R),
+        "s" => Some(KEY_S),
+        "t" => Some(KEY_T),
+        "u" => Some(KEY_U),
+        "v" => Some(KEY_V),
+        "w" => Some(KEY_W),
+        "x" => Some(KEY_X),
+        "y" => Some(KEY_Y),
+        "z" => Some(KEY_Z),
+        _ => None,
+    }
+}
+
+fn normalize_name(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+fn parse_niri_action(value: &str) -> Result<NiriAction> {
+    match normalize_name(value).as_str() {
+        "focus_column_left" => Ok(NiriAction::FocusColumnLeft),
+        "focus_column_right" => Ok(NiriAction::FocusColumnRight),
+        "focus_workspace_up" => Ok(NiriAction::FocusWorkspaceUp),
+        "focus_workspace_down" => Ok(NiriAction::FocusWorkspaceDown),
+        "toggle_overview" => Ok(NiriAction::ToggleOverview),
+        other => Err(anyhow!(
+            "unsupported niri action {other}; supported actions: focus-column-left, focus-column-right, focus-workspace-up, focus-workspace-down, toggle-overview"
+        )),
+    }
+}
+
+fn top_left_rect() -> RectNorm {
+    RectNorm {
+        x0: 0.00,
+        y0: 0.00,
+        x1: 0.12,
+        y1: 0.10,
+    }
+}
+
+fn redraw_if_debug(config: &Config) -> Vec<EngineEffect> {
+    if config.debug_draw {
+        vec![EngineEffect::Redraw]
+    } else {
+        Vec::new()
+    }
+}
+
+fn push_dispatch_effect(effects: &mut Vec<EngineEffect>, action: GestureAction) {
+    if action != GestureAction::None {
+        effects.push(EngineEffect::Dispatch(action));
+    }
+}
+
+fn recognize_gesture_kind(
+    gesture: &Gesture,
+    config: &Config,
+    size: SurfaceSize,
+) -> Option<GestureKind> {
+    if gesture.max_active != 1 || gesture.finished.len() != 1 {
+        return None;
+    }
+
+    if is_tap_like(gesture, config.tap_radius, config.two_finger_tap_ms) {
+        return Some(GestureKind::Tap);
+    }
+
+    let contact = &gesture.finished[0];
+    let min_dim = f64::from(size.width.min(size.height).max(1));
+    let swipe_threshold_min = config.swipe_threshold_min.min(config.swipe_threshold_max);
+    let swipe_threshold_max = config.swipe_threshold_min.max(config.swipe_threshold_max);
+    let swipe_threshold = (min_dim * config.swipe_threshold_ratio)
+        .clamp(swipe_threshold_min, swipe_threshold_max);
+    let dx = contact.last_x - contact.start_x;
+    let dy = contact.last_y - contact.start_y;
+    let abs_dx = dx.abs();
+    let abs_dy = dy.abs();
+
+    if abs_dx.max(abs_dy) < swipe_threshold {
+        return None;
+    }
+
+    if abs_dx >= abs_dy * 1.25 {
+        if dx < 0.0 {
+            Some(GestureKind::SwipeLeft)
+        } else {
+            Some(GestureKind::SwipeRight)
+        }
+    } else if abs_dy >= abs_dx * 1.25 {
+        if dy < 0.0 {
+            Some(GestureKind::SwipeUp)
+        } else {
+            Some(GestureKind::SwipeDown)
+        }
+    } else {
+        None
+    }
+}
+
+fn resolve_niri_gesture(gesture: &Gesture, config: &Config, size: SurfaceSize) -> GestureAction {
+    if gesture.finished.is_empty() {
+        return GestureAction::None;
+    }
+
+    let min_dim = f64::from(size.width.min(size.height).max(1));
+    let swipe_threshold_min = config.swipe_threshold_min.min(config.swipe_threshold_max);
+    let swipe_threshold_max = config.swipe_threshold_min.max(config.swipe_threshold_max);
+    let swipe_threshold = (min_dim * config.swipe_threshold_ratio)
+        .clamp(swipe_threshold_min, swipe_threshold_max);
+
+    if gesture.max_active == 2 && is_tap_like(gesture, config.tap_radius, config.two_finger_tap_ms) {
+        return niri_action(config.action_two_finger_tap);
+    }
+
+    if gesture.max_active != 1 || gesture.finished.len() != 1 {
+        return GestureAction::None;
+    }
+
+    let contact = &gesture.finished[0];
+    let dx = contact.last_x - contact.start_x;
+    let dy = contact.last_y - contact.start_y;
+    let abs_dx = dx.abs();
+    let abs_dy = dy.abs();
+
+    if abs_dx.max(abs_dy) < swipe_threshold {
+        return GestureAction::None;
+    }
+
+    if abs_dx >= abs_dy * 1.25 {
+        if dx < 0.0 {
+            niri_action(config.action_swipe_left)
+        } else {
+            niri_action(config.action_swipe_right)
+        }
+    } else if abs_dy >= abs_dx * 1.25 {
+        if dy < 0.0 {
+            niri_action(config.action_swipe_up)
+        } else {
+            niri_action(config.action_swipe_down)
+        }
+    } else {
+        GestureAction::None
+    }
+}
+
+fn is_exit_gesture(gesture: &Gesture, config: &Config, size: SurfaceSize) -> bool {
+    if gesture.finished.is_empty() {
+        return false;
+    }
+
+    if gesture.max_active >= 3 && is_tap_like(gesture, config.tap_radius, config.exit_tap_ms) {
+        return true;
+    }
+
+    config.exit_corner_enabled
+        && gesture.max_active == 1
+        && gesture.finished.len() == 1
+        && is_tap_like(gesture, config.tap_radius, config.exit_corner_tap_ms)
+        && is_top_left_corner(&gesture.finished[0], config, size)
+}
+
+fn niri_action(action: Option<NiriAction>) -> GestureAction {
+    action.map(GestureAction::Niri).unwrap_or(GestureAction::None)
+}
+
+fn is_tap_like(gesture: &Gesture, radius: f64, max_ms: u32) -> bool {
+    let start = gesture
+        .finished
+        .iter()
+        .map(|contact| contact.start_time)
+        .min()
+        .unwrap_or(0);
+    let end = gesture
+        .finished
+        .iter()
+        .map(|contact| contact.last_time)
+        .max()
+        .unwrap_or(start);
+
+    if end.saturating_sub(start) > max_ms {
+        return false;
+    }
+
+    gesture.finished.iter().all(|contact| contact_movement(contact) <= radius)
+}
+
+fn contact_movement(contact: &Contact) -> f64 {
+    let dx = contact.last_x - contact.start_x;
+    let dy = contact.last_y - contact.start_y;
+    dx.hypot(dy)
+}
+
+fn is_top_left_corner(contact: &Contact, config: &Config, size: SurfaceSize) -> bool {
+    let ratio = config.exit_corner_ratio.clamp(0.01, 0.50);
+    let rect = RectNorm {
+        x0: 0.0,
+        y0: 0.0,
+        x1: ratio,
+        y1: ratio,
+    };
+    rect.contains_px(size, contact.start_x, contact.start_y)
+}
+
+fn fill_rect(buf: &mut [u8], width: u32, height: u32, rect: RectPx, color: [u8; 4]) {
+    let x0 = rect.x.max(0).min(width as i32) as u32;
+    let y0 = rect.y.max(0).min(height as i32) as u32;
+    let x1 = (rect.x + rect.w).max(0).min(width as i32) as u32;
+    let y1 = (rect.y + rect.h).max(0).min(height as i32) as u32;
+
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = ((y * width + x) * 4) as usize;
+            buf[index..index + 4].copy_from_slice(&color);
+        }
+    }
+}
+
+fn draw_circle(
+    buf: &mut [u8],
+    width: u32,
+    height: u32,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: [u8; 4],
+) {
+    let r2 = radius * radius;
+    let x0 = (cx - radius).max(0);
+    let y0 = (cy - radius).max(0);
+    let x1 = (cx + radius).min(width as i32 - 1);
+    let y1 = (cy + radius).min(height as i32 - 1);
+
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= r2 {
+                let index = (((y as u32) * width + x as u32) * 4) as usize;
+                buf[index..index + 4].copy_from_slice(&color);
+            }
+        }
+    }
+}
+
+fn env_f64(name: &str, default: f64) -> f64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(default)
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(default)
+}
+
+fn env_u8(name: &str, default: u8) -> u8 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(default)
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(default)
+}
+
+fn env_niri_action(name: &str, default: &str) -> Option<NiriAction> {
+    let value = env::var(name).unwrap_or_else(|_| default.to_string());
+    if value.trim().is_empty() {
+        return None;
+    }
+
+    match parse_niri_action(&value) {
+        Ok(action) => Some(action),
+        Err(err) => {
+            eprintln!("touchdeck: invalid {name}: {err:?}");
+            None
+        }
+    }
+}
+
+fn load_xkb_keymap(config: &Config) -> Result<Vec<u8>> {
+    let mut bytes = if let Some(path) = &config.xkb_keymap_path {
+        fs::read(path).with_context(|| format!("read XKB keymap {}", path.display()))?
+    } else {
+        DEFAULT_XKB_KEYMAP.as_bytes().to_vec()
+    };
+
+    if !bytes.ends_with(&[0]) {
+        bytes.push(0);
+    }
+
+    Ok(bytes)
+}
+
+const DEFAULT_XKB_KEYMAP: &str = r#"xkb_keymap {
+xkb_keycodes "evdev+aliases(qwerty)" {
+    include "evdev+aliases(qwerty)"
+};
+xkb_types "complete" {
+    include "complete"
+};
+xkb_compatibility "complete" {
+    include "complete"
+};
+xkb_symbols "pc+us+inet(evdev)" {
+    include "pc+us+inet(evdev)"
+};
+xkb_geometry "pc(pc105)" {
+    include "pc(pc105)"
+};
+};
+"#;
+
+impl Dispatch<wl_registry::WlRegistry, ()> for App {
+    fn event(
+        state: &mut Self,
+        registry: &wl_registry::WlRegistry,
+        event: wl_registry::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
+            match interface.as_str() {
+                "wl_compositor" => {
+                    state.compositor = Some(registry.bind::<wl_compositor::WlCompositor, _, _>(
+                        name,
+                        version.min(6),
+                        qh,
+                        (),
+                    ));
+                }
+                "wl_shm" => {
+                    state.shm = Some(registry.bind::<wl_shm::WlShm, _, _>(
+                        name,
+                        version.min(1),
+                        qh,
+                        (),
+                    ));
+                }
+                "wl_seat" => {
+                    let seat = registry.bind::<wl_seat::WlSeat, _, _>(
+                        name,
+                        version.min(8),
+                        qh,
+                        (),
+                    );
+                    let touch = seat.get_touch(qh, ());
+                    state.touch = Some(touch);
+                    state.seat = Some(seat);
+                }
+                "zwlr_layer_shell_v1" => {
+                    state.layer_shell = Some(
+                        registry.bind::<zwlr_layer_shell_v1::ZwlrLayerShellV1, _, _>(
+                            name,
+                            version.min(4),
+                            qh,
+                            (),
+                        ),
+                    );
+                }
+                "zwp_virtual_keyboard_manager_v1" => {
+                    state.virtual_keyboard_manager = Some(registry.bind::<
+                        zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+                        _,
+                        _,
+                    >(
+                        name,
+                        version.min(1),
+                        qh,
+                        (),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl Dispatch<wl_compositor::WlCompositor, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_compositor::WlCompositor,
+        _event: wl_compositor::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_region::WlRegion, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_region::WlRegion,
+        _event: wl_region::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_shm::WlShm, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_shm::WlShm,
+        _event: wl_shm::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_shm_pool::WlShmPool, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_shm_pool::WlShmPool,
+        _event: wl_shm_pool::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_buffer::WlBuffer, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_buffer::WlBuffer,
+        _event: wl_buffer::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_seat::WlSeat, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_seat::WlSeat,
+        _event: wl_seat::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_surface::WlSurface, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_surface::WlSurface,
+        _event: wl_surface::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+        _event: zwp_virtual_keyboard_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+        _event: zwp_virtual_keyboard_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_touch::WlTouch, ()> for App {
+    fn event(
+        state: &mut Self,
+        _proxy: &wl_touch::WlTouch,
+        event: wl_touch::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_touch::Event::Down { time, id, x, y, .. } => {
+                state.touch_down(qh, id, time, x, y);
+            }
+            wl_touch::Event::Motion { time, id, x, y } => {
+                state.touch_motion(qh, id, time, x, y);
+            }
+            wl_touch::Event::Up { time, id, .. } => {
+                state.touch_up(qh, id, time);
+            }
+            wl_touch::Event::Cancel => {
+                state.touch_cancel(qh);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for App {
+    fn event(
+        _state: &mut Self,
+        _proxy: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
+        _event: zwlr_layer_shell_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        layer_surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                layer_surface.ack_configure(serial);
+                state.width = width;
+                state.height = height;
+                state.capture_policy = state.engine.capture_policy();
+                if let Err(err) = state.attach_overlay_buffer(qh, width, height) {
+                    eprintln!("touchdeck: failed to attach overlay buffer: {err:?}");
+                    state.running = false;
+                    return;
+                }
+                if let Err(err) = state.apply_input_region(qh, &state.capture_policy) {
+                    eprintln!("touchdeck: failed to apply input region: {err:?}");
+                    state.running = false;
+                }
+            }
+            zwlr_layer_surface_v1::Event::Closed => {
+                state.running = false;
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> Config {
+        Config {
+            action_swipe_left: Some(NiriAction::FocusColumnLeft),
+            action_swipe_right: Some(NiriAction::FocusColumnRight),
+            action_swipe_up: Some(NiriAction::FocusWorkspaceUp),
+            action_swipe_down: Some(NiriAction::FocusWorkspaceDown),
+            action_two_finger_tap: Some(NiriAction::ToggleOverview),
+            tap_radius: 48.0,
+            two_finger_tap_ms: 350,
+            exit_tap_ms: 450,
+            hold_ms: 180,
+            double_tap_ms: 280,
+            swipe_threshold_ratio: 0.08,
+            swipe_threshold_min: 64.0,
+            swipe_threshold_max: 140.0,
+            debug_alpha: 0,
+            debug_draw: false,
+            log_touch: false,
+            record_trace_path: None,
+            xkb_keymap_path: None,
+            slots: SlotRegistry::default(),
+            keymap: Keymap::default(),
+            macros: MacroRegistry::default(),
+            exit_corner_enabled: true,
+            exit_corner_ratio: 0.12,
+            exit_corner_tap_ms: 350,
+        }
+    }
+
+    fn test_size() -> SurfaceSize {
+        SurfaceSize {
+            width: 1000,
+            height: 2000,
+        }
+    }
+
+    #[test]
+    fn maps_supported_niri_actions_to_ipc_json() {
+        assert_eq!(
+            niri_action_request_json(parse_niri_action("focus-column-left").unwrap()),
+            r#"{"Action":{"FocusColumnLeft":{}}}"#
+        );
+        assert_eq!(
+            parse_niri_action("focus_workspace_right").unwrap_err().to_string(),
+            "unsupported niri action focus_workspace_right; supported actions: focus-column-left, focus-column-right, focus-workspace-up, focus-workspace-down, toggle-overview"
+        );
+        assert_eq!(
+            niri_action_request_json(parse_niri_action("toggle-overview").unwrap()),
+            r#"{"Action":{"ToggleOverview":{}}}"#
+        );
+    }
+
+    fn contact(start_x: f64, start_y: f64, last_x: f64, last_y: f64) -> Contact {
+        Contact {
+            id: 1,
+            start_x,
+            start_y,
+            last_x,
+            last_y,
+            start_time: 0,
+            last_time: 100,
+        }
+    }
+
+    fn gesture(max_active: usize, finished: Vec<Contact>) -> Gesture {
+        Gesture {
+            finished,
+            max_active,
+        }
+    }
+
+    fn dispatched_actions(effects: &[EngineEffect]) -> Vec<GestureAction> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                EngineEffect::Dispatch(action) => Some(action.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn run_trace(trace: &str, config: &Config) -> Vec<EngineEffect> {
+        let mut engine = Engine::default();
+        let size = test_size();
+        let mut effects = Vec::new();
+
+        for line in trace.lines().filter(|line| !line.trim().is_empty()) {
+            let event: TraceEvent = serde_json::from_str(line).unwrap();
+            effects.extend(engine.process_timers(event.t(), config, size));
+            effects.extend(engine.handle_trace_event(event, config, size));
+        }
+
+        if let Some(deadline) = engine.next_timer_deadline_ms() {
+            effects.extend(engine.process_timers(deadline, config, size));
+        }
+
+        effects
+    }
+
+    #[test]
+    fn default_mode_uses_fullscreen_capture() {
+        let engine = Engine::default();
+        assert_eq!(engine.capture_policy(), CapturePolicy::Fullscreen);
+    }
+
+    #[test]
+    fn one_finger_swipe_left_maps_to_focus_column_left() {
+        let config = test_config();
+        let gesture = gesture(1, vec![contact(800.0, 1000.0, 600.0, 1000.0)]);
+
+        assert_eq!(
+            resolve_niri_gesture(&gesture, &config, test_size()),
+            GestureAction::Niri(NiriAction::FocusColumnLeft)
+        );
+    }
+
+    #[test]
+    fn one_finger_swipe_up_maps_to_focus_workspace_up() {
+        let config = test_config();
+        let gesture = gesture(1, vec![contact(500.0, 1200.0, 500.0, 900.0)]);
+
+        assert_eq!(
+            resolve_niri_gesture(&gesture, &config, test_size()),
+            GestureAction::Niri(NiriAction::FocusWorkspaceUp)
+        );
+    }
+
+    #[test]
+    fn two_finger_tap_maps_to_toggle_overview() {
+        let config = test_config();
+        let mut a = contact(400.0, 900.0, 404.0, 904.0);
+        a.id = 1;
+        let mut b = contact(600.0, 900.0, 604.0, 904.0);
+        b.id = 2;
+        let gesture = gesture(2, vec![a, b]);
+
+        assert_eq!(
+            resolve_niri_gesture(&gesture, &config, test_size()),
+            GestureAction::Niri(NiriAction::ToggleOverview)
+        );
+    }
+
+    #[test]
+    fn top_left_tap_exits() {
+        let config = test_config();
+        let gesture = gesture(1, vec![contact(50.0, 50.0, 52.0, 52.0)]);
+
+        assert!(is_exit_gesture(&gesture, &config, test_size()));
+    }
+
+    #[test]
+    fn empty_action_disables_gesture() {
+        let mut config = test_config();
+        config.action_swipe_left = None;
+        let gesture = gesture(1, vec![contact(800.0, 1000.0, 600.0, 1000.0)]);
+
+        assert_eq!(
+            resolve_niri_gesture(&gesture, &config, test_size()),
+            GestureAction::None
+        );
+    }
+
+    #[test]
+    fn default_keymap_right_bottom_tap_sends_space() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+
+        engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
+        let effects = engine.handle_up(80, 80, 1, &config, size);
+
+        assert!(dispatched_actions(&effects).contains(&GestureAction::Key(KEY_SPACE)));
+    }
+
+    #[test]
+    fn bottom_edge_swipe_up_enters_text_mode() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+
+        engine.handle_down(0, 0, 1, 500.0, 1950.0, &config, size);
+        engine.handle_motion(1, 80, 500.0, 1700.0, &config);
+        let effects = engine.handle_up(100, 100, 1, &config, size);
+
+        assert_eq!(engine.mode, Mode::Text);
+        assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
+    }
+
+    #[test]
+    fn default_text_keyboard_row_tap_sends_key() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        let mut effects = Vec::new();
+        engine.set_mode(Mode::Text, &mut effects);
+
+        engine.handle_down(0, 0, 1, 84.0, 1180.0, &config, size);
+        let effects = engine.handle_up(80, 80, 1, &config, size);
+
+        assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![
+            KeyChord { keys: vec![KEY_Q] },
+        ])));
+    }
+
+    #[test]
+    fn toml_binding_parses_key_action() {
+        let source = r#"
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "swipe", target = "right_bottom", direction = "left" }
+behavior = { type = "key", key = "DEL" }
+"#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let binding = Binding::from_file_config(
+            file_config.bindings.unwrap().remove(0),
+            &SlotRegistry::default(),
+            &MacroRegistry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(binding.mode, Mode::Base);
+        assert_eq!(binding.layer, Layer::Base);
+        assert_eq!(
+            binding.trigger,
+            Trigger::Swipe {
+                target: named_target("right_bottom").unwrap(),
+                fingers: 1,
+                direction: SwipeDirection::Left,
+                min_px: None,
+                max_ms: None,
+            }
+        );
+        assert_eq!(
+            binding.behavior,
+            Behavior::KeySequence(vec![KeyChord {
+                keys: vec![KEY_BACKSPACE],
+            }])
+        );
+    }
+
+    #[test]
+    fn toml_keyboard_row_expands_to_text_bindings() {
+        let source = r#"
+[keyboard]
+
+[[keyboard.rows]]
+mode = "text"
+layer = "base"
+x = [0.10, 0.90]
+y = [0.50, 0.60]
+keys = ["a", "C-c"]
+gap = 0.02
+"#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let row = file_config.keyboard.unwrap().rows.unwrap().remove(0);
+        let bindings = expand_keyboard_row(row, 0).unwrap();
+
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].mode, Mode::Text);
+        assert_eq!(bindings[0].trigger.target_id(), "key_a");
+        assert_eq!(bindings[1].trigger.target_id(), "key_c_c");
+        assert_eq!(
+            bindings[0].behavior,
+            Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_A] }])
+        );
+        assert_eq!(
+            bindings[1].behavior,
+            Behavior::KeySequence(vec![KeyChord {
+                keys: vec![KEY_LEFTCTRL, KEY_C],
+            }])
+        );
+    }
+
+    #[test]
+    fn toml_binding_parses_emacs_key_sequence() {
+        let source = r#"
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "tap", target = "right_bottom" }
+behavior = { type = "key", key = "C-x C-s" }
+"#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let binding = Binding::from_file_config(
+            file_config.bindings.unwrap().remove(0),
+            &SlotRegistry::default(),
+            &MacroRegistry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            binding.behavior,
+            Behavior::KeySequence(vec![
+                KeyChord {
+                    keys: vec![KEY_LEFTCTRL, KEY_X],
+                },
+                KeyChord {
+                    keys: vec![KEY_LEFTCTRL, KEY_S],
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn svg_layout_loader_reads_rect_slots() {
+        let source = r#"
+<svg viewBox="0 0 1000 2000" xmlns="http://www.w3.org/2000/svg">
+  <rect data-td-slot="thumb" data-td-role="key" data-td-capture="true" data-td-label="TH" x="800" y="1600" width="200" height="400" />
+</svg>
+"#;
+        let slots = SlotRegistry::from_svg_str(source).unwrap();
+        let target = slots.get("thumb").unwrap();
+
+        assert_eq!(target.id, "thumb");
+        assert_eq!(
+            target.rect,
+            RectNorm {
+                x0: 0.80,
+                x1: 1.00,
+                y0: 0.80,
+                y1: 1.00,
+            }
+        );
+    }
+
+    #[test]
+    fn top_layer_binding_overrides_base_layer_binding() {
+        let mut config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        config.keymap.bindings = vec![
+            Binding {
+                mode: Mode::Base,
+                layer: Layer::Base,
+                trigger: Trigger::Tap {
+                    target: named_target("right_bottom").unwrap(),
+                    fingers: 1,
+                    max_ms: None,
+                },
+                behavior: Behavior::Key(KEY_SPACE),
+                priority: 0,
+                consume: true,
+            },
+            Binding {
+                mode: Mode::Base,
+                layer: Layer::Niri,
+                trigger: Trigger::Tap {
+                    target: named_target("right_bottom").unwrap(),
+                    fingers: 1,
+                    max_ms: None,
+                },
+                behavior: Behavior::Key(KEY_ENTER),
+                priority: 0,
+                consume: true,
+            },
+        ];
+
+        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut Vec::new(), None);
+        engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
+        let effects = engine.handle_up(80, 80, 1, &config, size);
+
+        assert!(dispatched_actions(&effects).contains(&GestureAction::Key(KEY_ENTER)));
+        assert!(!dispatched_actions(&effects).contains(&GestureAction::Key(KEY_SPACE)));
+    }
+
+    #[test]
+    fn transparent_top_layer_falls_through_to_base_layer() {
+        let mut config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        config.keymap.bindings = vec![
+            Binding {
+                mode: Mode::Base,
+                layer: Layer::Base,
+                trigger: Trigger::Tap {
+                    target: named_target("right_bottom").unwrap(),
+                    fingers: 1,
+                    max_ms: None,
+                },
+                behavior: Behavior::Key(KEY_SPACE),
+                priority: 0,
+                consume: true,
+            },
+            Binding {
+                mode: Mode::Base,
+                layer: Layer::Niri,
+                trigger: Trigger::Tap {
+                    target: named_target("right_bottom").unwrap(),
+                    fingers: 1,
+                    max_ms: None,
+                },
+                behavior: Behavior::Transparent,
+                priority: 100,
+                consume: true,
+            },
+        ];
+
+        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut Vec::new(), None);
+        engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
+        let effects = engine.handle_up(80, 80, 1, &config, size);
+
+        assert!(dispatched_actions(&effects).contains(&GestureAction::Key(KEY_SPACE)));
+    }
+
+    #[test]
+    fn toml_macro_behavior_expands_to_sequence() {
+        let source = r#"
+[macros.copy]
+steps = [
+  { type = "key_down", key = "<leftctrl>" },
+  { type = "tap_key", key = "c" },
+  { type = "key_up", key = "<leftctrl>" },
+]
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "tap", target = "right_bottom" }
+behavior = { type = "macro", macro = "copy" }
+"#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let mut macros = MacroRegistry::default();
+        for (name, macro_config) in file_config.macros.unwrap() {
+            macros.insert(&name, parse_action_steps(macro_config.steps).unwrap());
+        }
+        let binding = Binding::from_file_config(
+            file_config.bindings.unwrap().remove(0),
+            &SlotRegistry::default(),
+            &macros,
+        )
+        .unwrap();
+
+        assert_eq!(
+            binding.behavior,
+            Behavior::Sequence(vec![
+                ActionStep::KeyDown(KEY_LEFTCTRL),
+                ActionStep::TapKey(KEY_C),
+                ActionStep::KeyUp(KEY_LEFTCTRL),
+            ])
+        );
+    }
+
+    #[test]
+    fn layer_toggle_action_switches_layer() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        let mut effects = Vec::new();
+
+        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut effects, None);
+        assert_eq!(engine.current_layer(), Layer::Niri);
+        assert_eq!(engine.layer_stack, vec![Layer::Base, Layer::Niri]);
+
+        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut effects, None);
+        assert_eq!(engine.current_layer(), Layer::Base);
+        assert_eq!(engine.layer_stack, vec![Layer::Base]);
+
+        assert_eq!(engine.capture_policy(), CapturePolicy::Fullscreen);
+        assert!(effects.contains(&EngineEffect::Redraw));
+        assert_eq!(config.hold_ms, 180);
+        assert_eq!(size.width, 1000);
+    }
+
+    #[test]
+    fn layer_momentary_hold_returns_previous_layer() {
+        let mut config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        config.keymap.bindings = vec![Binding {
+            mode: Mode::Base,
+            layer: Layer::Base,
+            trigger: Trigger::Hold {
+                target: named_target("left_bottom").unwrap(),
+                fingers: 1,
+                min_ms: None,
+            },
+            behavior: Behavior::LayerMomentary(Layer::Niri),
+            priority: 0,
+            consume: true,
+        }];
+
+        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
+        engine.process_timers(181, &config, size);
+        assert_eq!(engine.current_layer(), Layer::Niri);
+        assert_eq!(engine.layer_stack, vec![Layer::Base, Layer::Niri]);
+
+        engine.handle_up(220, 220, 1, &config, size);
+        assert_eq!(engine.current_layer(), Layer::Base);
+        assert_eq!(engine.layer_stack, vec![Layer::Base]);
+    }
+
+    #[test]
+    fn left_bottom_hold_enters_momentary_and_release_returns_base() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+
+        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
+        let effects = engine.process_timers(181, &config, size);
+        assert_eq!(engine.mode, Mode::NiriMomentary);
+        assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
+
+        let effects = engine.handle_up(220, 220, 1, &config, size);
+        assert_eq!(engine.mode, Mode::Base);
+        assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
+    }
+
+    #[test]
+    fn left_bottom_double_tap_locks_and_unlocks_niri_mode() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+
+        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
+        engine.handle_up(80, 80, 1, &config, size);
+        engine.handle_down(160, 160, 1, 104.0, 1804.0, &config, size);
+        let effects = engine.handle_up(220, 220, 1, &config, size);
+
+        assert_eq!(engine.mode, Mode::NiriLocked);
+        assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
+
+        engine.handle_down(400, 400, 1, 100.0, 1800.0, &config, size);
+        engine.handle_up(460, 460, 1, &config, size);
+        engine.handle_down(540, 540, 1, 102.0, 1802.0, &config, size);
+        let effects = engine.handle_up(600, 600, 1, &config, size);
+
+        assert_eq!(engine.mode, Mode::Base);
+        assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
+    }
+
+    #[test]
+    fn bottom_edge_double_tap_enters_and_exits_passthrough() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+
+        engine.handle_down(0, 0, 1, 500.0, 1950.0, &config, size);
+        engine.handle_up(60, 60, 1, &config, size);
+        engine.handle_down(140, 140, 1, 504.0, 1952.0, &config, size);
+        let effects = engine.handle_up(200, 200, 1, &config, size);
+
+        assert_eq!(engine.mode, Mode::Passthrough);
+        assert!(matches!(effects.as_slice(), [.., EngineEffect::SetCapture(CapturePolicy::Zones(_)), EngineEffect::Redraw]));
+
+        engine.handle_down(380, 380, 1, 500.0, 1950.0, &config, size);
+        engine.handle_up(430, 430, 1, &config, size);
+        engine.handle_down(500, 500, 1, 504.0, 1952.0, &config, size);
+        let effects = engine.handle_up(550, 550, 1, &config, size);
+
+        assert_eq!(engine.mode, Mode::Base);
+        assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
+    }
+
+    #[test]
+    fn passthrough_hold_returns_to_passthrough_after_momentary_niri() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+
+        engine.handle_down(0, 0, 1, 500.0, 1950.0, &config, size);
+        engine.handle_up(60, 60, 1, &config, size);
+        engine.handle_down(140, 140, 1, 504.0, 1952.0, &config, size);
+        engine.handle_up(200, 200, 1, &config, size);
+        assert_eq!(engine.mode, Mode::Passthrough);
+
+        engine.handle_down(300, 300, 1, 100.0, 1800.0, &config, size);
+        engine.process_timers(481, &config, size);
+        assert_eq!(engine.mode, Mode::NiriMomentary);
+
+        let effects = engine.handle_up(520, 520, 1, &config, size);
+        assert_eq!(engine.mode, Mode::Passthrough);
+        assert!(matches!(effects.as_slice(), [.., EngineEffect::SetCapture(CapturePolicy::Zones(_)), EngineEffect::Redraw]));
+    }
+
+    #[test]
+    fn replay_hold_then_same_finger_swipe_dispatches_niri_action() {
+        let config = test_config();
+        let trace = r#"
+{"type":"down","t":0,"wl_time":0,"id":1,"x":100.0,"y":1800.0}
+{"type":"motion","t":220,"wl_time":220,"id":1,"x":260.0,"y":1800.0}
+{"type":"up","t":260,"wl_time":260,"id":1}
+"#;
+
+        let effects = run_trace(trace, &config);
+        assert!(dispatched_actions(&effects).contains(&GestureAction::Niri(
+            NiriAction::FocusColumnRight
+        )));
+    }
+
+    #[test]
+    fn replay_hold_plus_second_finger_swipe_dispatches_niri_action() {
+        let config = test_config();
+        let trace = r#"
+{"type":"down","t":0,"wl_time":0,"id":1,"x":100.0,"y":1800.0}
+{"type":"down","t":220,"wl_time":220,"id":2,"x":800.0,"y":1000.0}
+{"type":"motion","t":240,"wl_time":240,"id":2,"x":600.0,"y":1000.0}
+{"type":"up","t":260,"wl_time":260,"id":2}
+{"type":"up","t":300,"wl_time":300,"id":1}
+"#;
+
+        let effects = run_trace(trace, &config);
+        assert!(dispatched_actions(&effects).contains(&GestureAction::Niri(
+            NiriAction::FocusColumnLeft
+        )));
+    }
+}

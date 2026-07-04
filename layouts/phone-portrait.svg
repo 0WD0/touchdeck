@@ -1,0 +1,74 @@
+<svg
+  viewBox="0 0 1000 2400"
+  xmlns="http://www.w3.org/2000/svg">
+  <g id="touchdeck-layout" data-td-layout="phone-portrait">
+    <rect
+      id="left_bottom"
+      data-td-slot="left_bottom"
+      data-td-role="zone"
+      data-td-capture="true"
+      data-td-label="NIRI"
+      x="0"
+      y="1968"
+      width="180"
+      height="432"
+      rx="36" />
+
+    <rect
+      id="right_bottom"
+      data-td-slot="right_bottom"
+      data-td-role="zone"
+      data-td-capture="true"
+      data-td-label="KEY"
+      x="820"
+      y="1968"
+      width="180"
+      height="432"
+      rx="36" />
+
+    <rect
+      id="bottom_edge"
+      data-td-slot="bottom_edge"
+      data-td-role="gesture-area"
+      data-td-capture="true"
+      data-td-label="TEXT"
+      x="180"
+      y="2256"
+      width="640"
+      height="144"
+      rx="28" />
+
+    <rect
+      id="top_left"
+      data-td-slot="top_left"
+      data-td-role="zone"
+      data-td-capture="true"
+      data-td-label="EXIT"
+      x="0"
+      y="0"
+      width="120"
+      height="240"
+      rx="24" />
+
+    <rect
+      id="center"
+      data-td-slot="center"
+      data-td-role="gesture-area"
+      data-td-capture="false"
+      x="180"
+      y="288"
+      width="640"
+      height="1680" />
+
+    <rect
+      id="full"
+      data-td-slot="full"
+      data-td-role="gesture-area"
+      data-td-capture="false"
+      data-td-label="SCREEN"
+      x="0"
+      y="0"
+      width="1000"
+      height="2400" />
+  </g>
+</svg>

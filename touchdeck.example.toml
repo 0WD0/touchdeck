@@ -1,0 +1,210 @@
+# Example structured keymap for touchdeck-prototype.
+# Set TOUCHDECK_CONFIG=/home/disk/Projects/touchdeck-prototype/touchdeck.example.toml
+# or copy this to ./touchdeck.toml before running.
+
+[layout]
+svg = "layouts/phone-portrait.svg"
+
+[keyboard]
+# Optional raw XKB keymap file. If omitted, touchdeck uses a built-in us/pc105 keymap.
+# xkb_keymap = "/path/to/keymap.xkb"
+
+[[keyboard.rows]]
+mode = "text"
+layer = "base"
+x = [0.04, 0.96]
+y = [0.54, 0.64]
+keys = ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]
+gap = 0.006
+
+[[keyboard.rows]]
+mode = "text"
+layer = "base"
+x = [0.08, 0.92]
+y = [0.65, 0.75]
+keys = ["a", "s", "d", "f", "g", "h", "j", "k", "l"]
+gap = 0.006
+
+[[keyboard.rows]]
+mode = "text"
+layer = "base"
+x = [0.14, 0.86]
+y = [0.76, 0.86]
+keys = ["z", "x", "c", "v", "b", "n", "m"]
+gap = 0.006
+
+[[keyboard.rows]]
+mode = "text"
+layer = "base"
+x = [0.08, 0.92]
+y = [0.87, 0.94]
+keys = ["ESC", "SPC", "DEL", "RET"]
+gap = 0.008
+
+# Macros are reusable backend action sequences.
+# key_sequence uses Emacs kbd style; key_down/key_up/tap_key use one physical key token.
+
+[macros.copy]
+steps = [
+  { type = "key_sequence", keys = "C-c" },
+]
+
+[macros.ctrl_c_manual]
+steps = [
+  { type = "key_down", key = "<leftctrl>" },
+  { type = "tap_key", key = "c" },
+  { type = "key_up", key = "<leftctrl>" },
+]
+
+# Mode ownership controls.
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "hold", target = "left_bottom", min_ms = 180 }
+behavior = { type = "mode_momentary", mode = "niri" }
+
+[[bindings]]
+mode = "passthrough"
+layer = "base"
+trigger = { type = "hold", target = "left_bottom", min_ms = 180 }
+behavior = { type = "mode_momentary", mode = "niri" }
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "double_tap", target = "left_bottom", max_ms = 280 }
+behavior = { type = "mode_toggle", mode = "niri_locked" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "double_tap", target = "left_bottom", max_ms = 280 }
+behavior = { type = "mode", mode = "base" }
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "double_tap", target = "bottom_edge", max_ms = 280 }
+behavior = { type = "mode_toggle", mode = "passthrough" }
+
+[[bindings]]
+mode = "passthrough"
+layer = "base"
+trigger = { type = "double_tap", target = "bottom_edge", max_ms = 280 }
+behavior = { type = "mode", mode = "base" }
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "swipe", target = "bottom_edge", direction = "up" }
+behavior = { type = "mode_toggle", mode = "text" }
+
+[[bindings]]
+mode = "passthrough"
+layer = "base"
+trigger = { type = "swipe", target = "bottom_edge", direction = "up" }
+behavior = { type = "mode", mode = "text" }
+
+[[bindings]]
+mode = "text"
+layer = "base"
+trigger = { type = "swipe", target = "bottom_edge", direction = "down" }
+behavior = { type = "mode", mode = "base" }
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "tap", target = "top_left" }
+behavior = { type = "exit" }
+
+[[bindings]]
+mode = "passthrough"
+layer = "base"
+trigger = { type = "tap", target = "top_left" }
+behavior = { type = "exit" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "tap", target = "top_left" }
+behavior = { type = "exit" }
+
+[[bindings]]
+mode = "text"
+layer = "base"
+trigger = { type = "tap", target = "top_left" }
+behavior = { type = "exit" }
+
+# Base keyboard output. Keys use Emacs kbd/read-kbd-macro style.
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "tap", target = "right_bottom" }
+behavior = { type = "key", key = "SPC" }
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "swipe", target = "right_bottom", direction = "left" }
+behavior = { type = "key", key = "DEL" }
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "swipe", target = "right_bottom", direction = "right" }
+behavior = { type = "key", key = "RET" }
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "swipe", target = "right_bottom", direction = "up" }
+behavior = { type = "macro", macro = "copy" }
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "swipe", target = "right_bottom", direction = "down" }
+behavior = { type = "key_sequence", keys = "C-x C-s" }
+
+# Layer examples.
+
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "hold", target = "center", min_ms = 220 }
+behavior = { type = "layer_momentary", layer = "niri" }
+
+# Let right-bottom tap fall through to the base layer while the niri layer is active.
+[[bindings]]
+mode = "base"
+layer = "niri"
+trigger = { type = "tap", target = "right_bottom" }
+behavior = { type = "transparent" }
+
+[[bindings]]
+mode = "base"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "left" }
+behavior = { type = "niri", action = "focus-column-left" }
+
+[[bindings]]
+mode = "base"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "right" }
+behavior = { type = "niri", action = "focus-column-right" }
+
+# Niri locked bindings. These override the built-in default niri gestures when matched.
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "left" }
+behavior = { type = "niri", action = "focus-column-left" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "right" }
+behavior = { type = "niri", action = "focus-column-right" }
