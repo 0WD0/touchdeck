@@ -2,17 +2,17 @@
   viewBox="0 0 1000 2400"
   xmlns="http://www.w3.org/2000/svg">
   <g id="touchdeck-layout" data-td-layout="phone-portrait">
-  <rect
-    id="key_ret"
-    data-td-slot="key_ret"
-    data-td-role="key"
-    data-td-capture="true"
-    data-td-label="RET"
-    x="780"
-    y="2100"
-    width="180"
-    height="180"
-    rx="28" />
+    <rect
+      id="left_bottom"
+      data-td-slot="left_bottom"
+      data-td-role="zone"
+      data-td-capture="true"
+      data-td-label="NIRI"
+      x="0"
+      y="1968"
+      width="180"
+      height="432"
+      rx="36" />
 
     <rect
       id="right_bottom"
@@ -58,7 +58,8 @@
       x="180"
       y="288"
       width="640"
-      height="1680" />
+      height="1680"
+      rx="24" />
 
     <rect
       id="full"
@@ -69,9 +70,8 @@
       x="0"
       y="0"
       width="1000"
-      height="2400" />
-
-    <!-- Text keyboard slots. Geometry lives in SVG; TOML maps slot IDs to behavior. -->
+      height="2400"
+      rx="0" />
 
     <rect
       id="key_q"
@@ -79,11 +79,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="q"
-      x="20"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="30"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_w"
@@ -91,11 +91,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="w"
-      x="112"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="118"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_e"
@@ -103,11 +103,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="e"
-      x="204"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="206"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_r"
@@ -115,11 +115,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="r"
-      x="296"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="294"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_t"
@@ -127,11 +127,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="t"
-      x="388"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="382"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_y"
@@ -139,11 +139,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="y"
-      x="480"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="540"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_u"
@@ -151,11 +151,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="u"
-      x="572"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="628"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_i"
@@ -163,11 +163,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="i"
-      x="664"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="716"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_o"
@@ -175,11 +175,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="o"
-      x="756"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="804"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_p"
@@ -187,11 +187,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="p"
-      x="848"
-      y="1296"
-      width="80"
-      height="220"
-      rx="22" />
+      x="892"
+      y="1344"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_a"
@@ -199,11 +199,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="a"
-      x="80"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="52"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_s"
@@ -211,11 +211,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="s"
-      x="172"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="140"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_d"
@@ -223,11 +223,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="d"
-      x="264"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="228"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_f"
@@ -235,11 +235,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="f"
-      x="356"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="316"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_g"
@@ -247,11 +247,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="g"
-      x="448"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="404"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_h"
@@ -259,11 +259,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="h"
-      x="540"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="562"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_j"
@@ -271,11 +271,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="j"
-      x="632"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="650"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_k"
@@ -283,11 +283,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="k"
-      x="724"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="738"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_l"
@@ -295,11 +295,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="l"
-      x="816"
-      y="1560"
-      width="80"
-      height="220"
-      rx="22" />
+      x="826"
+      y="1596"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_z"
@@ -307,11 +307,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="z"
-      x="140"
-      y="1824"
-      width="80"
-      height="220"
-      rx="22" />
+      x="74"
+      y="1848"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_x"
@@ -319,11 +319,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="x"
-      x="232"
-      y="1824"
-      width="80"
-      height="220"
-      rx="22" />
+      x="162"
+      y="1848"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_c"
@@ -331,11 +331,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="c"
-      x="324"
-      y="1824"
-      width="80"
-      height="220"
-      rx="22" />
+      x="250"
+      y="1848"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_v"
@@ -343,11 +343,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="v"
-      x="416"
-      y="1824"
-      width="80"
-      height="220"
-      rx="22" />
+      x="338"
+      y="1848"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_b"
@@ -355,11 +355,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="b"
-      x="508"
-      y="1824"
-      width="80"
-      height="220"
-      rx="22" />
+      x="426"
+      y="1848"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_n"
@@ -367,11 +367,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="n"
-      x="600"
-      y="1824"
-      width="80"
-      height="220"
-      rx="22" />
+      x="606"
+      y="1848"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_m"
@@ -379,11 +379,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="m"
-      x="692"
-      y="1824"
-      width="80"
-      height="220"
-      rx="22" />
+      x="694"
+      y="1848"
+      width="78"
+      height="200"
+      rx="28" />
 
     <rect
       id="key_esc"
@@ -391,10 +391,10 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="ESC"
-      x="80"
-      y="2088"
-      width="150"
-      height="150"
+      x="40"
+      y="2100"
+      width="130"
+      height="180"
       rx="28" />
 
     <rect
@@ -403,10 +403,10 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="SPC"
-      x="260"
-      y="2088"
-      width="300"
-      height="150"
+      x="200"
+      y="2100"
+      width="360"
+      height="180"
       rx="28" />
 
     <rect
@@ -416,9 +416,9 @@
       data-td-capture="true"
       data-td-label="DEL"
       x="590"
-      y="2088"
-      width="150"
-      height="150"
+      y="2100"
+      width="160"
+      height="180"
       rx="28" />
 
     <rect
@@ -427,10 +427,11 @@
       data-td-role="key"
       data-td-capture="true"
       data-td-label="RET"
-      x="770"
-      y="2088"
-      width="150"
-      height="150"
+      x="780"
+      y="2100"
+      width="180"
+      height="180"
       rx="28" />
+
   </g>
 </svg>
