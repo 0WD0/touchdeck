@@ -87,6 +87,11 @@ const KEY_DOWN: u32 = 108;
 const KEY_DELETE: u32 = 111;
 const KEY_LEFTMETA: u32 = 125;
 
+const XKB_MOD_SHIFT: u32 = 1 << 0;
+const XKB_MOD_CONTROL: u32 = 1 << 2;
+const XKB_MOD_ALT: u32 = 1 << 3;
+const XKB_MOD_SUPER: u32 = 1 << 6;
+
 struct App {
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
@@ -108,6 +113,7 @@ struct App {
     started_at: Option<Instant>,
     mode_hint: Option<ModeHint>,
     last_presented_mode: Mode,
+    modifier_mask: u32,
     running: bool,
 }
 
@@ -137,6 +143,7 @@ impl Default for App {
             started_at: None,
             mode_hint: None,
             last_presented_mode: Mode::Base,
+            modifier_mask: 0,
             running: false,
         }
     }
@@ -174,6 +181,7 @@ struct Config {
     debug_alpha: u8,
     debug_draw: bool,
     mode_hint_ms: u32,
+    modifier_tap_ms: u32,
     log_touch: bool,
     record_trace_path: Option<PathBuf>,
     xkb_keymap_path: Option<PathBuf>,
@@ -204,6 +212,7 @@ impl Default for Config {
             debug_alpha: env_u8("TOUCHDECK_DEBUG_ALPHA", 0),
             debug_draw: env_bool("TOUCHDECK_DEBUG_DRAW", false),
             mode_hint_ms: env_u32("TOUCHDECK_MODE_HINT_MS", 400),
+            modifier_tap_ms: env_u32("TOUCHDECK_MODIFIER_TAP_MS", 40),
             log_touch: env_bool("TOUCHDECK_LOG_TOUCH", false),
             record_trace_path: env::var_os("TOUCHDECK_RECORD_TRACE").map(PathBuf::from),
             xkb_keymap_path: env::var_os("TOUCHDECK_XKB_KEYMAP").map(PathBuf::from),
@@ -2105,6 +2114,8 @@ impl App {
             .context("write virtual keyboard keymap")?;
         file.flush().context("flush virtual keyboard keymap")?;
         keyboard.keymap(1, file.as_fd(), keymap_bytes.len() as u32);
+        keyboard.modifiers(0, 0, 0, 0);
+        self.modifier_mask = 0;
 
         self.virtual_keyboard = Some(keyboard);
         self.virtual_keyboard_keymap = Some(file);
@@ -2608,19 +2619,20 @@ impl App {
     }
 
     fn send_key(&mut self, key: u32) {
-        let Some(keyboard) = self.virtual_keyboard.as_ref() else {
+        let Some(keyboard) = self.virtual_keyboard.clone() else {
             eprintln!("touchdeck: virtual keyboard unavailable; ignored key {key}");
             return;
         };
 
         let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
+        let release_time = time.saturating_add(self.key_tap_gap_ms(key));
         eprintln!("touchdeck: key {key}");
-        keyboard.key(time, key, 1);
-        keyboard.key(time.saturating_add(1), key, 0);
+        self.emit_key_state(&keyboard, time, key, true);
+        self.emit_key_state(&keyboard, release_time, key, false);
     }
 
     fn send_key_sequence(&mut self, sequence: &[KeyChord]) {
-        let Some(keyboard) = self.virtual_keyboard.as_ref() else {
+        let Some(keyboard) = self.virtual_keyboard.clone() else {
             eprintln!("touchdeck: virtual keyboard unavailable; ignored key sequence {sequence:?}");
             return;
         };
@@ -2629,11 +2641,14 @@ impl App {
         eprintln!("touchdeck: key sequence {sequence:?}");
         for chord in sequence {
             for key in &chord.keys {
-                keyboard.key(time, *key, 1);
+                self.emit_key_state(&keyboard, time, *key, true);
                 time = time.saturating_add(1);
             }
+            if chord.keys.len() == 1 {
+                time = time.saturating_add(self.key_tap_gap_ms(chord.keys[0]));
+            }
             for key in chord.keys.iter().rev() {
-                keyboard.key(time, *key, 0);
+                self.emit_key_state(&keyboard, time, *key, false);
                 time = time.saturating_add(1);
             }
         }
@@ -2653,13 +2668,42 @@ impl App {
     }
 
     fn send_key_state(&mut self, key: u32, pressed: bool) {
-        let Some(keyboard) = self.virtual_keyboard.as_ref() else {
+        let Some(keyboard) = self.virtual_keyboard.clone() else {
             eprintln!("touchdeck: virtual keyboard unavailable; ignored key state {key}");
             return;
         };
 
         let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
+        self.emit_key_state(&keyboard, time, key, pressed);
+    }
+
+    fn emit_key_state(
+        &mut self,
+        keyboard: &zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+        time: u32,
+        key: u32,
+        pressed: bool,
+    ) {
         keyboard.key(time, key, if pressed { 1 } else { 0 });
+
+        let Some(mask) = modifier_mask_for_key(key) else {
+            return;
+        };
+
+        if pressed {
+            self.modifier_mask |= mask;
+        } else {
+            self.modifier_mask &= !mask;
+        }
+        keyboard.modifiers(self.modifier_mask, 0, 0, 0);
+    }
+
+    fn key_tap_gap_ms(&self, key: u32) -> u32 {
+        if modifier_mask_for_key(key).is_some() {
+            self.config.modifier_tap_ms.max(1)
+        } else {
+            1
+        }
     }
 
     fn record_trace(&mut self, event: TraceEvent) {
@@ -4036,6 +4080,16 @@ fn uppercase_letter_label(key: u32) -> Option<&'static str> {
     }
 }
 
+fn modifier_mask_for_key(key: u32) -> Option<u32> {
+    match key {
+        KEY_LEFTSHIFT => Some(XKB_MOD_SHIFT),
+        KEY_LEFTCTRL => Some(XKB_MOD_CONTROL),
+        KEY_LEFTALT => Some(XKB_MOD_ALT),
+        KEY_LEFTMETA => Some(XKB_MOD_SUPER),
+        _ => None,
+    }
+}
+
 fn key_code_label(key: u32) -> Option<&'static str> {
     match key {
         KEY_LEFTCTRL => Some("CTRL"),
@@ -5055,6 +5109,7 @@ mod tests {
             debug_alpha: 0,
             debug_draw: false,
             mode_hint_ms: 700,
+            modifier_tap_ms: 40,
             log_touch: false,
             record_trace_path: None,
             xkb_keymap_path: None,
