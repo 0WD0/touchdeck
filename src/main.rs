@@ -765,7 +765,6 @@ impl Default for SlotRegistry {
             },
         };
         registry.insert_slot("left_bottom", left_bottom_rect(), SlotRole::Zone, true, Some("NIRI"));
-        registry.insert_slot("right_bottom", right_bottom_rect(), SlotRole::Zone, true, Some("KEY"));
         registry.insert_slot("bottom_edge", bottom_edge_rect(), SlotRole::GestureArea, true, Some("TEXT"));
         registry.insert_slot("top_left", top_left_rect(), SlotRole::Zone, true, Some("EXIT"));
         registry.insert_slot(
@@ -1490,7 +1489,7 @@ fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
             ("key_g", "%"),
             ("key_h", "^"),
             ("key_j", "&"),
-            ("key_k", "*"),
+            ("key_k", "<up>"),
             ("key_l", "_"),
             ("key_z", "`"),
             ("key_x", "-"),
@@ -1503,7 +1502,7 @@ fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
             ("key_del", "DELETE"),
             ("key_ret", "C-RET"),
         ],
-        &[("key_j", "<down>"), ("key_spc", "ESC")],
+        &[("key_j", "<down>"), ("key_k", "*"), ("key_spc", "ESC")],
         &[
             ("key_h", "<left>"),
             ("key_spc", "DEL"),
@@ -3230,16 +3229,6 @@ impl Engine {
         }
     }
 
-    fn take_current_gesture(&mut self) -> Gesture {
-        let finished = std::mem::take(&mut self.finished);
-        let max_active = self.max_active;
-        self.max_active = 0;
-        Gesture {
-            finished,
-            max_active,
-        }
-    }
-
     fn release_held_keys_for(&mut self, hold_id: i32) -> Vec<EngineEffect> {
         let mut effects = Vec::new();
         let mut remaining = Vec::new();
@@ -3351,15 +3340,6 @@ fn left_bottom_rect() -> RectNorm {
         x0: 0.00,
         y0: 0.82,
         x1: 0.18,
-        y1: 1.00,
-    }
-}
-
-fn right_bottom_rect() -> RectNorm {
-    RectNorm {
-        x0: 0.82,
-        y0: 0.82,
-        x1: 1.00,
         y1: 1.00,
     }
 }
@@ -5130,7 +5110,7 @@ mod tests {
 [[bindings]]
 mode = "base"
 layer = "base"
-trigger = { type = "swipe", target = "right_bottom", direction = "left" }
+trigger = { type = "swipe", target = "left_bottom", direction = "left" }
 behavior = { type = "key", key = "DEL" }
 "#;
         let file_config: FileConfig = toml::from_str(source).unwrap();
@@ -5146,7 +5126,7 @@ behavior = { type = "key", key = "DEL" }
         assert_eq!(
             binding.trigger,
             Trigger::Swipe {
-                target: named_target("right_bottom").unwrap(),
+                target: named_target("left_bottom").unwrap(),
                 fingers: 1,
                 direction: SwipeDirection::Left,
                 min_px: None,
@@ -5312,7 +5292,7 @@ key_c = "<left>"
 [[bindings]]
 mode = "base"
 layer = "base"
-trigger = { type = "tap", target = "right_bottom" }
+trigger = { type = "tap", target = "left_bottom" }
 behavior = { type = "key", key = "C-x C-s" }
 "#;
         let file_config: FileConfig = toml::from_str(source).unwrap();
@@ -5414,7 +5394,7 @@ behavior = { type = "key", key = "C-x C-s" }
                 mode: Mode::Base,
                 layer: Layer::Base,
                 trigger: Trigger::Tap {
-                    target: named_target("right_bottom").unwrap(),
+                    target: named_target("left_bottom").unwrap(),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -5426,7 +5406,7 @@ behavior = { type = "key", key = "C-x C-s" }
                 mode: Mode::Base,
                 layer: Layer::Niri,
                 trigger: Trigger::Tap {
-                    target: named_target("right_bottom").unwrap(),
+                    target: named_target("left_bottom").unwrap(),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -5437,7 +5417,7 @@ behavior = { type = "key", key = "C-x C-s" }
         ];
 
         engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut Vec::new(), &config, None);
-        engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
+        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![KeyChord { keys: vec![KEY_ENTER] }])));
@@ -5454,7 +5434,7 @@ behavior = { type = "key", key = "C-x C-s" }
                 mode: Mode::Base,
                 layer: Layer::Base,
                 trigger: Trigger::Tap {
-                    target: named_target("right_bottom").unwrap(),
+                    target: named_target("left_bottom").unwrap(),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -5466,7 +5446,7 @@ behavior = { type = "key", key = "C-x C-s" }
                 mode: Mode::Base,
                 layer: Layer::Niri,
                 trigger: Trigger::Tap {
-                    target: named_target("right_bottom").unwrap(),
+                    target: named_target("left_bottom").unwrap(),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -5477,7 +5457,7 @@ behavior = { type = "key", key = "C-x C-s" }
         ];
 
         engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut Vec::new(), &config, None);
-        engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
+        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![KeyChord { keys: vec![KEY_SPACE] }])));
@@ -5496,7 +5476,7 @@ steps = [
 [[bindings]]
 mode = "base"
 layer = "base"
-trigger = { type = "tap", target = "right_bottom" }
+trigger = { type = "tap", target = "left_bottom" }
 behavior = { type = "macro", macro = "copy" }
 "#;
         let file_config: FileConfig = toml::from_str(source).unwrap();

@@ -1,5 +1,5 @@
-# Example structured keymap for touchdeck-prototype.
-# Set TOUCHDECK_CONFIG=/home/disk/Projects/touchdeck-prototype/touchdeck.example.toml
+# Example structured keymap for touchdeck.
+# Set TOUCHDECK_CONFIG=/home/disk/Projects/touchdeck/touchdeck.example.toml
 # or copy this to ./touchdeck.toml before running.
 
 [layout]
@@ -69,7 +69,7 @@ key_f = "$"
 key_g = "%"
 key_h = "^"
 key_j = "&"
-key_k = "*"
+key_k = "<up>"
 key_l = "_"
 key_z = "`"
 key_x = "-"
@@ -84,6 +84,7 @@ key_ret = "C-RET"
 
 [keyboard.maps.swipe_down]
 key_j = "<down>"
+key_k = "*"
 key_spc = "ESC"
 
 [keyboard.maps.swipe_left]
@@ -178,33 +179,6 @@ layer = "base"
 trigger = { type = "tap", target = "top_left" }
 behavior = { type = "exit" }
 
-# Layer examples.
-
-[[bindings]]
-mode = "base"
-layer = "base"
-trigger = { type = "hold", target = "center", min_ms = 220 }
-behavior = { type = "layer_momentary", layer = "niri" }
-
-# Let right-bottom tap fall through to the base layer while the niri layer is active.
-[[bindings]]
-mode = "base"
-layer = "niri"
-trigger = { type = "tap", target = "right_bottom" }
-behavior = { type = "transparent" }
-
-[[bindings]]
-mode = "base"
-layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "left" }
-behavior = { type = "niri", action = "focus-column-left" }
-
-[[bindings]]
-mode = "base"
-layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "right" }
-behavior = { type = "niri", action = "focus-column-right" }
-
 # Niri locked bindings. These override the built-in default niri gestures when matched.
 
 [[bindings]]
@@ -218,3 +192,15 @@ mode = "niri_locked"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "right" }
 behavior = { type = "niri", action = "focus-column-right" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "up" }
+behavior = { type = "niri", action = "focus-workspace-up" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "down" }
+behavior = { type = "niri", action = "focus-workspace-down" }

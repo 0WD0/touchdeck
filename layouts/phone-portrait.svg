@@ -15,18 +15,6 @@
       rx="36" />
 
     <rect
-      id="right_bottom"
-      data-td-slot="right_bottom"
-      data-td-role="zone"
-      data-td-capture="true"
-      data-td-label="KEY"
-      x="820"
-      y="1968"
-      width="180"
-      height="432"
-      rx="36" />
-
-    <rect
       id="bottom_edge"
       data-td-slot="bottom_edge"
       data-td-role="gesture-area"
