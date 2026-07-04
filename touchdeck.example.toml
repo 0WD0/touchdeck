@@ -44,6 +44,7 @@ key_esc = "ESC"
 key_spc = "SPC"
 key_del = "DEL"
 key_ret = "RET"
+key_shift = "<leftshift>"
 
 [keyboard.maps.hold]
 key_shift = "<leftshift>"

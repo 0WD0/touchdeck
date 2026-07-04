@@ -1482,6 +1482,7 @@ fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
             ("key_spc", "SPC"),
             ("key_del", "DEL"),
             ("key_ret", "RET"),
+            ("key_shift", "<leftshift>"),
         ],
         &[
             ("key_q", "1"),
