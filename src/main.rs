@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -98,7 +98,7 @@ struct App {
     touch: Option<wl_touch::WlTouch>,
     surface: Option<wl_surface::WlSurface>,
     layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
-    buffers: Vec<BufferBacking>,
+    buffers: VecDeque<BufferBacking>,
     config: Config,
     width: u32,
     height: u32,
@@ -125,7 +125,7 @@ impl Default for App {
             touch: None,
             surface: None,
             layer_surface: None,
-            buffers: Vec::new(),
+            buffers: VecDeque::new(),
             config,
             width: 0,
             height: 0,
@@ -2151,12 +2151,16 @@ impl App {
         surface.damage_buffer(0, 0, width as i32, height as i32);
         surface.commit();
 
-        self.buffers.push(BufferBacking {
+        self.buffers.push_back(BufferBacking {
             _file: file,
             _mmap: mmap,
             _pool: pool,
             _buffer: buffer,
         });
+
+        while self.buffers.len() > 2 {
+            self.buffers.pop_front();
+        }
 
         Ok(())
     }
