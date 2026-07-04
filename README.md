@@ -49,6 +49,10 @@ not define slot geometry.
 svg = "layouts/phone-portrait.svg"
 ```
 
+The checked-in phone portrait layout is not a physical-keyboard clone. It keeps
+the central screen relatively open and places key slots in lower left/right
+thumb clusters, with a larger bottom space/control row.
+
 SVG layout v1 reads only `<rect>` elements with `data-td-slot`:
 
 ```xml
@@ -115,11 +119,14 @@ Text keycap labels are laid out as gesture hints:
 - Right edge: swipe right binding
 - Small lower-left hint: hold binding, when present
 
-The built-in text keyboard follows the current Charybdis keymap direction:
+The built-in text keyboard is phone-first:
 
 - tap: alphabetic QWERTY keys plus `ESC`, `SPC`, `DEL`, `RET`
-- swipe up: numbers and common symbol positions inspired by the Charybdis space layer
-- directional swipes on selected home/special keys: arrows and word movement
+- swipe up: numbers and common symbols, optimized for quick thumb flicks
+- directional swipes on selected home/special keys: arrows, word movement, backspace, enter, escape, and tab
+
+The Charybdis/ZMK config is used as a reference for high-frequency actions and
+Emacs-style habits, not as the visual or ergonomic layout template.
 
 Default niri gestures still exist when no configured binding matches in niri modes:
 
@@ -200,20 +207,23 @@ key_spc = "SPC"
 key_del = "DEL"
 
 [keyboard.maps.swipe_up]
-key_q = "`"
-key_w = "1"
+key_q = "1"
+key_w = "2"
 key_a = "!"
 key_s = "@"
-key_k = "<up>"
+key_spc = "TAB"
 
 [keyboard.maps.swipe_left]
 key_h = "<left>"
+key_spc = "DEL"
 
 [keyboard.maps.swipe_down]
 key_j = "<down>"
+key_spc = "ESC"
 
 [keyboard.maps.swipe_right]
 key_l = "<right>"
+key_spc = "RET"
 ```
 
 Map fields:

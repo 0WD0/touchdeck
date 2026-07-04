@@ -2,17 +2,17 @@
   viewBox="0 0 1000 2400"
   xmlns="http://www.w3.org/2000/svg">
   <g id="touchdeck-layout" data-td-layout="phone-portrait">
-    <rect
-      id="left_bottom"
-      data-td-slot="left_bottom"
-      data-td-role="zone"
-      data-td-capture="true"
-      data-td-label="NIRI"
-      x="0"
-      y="1968"
-      width="180"
-      height="432"
-      rx="36" />
+  <rect
+    id="key_ret"
+    data-td-slot="key_ret"
+    data-td-role="key"
+    data-td-capture="true"
+    data-td-label="RET"
+    x="780"
+    y="2100"
+    width="180"
+    height="180"
+    rx="28" />
 
     <rect
       id="right_bottom"

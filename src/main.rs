@@ -850,9 +850,12 @@ impl Default for SlotRegistry {
 
 fn insert_default_key_slots(registry: &mut SlotRegistry) {
     let rows = [
-        (0.020, 0.540, 0.092, &["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"][..]),
-        (0.080, 0.650, 0.092, &["a", "s", "d", "f", "g", "h", "j", "k", "l"][..]),
-        (0.140, 0.760, 0.092, &["z", "x", "c", "v", "b", "n", "m"][..]),
+        (0.030, 0.560, 0.088, &["q", "w", "e", "r", "t"][..]),
+        (0.540, 0.560, 0.088, &["y", "u", "i", "o", "p"][..]),
+        (0.052, 0.665, 0.088, &["a", "s", "d", "f", "g"][..]),
+        (0.562, 0.665, 0.088, &["h", "j", "k", "l"][..]),
+        (0.074, 0.770, 0.088, &["z", "x", "c", "v", "b"][..]),
+        (0.606, 0.770, 0.088, &["n", "m"][..]),
     ];
 
     for (x0, y0, step, keys) in rows {
@@ -863,8 +866,8 @@ fn insert_default_key_slots(registry: &mut SlotRegistry) {
                 RectNorm {
                     x0,
                     y0,
-                    x1: x0 + 0.080,
-                    y1: y0 + 0.092,
+                    x1: x0 + 0.078,
+                    y1: y0 + 0.083,
                 },
                 SlotRole::Key,
                 true,
@@ -874,10 +877,10 @@ fn insert_default_key_slots(registry: &mut SlotRegistry) {
     }
 
     for (slot, label, x0, y0, w, h) in [
-        ("key_esc", "ESC", 0.080, 0.870, 0.150, 0.063),
-        ("key_spc", "SPC", 0.260, 0.870, 0.300, 0.063),
-        ("key_del", "DEL", 0.590, 0.870, 0.150, 0.063),
-        ("key_ret", "RET", 0.770, 0.870, 0.150, 0.063),
+        ("key_esc", "ESC", 0.040, 0.875, 0.130, 0.075),
+        ("key_spc", "SPC", 0.200, 0.875, 0.360, 0.075),
+        ("key_del", "DEL", 0.590, 0.875, 0.160, 0.075),
+        ("key_ret", "RET", 0.780, 0.875, 0.180, 0.075),
     ] {
         registry.insert_slot(
             slot,
@@ -1505,37 +1508,49 @@ fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
             ("key_ret", "RET"),
         ],
         &[
-            ("key_q", "`"),
-            ("key_w", "1"),
-            ("key_e", "2"),
-            ("key_r", "3"),
-            ("key_t", "#"),
-            ("key_y", "^"),
-            ("key_u", "&"),
-            ("key_i", "-"),
-            ("key_o", "="),
-            ("key_p", "*"),
+            ("key_q", "1"),
+            ("key_w", "2"),
+            ("key_e", "3"),
+            ("key_r", "4"),
+            ("key_t", "5"),
+            ("key_y", "6"),
+            ("key_u", "7"),
+            ("key_i", "8"),
+            ("key_o", "9"),
+            ("key_p", "0"),
             ("key_a", "!"),
-            ("key_s", "4"),
-            ("key_d", "5"),
-            ("key_f", "6"),
-            ("key_g", "$"),
-            ("key_h", "["),
-            ("key_j", "("),
-            ("key_k", "<up>"),
-            ("key_l", "]"),
-            ("key_z", "@"),
-            ("key_x", "7"),
-            ("key_c", "8"),
-            ("key_v", "9"),
-            ("key_b", "%"),
-            ("key_n", ","),
-            ("key_m", "."),
-            ("key_spc", "0"),
+            ("key_s", "@"),
+            ("key_d", "#"),
+            ("key_f", "$"),
+            ("key_g", "%"),
+            ("key_h", "^"),
+            ("key_j", "&"),
+            ("key_k", "*"),
+            ("key_l", "_"),
+            ("key_z", "`"),
+            ("key_x", "-"),
+            ("key_c", "="),
+            ("key_v", "["),
+            ("key_b", "]"),
+            ("key_n", "/"),
+            ("key_m", "?"),
+            ("key_spc", "TAB"),
+            ("key_del", "DELETE"),
+            ("key_ret", "C-RET"),
         ],
-        &[("key_j", "<down>")],
-        &[("key_h", "<left>"), ("key_del", "C-<left>")],
-        &[("key_l", "<right>"), ("key_ret", "C-<right>")],
+        &[("key_j", "<down>"), ("key_spc", "ESC")],
+        &[
+            ("key_h", "<left>"),
+            ("key_spc", "DEL"),
+            ("key_del", "M-DEL"),
+            ("key_ret", "C-<left>"),
+        ],
+        &[
+            ("key_l", "<right>"),
+            ("key_spc", "RET"),
+            ("key_del", "C-<right>"),
+            ("key_ret", "C-<right>"),
+        ],
     )]
 }
 
@@ -5136,7 +5151,7 @@ key_c = "<left>"
                 "key_q",
                 SlotGestureKind::SwipeUp
             ),
-            Some("`".to_string())
+            Some("1".to_string())
         );
         assert_eq!(
             keymap.slot_gesture_label(
@@ -5162,7 +5177,7 @@ key_c = "<left>"
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![
-            KeyChord { keys: vec![KEY_GRAVE] },
+            KeyChord { keys: vec![KEY_1] },
         ])));
     }
 
@@ -5273,7 +5288,7 @@ behavior = { type = "key", key = "C-x C-s" }
         );
         assert_eq!(
             maps[0].swipe_up.as_ref().unwrap().get("key_w").map(String::as_str),
-            Some("1")
+            Some("2")
         );
         assert_eq!(
             maps[0].swipe_left.as_ref().unwrap().get("key_h").map(String::as_str),
