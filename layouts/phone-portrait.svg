@@ -80,7 +80,7 @@
       data-td-capture="true"
       data-td-label="q"
       x="30"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -92,7 +92,7 @@
       data-td-capture="true"
       data-td-label="w"
       x="118"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -104,7 +104,7 @@
       data-td-capture="true"
       data-td-label="e"
       x="206"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -116,7 +116,7 @@
       data-td-capture="true"
       data-td-label="r"
       x="294"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -128,7 +128,7 @@
       data-td-capture="true"
       data-td-label="t"
       x="382"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -140,7 +140,7 @@
       data-td-capture="true"
       data-td-label="y"
       x="540"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -152,7 +152,7 @@
       data-td-capture="true"
       data-td-label="u"
       x="628"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -164,7 +164,7 @@
       data-td-capture="true"
       data-td-label="i"
       x="716"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -176,7 +176,7 @@
       data-td-capture="true"
       data-td-label="o"
       x="804"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -188,7 +188,7 @@
       data-td-capture="true"
       data-td-label="p"
       x="892"
-      y="1344"
+      y="1248"
       width="78"
       height="200"
       rx="28" />
@@ -200,7 +200,7 @@
       data-td-capture="true"
       data-td-label="a"
       x="52"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -212,7 +212,7 @@
       data-td-capture="true"
       data-td-label="s"
       x="140"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -224,7 +224,7 @@
       data-td-capture="true"
       data-td-label="d"
       x="228"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -236,7 +236,7 @@
       data-td-capture="true"
       data-td-label="f"
       x="316"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -248,7 +248,7 @@
       data-td-capture="true"
       data-td-label="g"
       x="404"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -260,7 +260,7 @@
       data-td-capture="true"
       data-td-label="h"
       x="562"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -272,7 +272,7 @@
       data-td-capture="true"
       data-td-label="j"
       x="650"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -284,7 +284,7 @@
       data-td-capture="true"
       data-td-label="k"
       x="738"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -296,7 +296,7 @@
       data-td-capture="true"
       data-td-label="l"
       x="826"
-      y="1596"
+      y="1500"
       width="78"
       height="200"
       rx="28" />
@@ -308,7 +308,7 @@
       data-td-capture="true"
       data-td-label="z"
       x="74"
-      y="1848"
+      y="1752"
       width="78"
       height="200"
       rx="28" />
@@ -320,7 +320,7 @@
       data-td-capture="true"
       data-td-label="x"
       x="162"
-      y="1848"
+      y="1752"
       width="78"
       height="200"
       rx="28" />
@@ -332,7 +332,7 @@
       data-td-capture="true"
       data-td-label="c"
       x="250"
-      y="1848"
+      y="1752"
       width="78"
       height="200"
       rx="28" />
@@ -344,7 +344,7 @@
       data-td-capture="true"
       data-td-label="v"
       x="338"
-      y="1848"
+      y="1752"
       width="78"
       height="200"
       rx="28" />
@@ -356,7 +356,7 @@
       data-td-capture="true"
       data-td-label="b"
       x="426"
-      y="1848"
+      y="1752"
       width="78"
       height="200"
       rx="28" />
@@ -368,7 +368,7 @@
       data-td-capture="true"
       data-td-label="n"
       x="606"
-      y="1848"
+      y="1752"
       width="78"
       height="200"
       rx="28" />
@@ -380,7 +380,7 @@
       data-td-capture="true"
       data-td-label="m"
       x="694"
-      y="1848"
+      y="1752"
       width="78"
       height="200"
       rx="28" />
@@ -392,7 +392,7 @@
       data-td-capture="true"
       data-td-label="ESC"
       x="40"
-      y="2100"
+      y="1956"
       width="130"
       height="180"
       rx="28" />
@@ -404,7 +404,7 @@
       data-td-capture="true"
       data-td-label="SPC"
       x="200"
-      y="2100"
+      y="1956"
       width="360"
       height="180"
       rx="28" />
@@ -416,7 +416,7 @@
       data-td-capture="true"
       data-td-label="DEL"
       x="590"
-      y="2100"
+      y="1956"
       width="160"
       height="180"
       rx="28" />
@@ -428,7 +428,7 @@
       data-td-capture="true"
       data-td-label="RET"
       x="780"
-      y="2100"
+      y="1956"
       width="180"
       height="180"
       rx="28" />
