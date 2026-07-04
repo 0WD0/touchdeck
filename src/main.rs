@@ -2234,21 +2234,30 @@ impl App {
         }
 
         for slot in self.config.slots.slots() {
-            fill_rect(mmap, width, height, slot.rect.to_px(size), slot_debug_color(slot));
+            let rect = slot.rect.to_px(size);
+            let color = slot_debug_color(slot);
+            if slot.capture || slot.role == SlotRole::Key {
+                fill_rect(mmap, width, height, rect, color);
+            } else {
+                draw_rect_frame(mmap, width, height, rect, color);
+            }
+
             let label = self
                 .config
                 .keymap
                 .slot_label(self.engine.mode, &self.engine.layer_stack, &slot.id)
                 .or_else(|| slot.label.clone());
             if let Some(label) = label {
-                let mut label_mark = slot.rect.to_px(size);
+                let mut label_mark = rect;
                 label_mark.h = label_mark.h.min(8);
-                fill_rect(mmap, width, height, label_mark, [0xff, 0xff, 0xff, 0x70]);
+                if slot.capture || slot.role == SlotRole::Key {
+                    fill_rect(mmap, width, height, label_mark, [0xff, 0xff, 0xff, 0x70]);
+                }
                 draw_label_in_rect(
                     mmap,
                     width,
                     height,
-                    slot.rect.to_px(size),
+                    rect,
                     &label,
                     [0xff, 0xff, 0xff, 0xd0],
                 );
@@ -2262,13 +2271,14 @@ impl App {
             .iter()
             .filter(|binding| binding.mode == self.engine.mode && self.engine.layer_stack.contains(&binding.layer))
         {
-            fill_rect(
-                mmap,
-                width,
-                height,
-                binding.trigger.rect().to_px(size),
-                active_binding_debug_color(binding.trigger.target()),
-            );
+            let target = binding.trigger.target();
+            let rect = binding.trigger.rect().to_px(size);
+            let color = active_binding_debug_color(target);
+            if target.capture {
+                fill_rect(mmap, width, height, rect, color);
+            } else {
+                draw_rect_frame(mmap, width, height, rect, color);
+            }
         }
 
         if let Some(candidate) = &self.engine.hold_candidate {
