@@ -1291,6 +1291,7 @@ impl Trigger {
 enum Behavior {
     Niri(NiriAction),
     KeySequence(Vec<KeyChord>),
+    KeyHold(u32),
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
     ModeToggle(Mode),
@@ -1312,6 +1313,7 @@ impl Behavior {
         match self {
             Self::Niri(action) => GestureAction::Niri(action),
             Self::KeySequence(sequence) => GestureAction::KeySequence(sequence),
+            Self::KeyHold(key) => GestureAction::KeyHold(key),
             Self::Sequence(steps) => GestureAction::Sequence(steps),
             Self::ModeSet(mode) => GestureAction::ModeSet(mode),
             Self::ModeToggle(mode) => GestureAction::ModeToggle(mode),
@@ -1465,10 +1467,6 @@ fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
             ("key_b", "b"),
             ("key_n", "n"),
             ("key_m", "m"),
-            ("key_shift", "<leftshift>"),
-            ("key_ctrl", "<leftctrl>"),
-            ("key_alt", "<leftalt>"),
-            ("key_super", "<leftmeta>"),
             ("key_esc", "ESC"),
             ("key_spc", "SPC"),
             ("key_del", "DEL"),
@@ -1532,7 +1530,12 @@ fn keyboard_map_config(
         mode: Some("text".to_string()),
         layer: Some("base".to_string()),
         tap: Some(key_pairs(tap)),
-        hold: None,
+        hold: Some(key_pairs(&[
+            ("key_shift", "<leftshift>"),
+            ("key_ctrl", "<leftctrl>"),
+            ("key_alt", "<leftalt>"),
+            ("key_super", "<leftmeta>"),
+        ])),
         swipe_up: Some(key_pairs(swipe_up)),
         swipe_down: Some(key_pairs(swipe_down)),
         swipe_left: Some(key_pairs(swipe_left)),
@@ -1582,19 +1585,15 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
             priority,
             consume,
         )?;
-        expand_keyboard_gesture_map(
+        expand_keyboard_hold_map(
             &mut bindings,
             slots,
             map_index,
             mode,
             layer,
-            "hold",
             map.hold,
-            |target| Trigger::Hold {
-                target,
-                fingers,
-                min_ms: hold_ms,
-            },
+            fingers,
+            hold_ms,
             priority,
             consume,
         )?;
@@ -1673,6 +1672,45 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
     }
 
     Ok(bindings)
+}
+
+fn expand_keyboard_hold_map(
+    bindings: &mut Vec<Binding>,
+    slots: &SlotRegistry,
+    map_index: usize,
+    mode: Mode,
+    layer: Layer,
+    keys: Option<HashMap<String, String>>,
+    fingers: usize,
+    hold_ms: Option<u32>,
+    priority: i32,
+    consume: bool,
+) -> Result<()> {
+    let Some(keys) = keys else {
+        return Ok(());
+    };
+
+    for (slot_id, key) in keys {
+        let target = slots
+            .get(&slot_id)
+            .with_context(|| format!("keyboard map {map_index} hold target {slot_id}"))?;
+        bindings.push(Binding {
+            mode,
+            layer,
+            trigger: Trigger::Hold {
+                target,
+                fingers,
+                min_ms: hold_ms,
+            },
+            behavior: Behavior::KeyHold(parse_single_emacs_key(&key).with_context(|| {
+                format!("parse keyboard map {map_index} hold key for {slot_id} ({key})")
+            })?),
+            priority,
+            consume,
+        });
+    }
+
+    Ok(())
 }
 
 fn expand_keyboard_gesture_map<F>(
@@ -1808,6 +1846,12 @@ struct MomentaryState {
     return_layer_stack: Vec<Layer>,
 }
 
+#[derive(Clone, Debug)]
+struct HeldKeyState {
+    hold_id: i32,
+    key: u32,
+}
+
 #[derive(Debug)]
 struct Engine {
     mode: Mode,
@@ -1817,6 +1861,7 @@ struct Engine {
     max_active: usize,
     hold_candidate: Option<HoldCandidate>,
     momentary: Option<MomentaryState>,
+    held_keys: Vec<HeldKeyState>,
     last_tap: Option<TapRecord>,
     last_action: Option<String>,
 }
@@ -1831,6 +1876,7 @@ impl Default for Engine {
             max_active: 0,
             hold_candidate: None,
             momentary: None,
+            held_keys: Vec::new(),
             last_tap: None,
             last_action: None,
         }
@@ -1848,6 +1894,8 @@ enum EngineEffect {
 enum GestureAction {
     Niri(NiriAction),
     KeySequence(Vec<KeyChord>),
+    KeyHold(u32),
+    KeyRelease(u32),
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
     ModeToggle(Mode),
@@ -2431,6 +2479,12 @@ impl App {
             GestureAction::KeySequence(sequence) => {
                 self.send_key_sequence(&sequence);
             }
+            GestureAction::KeyHold(key) => {
+                self.send_key_state(key, true);
+            }
+            GestureAction::KeyRelease(key) => {
+                self.send_key_state(key, false);
+            }
             GestureAction::Sequence(steps) => {
                 self.run_action_steps(&steps);
             }
@@ -2715,13 +2769,21 @@ impl Engine {
         };
         contact.last_time = time;
 
+        let was_held_key = self.held_keys.iter().any(|held| held.hold_id == id);
+        let mut held_key_effects = self.release_held_keys_for(id);
+        if was_held_key {
+            held_key_effects.extend(redraw_if_debug(config));
+            self.max_active = self.active.len();
+            return held_key_effects;
+        }
+
         if self.mode != Mode::NiriMomentary
             && self
                 .momentary
                 .as_ref()
                 .is_some_and(|momentary| momentary.hold_id == id)
         {
-            let mut effects = Vec::new();
+            let mut effects = std::mem::take(&mut held_key_effects);
             self.return_from_momentary(&mut effects, config);
             self.reset_contacts();
             return effects;
@@ -2730,29 +2792,38 @@ impl Engine {
         match self.mode {
             Mode::Base | Mode::Text => {
                 self.finished.push(contact);
-                if self.active.is_empty() {
-                    let gesture = self.take_current_gesture();
-                    self.resolve_base_gesture(now_ms, gesture, config, size)
+                if self.active_non_hold_count() == 0 {
+                    let gesture = self.take_finished_non_hold_gesture();
+                    let mut effects = std::mem::take(&mut held_key_effects);
+                    effects.extend(self.resolve_base_gesture(now_ms, gesture, config, size));
+                    effects
                 } else {
-                    redraw_if_debug(config)
+                    held_key_effects.extend(redraw_if_debug(config));
+                    held_key_effects
                 }
             }
             Mode::Passthrough => {
                 self.finished.push(contact);
-                if self.active.is_empty() {
-                    let gesture = self.take_current_gesture();
-                    self.resolve_passthrough_gesture(now_ms, gesture, config, size)
+                if self.active_non_hold_count() == 0 {
+                    let gesture = self.take_finished_non_hold_gesture();
+                    let mut effects = std::mem::take(&mut held_key_effects);
+                    effects.extend(self.resolve_passthrough_gesture(now_ms, gesture, config, size));
+                    effects
                 } else {
-                    redraw_if_debug(config)
+                    held_key_effects.extend(redraw_if_debug(config));
+                    held_key_effects
                 }
             }
             Mode::NiriLocked => {
                 self.finished.push(contact);
-                if self.active.is_empty() {
-                    let gesture = self.take_current_gesture();
-                    self.resolve_locked_gesture(now_ms, gesture, config, size)
+                if self.active_non_hold_count() == 0 {
+                    let gesture = self.take_finished_non_hold_gesture();
+                    let mut effects = std::mem::take(&mut held_key_effects);
+                    effects.extend(self.resolve_locked_gesture(now_ms, gesture, config, size));
+                    effects
                 } else {
-                    redraw_if_debug(config)
+                    held_key_effects.extend(redraw_if_debug(config));
+                    held_key_effects
                 }
             }
             Mode::NiriMomentary => {
@@ -2761,7 +2832,7 @@ impl Engine {
                     .as_ref()
                     .is_some_and(|momentary| momentary.hold_id == id)
                 {
-                    let mut effects = Vec::new();
+                    let mut effects = std::mem::take(&mut held_key_effects);
                     let gesture = Gesture {
                         finished: vec![contact],
                         max_active: 1,
@@ -2775,12 +2846,14 @@ impl Engine {
                     self.finished.push(contact);
                     if self.active_non_hold_count() == 0 {
                         let gesture = self.take_finished_non_hold_gesture();
-                        let mut effects = redraw_if_debug(config);
+                        let mut effects = std::mem::take(&mut held_key_effects);
+                        effects.extend(redraw_if_debug(config));
                         let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
                         self.perform_action(action, &mut effects, config, None);
                         effects
                     } else {
-                        redraw_if_debug(config)
+                        held_key_effects.extend(redraw_if_debug(config));
+                        held_key_effects
                     }
                 }
             }
@@ -2788,7 +2861,7 @@ impl Engine {
     }
 
     fn handle_cancel(&mut self, config: &Config) -> Vec<EngineEffect> {
-        let mut effects = Vec::new();
+        let mut effects = self.release_all_held_keys();
         self.set_mode(Mode::Base, &mut effects, config);
         self.reset_contacts();
         effects.push(EngineEffect::Redraw);
@@ -2916,8 +2989,21 @@ impl Engine {
         hold_id: Option<i32>,
     ) {
         match action {
-            GestureAction::Niri(_) | GestureAction::KeySequence(_) | GestureAction::Exit => {
+            GestureAction::Niri(_)
+            | GestureAction::KeySequence(_)
+            | GestureAction::KeyRelease(_)
+            | GestureAction::Exit => {
                 effects.push(EngineEffect::Dispatch(action));
+            }
+            GestureAction::KeyHold(key) => {
+                if let Some(hold_id) = hold_id {
+                    self.held_keys.push(HeldKeyState { hold_id, key });
+                    effects.push(EngineEffect::Dispatch(GestureAction::KeyHold(key)));
+                } else {
+                    effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(vec![KeyChord {
+                        keys: vec![key],
+                    }])));
+                }
             }
             GestureAction::Sequence(_) => {
                 effects.push(EngineEffect::Dispatch(action));
@@ -3105,25 +3191,38 @@ fn layer_name(layer: Layer) -> &'static str {
 }
 
 impl Engine {
+    fn hold_contact_ids(&self) -> Vec<i32> {
+        let mut ids = self
+            .held_keys
+            .iter()
+            .map(|held| held.hold_id)
+            .collect::<Vec<_>>();
+        if let Some(momentary) = &self.momentary {
+            ids.push(momentary.hold_id);
+        }
+        ids
+    }
+
     fn active_non_hold_count(&self) -> usize {
-        let hold_id = self.momentary.as_ref().map(|momentary| momentary.hold_id);
+        let hold_ids = self.hold_contact_ids();
         self.active
             .keys()
-            .filter(|id| Some(**id) != hold_id)
+            .filter(|id| !hold_ids.contains(*id))
             .count()
     }
 
     fn take_finished_non_hold_gesture(&mut self) -> Gesture {
-        let hold_id = self.momentary.as_ref().map(|momentary| momentary.hold_id);
+        let hold_ids = self.hold_contact_ids();
         let mut finished = Vec::new();
         self.finished.retain(|contact| {
-            if Some(contact.id) == hold_id {
+            if hold_ids.contains(&contact.id) {
                 true
             } else {
                 finished.push(contact.clone());
                 false
             }
         });
+        self.max_active = self.active.len();
 
         Gesture {
             max_active: finished.len().max(1),
@@ -3139,6 +3238,27 @@ impl Engine {
             finished,
             max_active,
         }
+    }
+
+    fn release_held_keys_for(&mut self, hold_id: i32) -> Vec<EngineEffect> {
+        let mut effects = Vec::new();
+        let mut remaining = Vec::new();
+        for held in self.held_keys.drain(..) {
+            if held.hold_id == hold_id {
+                effects.push(EngineEffect::Dispatch(GestureAction::KeyRelease(held.key)));
+            } else {
+                remaining.push(held);
+            }
+        }
+        self.held_keys = remaining;
+        effects
+    }
+
+    fn release_all_held_keys(&mut self) -> Vec<EngineEffect> {
+        self.held_keys
+            .drain(..)
+            .map(|held| EngineEffect::Dispatch(GestureAction::KeyRelease(held.key)))
+            .collect()
     }
 
     fn reset_contacts(&mut self) {
@@ -3358,6 +3478,13 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
                 .or(value.keys)
                 .ok_or_else(|| anyhow!("key behavior is missing key/keys"))?;
             Ok(Behavior::KeySequence(parse_emacs_key_sequence(&keys)?))
+        }
+        "key_hold" | "hold_key" | "modifier" => {
+            let key = value
+                .key
+                .or(value.keys)
+                .ok_or_else(|| anyhow!("key_hold behavior is missing key/keys"))?;
+            Ok(Behavior::KeyHold(parse_single_emacs_key(&key)?))
         }
         "sequence" => Ok(Behavior::Sequence(parse_action_steps(
             value
@@ -3681,6 +3808,7 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
         Behavior::Niri(action) => Some(action.as_str().to_string()),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),
+        Behavior::KeyHold(key) => key_code_label(*key).map(|label| format!("{}+", label)),
         Behavior::Sequence(_) => Some("macro".to_string()),
         Behavior::ModeSet(mode) => Some(mode_name(*mode).to_string()),
         Behavior::ModeToggle(mode) => Some(format!("{}*", mode_name(*mode))),
@@ -4217,24 +4345,33 @@ fn draw_keycap_labels(
         );
     }
 
-    if let Some(label) = hold {
-        draw_label_in_rect_limited(
-            buf,
-            width,
-            height,
-            RectPx {
-                x: rect.x + margin,
-                y: rect.y + rect.h - hint_h - margin,
-                w: side_w,
-                h: hint_h,
-            },
-            label,
-            hold_color,
-            2,
-        );
+    if tap.is_some() {
+        if let Some(label) = hold {
+            draw_label_in_rect_limited(
+                buf,
+                width,
+                height,
+                RectPx {
+                    x: rect.x + margin,
+                    y: rect.y + rect.h - hint_h - margin,
+                    w: side_w,
+                    h: hint_h,
+                },
+                label,
+                hold_color,
+                2,
+            );
+        }
     }
 
-    if let Some(label) = tap {
+    let center_label = tap.or(hold);
+    let center_color = if tap.is_some() {
+        center_color
+    } else {
+        hold_color
+    };
+
+    if let Some(label) = center_label {
         draw_label_in_rect_limited(
             buf,
             width,

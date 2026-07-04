@@ -40,14 +40,16 @@ key_v = "v"
 key_b = "b"
 key_n = "n"
 key_m = "m"
-key_shift = "<leftshift>"
-key_ctrl = "<leftctrl>"
-key_alt = "<leftalt>"
-key_super = "<leftmeta>"
 key_esc = "ESC"
 key_spc = "SPC"
 key_del = "DEL"
 key_ret = "RET"
+
+[keyboard.maps.hold]
+key_shift = "<leftshift>"
+key_ctrl = "<leftctrl>"
+key_alt = "<leftalt>"
+key_super = "<leftmeta>"
 
 [keyboard.maps.swipe_up]
 key_q = "1"

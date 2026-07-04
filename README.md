@@ -116,6 +116,7 @@ Text keycap labels are laid out as gesture hints:
 The built-in text keyboard is phone-first:
 
 - tap: alphabetic QWERTY keys plus `ESC`, `SPC`, `DEL`, `RET`
+- hold: upper modifier keys `SFT`, `CTL`, `ALT`, `SUP` stay pressed until touch release
 - swipe up: numbers and common symbols, optimized for quick thumb flicks
 - directional swipes on selected home/special keys: arrows, word movement, backspace, enter, escape, and tab
 
@@ -200,6 +201,12 @@ key_w = "w"
 key_spc = "SPC"
 key_del = "DEL"
 
+[keyboard.maps.hold]
+key_shift = "<leftshift>"
+key_ctrl = "<leftctrl>"
+key_alt = "<leftalt>"
+key_super = "<leftmeta>"
+
 [keyboard.maps.swipe_up]
 key_q = "1"
 key_w = "2"
@@ -225,7 +232,7 @@ Map fields:
 - `mode`: defaults to `text`
 - `layer`: defaults to `base`
 - `tap`: optional table mapping slot IDs to Emacs-style key tokens or key sequences
-- `hold`: optional table mapping slot IDs to keys; uses `hold_ms`
+- `hold`: optional table mapping slot IDs to held keys; sends key down at hold threshold and key up on touch release; uses `hold_ms`
 - `swipe_up`: optional table mapping slot IDs to keys
 - `swipe_down`: optional table mapping slot IDs to keys
 - `swipe_left`: optional table mapping slot IDs to keys
@@ -252,6 +259,8 @@ key_k = "<up>"
 [keyboard.maps.swipe_right]
 key_l = "<right>"
 ```
+
+Upper modifier slots are intended to be held with one thumb/finger while another key is tapped or flicked.
 
 The same slot can be bound to multiple gestures. The main keycap label remains
 the active tap binding; directional gesture bindings are rendered as edge hints.
