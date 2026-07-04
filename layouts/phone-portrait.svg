@@ -73,6 +73,55 @@
       height="2400"
       rx="0" />
 
+
+    <rect
+      id="key_shift"
+      data-td-slot="key_shift"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="SFT"
+      x="40"
+      y="1080"
+      width="130"
+      height="144"
+      rx="28" />
+
+    <rect
+      id="key_ctrl"
+      data-td-slot="key_ctrl"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="CTL"
+      x="200"
+      y="1080"
+      width="130"
+      height="144"
+      rx="28" />
+
+    <rect
+      id="key_alt"
+      data-td-slot="key_alt"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="ALT"
+      x="670"
+      y="1080"
+      width="130"
+      height="144"
+      rx="28" />
+
+    <rect
+      id="key_super"
+      data-td-slot="key_super"
+      data-td-role="key"
+      data-td-capture="true"
+      data-td-label="SUP"
+      x="830"
+      y="1080"
+      width="130"
+      height="144"
+      rx="28" />
+
     <rect
       id="key_q"
       data-td-slot="key_q"

@@ -838,6 +838,10 @@ fn insert_default_key_slots(registry: &mut SlotRegistry) {
     }
 
     for (slot, label, x0, y0, w, h) in [
+        ("key_shift", "SFT", 0.040, 0.450, 0.130, 0.060),
+        ("key_ctrl", "CTL", 0.200, 0.450, 0.130, 0.060),
+        ("key_alt", "ALT", 0.670, 0.450, 0.130, 0.060),
+        ("key_super", "SUP", 0.830, 0.450, 0.130, 0.060),
         ("key_esc", "ESC", 0.040, 0.815, 0.130, 0.075),
         ("key_spc", "SPC", 0.200, 0.815, 0.360, 0.075),
         ("key_del", "DEL", 0.590, 0.815, 0.160, 0.075),
@@ -1461,6 +1465,10 @@ fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
             ("key_b", "b"),
             ("key_n", "n"),
             ("key_m", "m"),
+            ("key_shift", "<leftshift>"),
+            ("key_ctrl", "<leftctrl>"),
+            ("key_alt", "<leftalt>"),
+            ("key_super", "<leftmeta>"),
             ("key_esc", "ESC"),
             ("key_spc", "SPC"),
             ("key_del", "DEL"),
