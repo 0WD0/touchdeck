@@ -106,6 +106,8 @@ struct App {
     capture_policy: CapturePolicy,
     trace: Option<TraceRecorder>,
     started_at: Option<Instant>,
+    mode_hint: Option<ModeHint>,
+    last_presented_mode: Mode,
     running: bool,
 }
 
@@ -133,6 +135,8 @@ impl Default for App {
             engine,
             trace: None,
             started_at: None,
+            mode_hint: None,
+            last_presented_mode: Mode::Base,
             running: false,
         }
     }
@@ -144,6 +148,12 @@ struct BufferBacking {
     _pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
     released: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ModeHint {
+    mode: Mode,
+    until_ms: u64,
 }
 
 #[derive(Clone)]
@@ -163,6 +173,7 @@ struct Config {
     swipe_threshold_max: f64,
     debug_alpha: u8,
     debug_draw: bool,
+    mode_hint_ms: u32,
     log_touch: bool,
     record_trace_path: Option<PathBuf>,
     xkb_keymap_path: Option<PathBuf>,
@@ -192,6 +203,7 @@ impl Default for Config {
             swipe_threshold_max: env_f64("TOUCHDECK_SWIPE_THRESHOLD_MAX", 140.0),
             debug_alpha: env_u8("TOUCHDECK_DEBUG_ALPHA", 0),
             debug_draw: env_bool("TOUCHDECK_DEBUG_DRAW", false),
+            mode_hint_ms: env_u32("TOUCHDECK_MODE_HINT_MS", 400),
             log_touch: env_bool("TOUCHDECK_LOG_TOUCH", false),
             record_trace_path: env::var_os("TOUCHDECK_RECORD_TRACE").map(PathBuf::from),
             xkb_keymap_path: env::var_os("TOUCHDECK_XKB_KEYMAP").map(PathBuf::from),
@@ -2008,6 +2020,8 @@ fn main() -> Result<()> {
         let config = app.config.clone();
         let effects = app.engine.process_timers(now_ms, &config, size);
         app.apply_effects_or_stop(&qh, effects);
+        app.expire_mode_hint(&qh)
+            .context("expire mode hint overlay")?;
 
         if !app.running {
             break;
@@ -2112,10 +2126,30 @@ impl App {
     }
 
     fn poll_timeout(&self) -> Option<Duration> {
-        self.engine.next_timer_deadline_ms().map(|deadline_ms| {
+        let mut deadline = self.engine.next_timer_deadline_ms();
+        if let Some(hint) = self.mode_hint {
+            deadline = Some(deadline.map_or(hint.until_ms, |deadline| deadline.min(hint.until_ms)));
+        }
+
+        deadline.map(|deadline_ms| {
             let now_ms = self.now_ms();
             Duration::from_millis(deadline_ms.saturating_sub(now_ms))
         })
+    }
+
+    fn expire_mode_hint(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        let expired = self
+            .mode_hint
+            .is_some_and(|hint| self.now_ms() >= hint.until_ms);
+        if !expired {
+            return Ok(());
+        }
+
+        self.mode_hint = None;
+        if self.width != 0 && self.height != 0 {
+            self.attach_overlay_buffer(qh, self.width, self.height)?;
+        }
+        Ok(())
     }
 
     fn attach_overlay_buffer(
@@ -2193,6 +2227,7 @@ impl App {
                 },
                 [0x00, 0x80, 0xff, self.config.debug_alpha],
             );
+            self.render_mode_hint(mmap, width, height);
             return;
         }
 
@@ -2200,6 +2235,7 @@ impl App {
             if self.engine.mode == Mode::Text {
                 self.render_text_keyboard(mmap, width, height, size);
             }
+            self.render_mode_hint(mmap, width, height);
             return;
         }
 
@@ -2317,6 +2353,56 @@ impl App {
                 [0xff, 0xff, 0xff, 0xd0],
             );
         }
+
+        self.render_mode_hint(mmap, width, height);
+    }
+
+    fn render_mode_hint(&self, mmap: &mut [u8], width: u32, height: u32) {
+        let Some(hint) = self.mode_hint else {
+            return;
+        };
+        if self.now_ms() >= hint.until_ms {
+            return;
+        }
+
+        let max_w = (width as i32 - 32).max(80);
+        let toast_w = ((width as i32 * 52) / 100).clamp(80, max_w);
+        let toast_h = ((height as i32 * 45) / 1000).clamp(40, 90).min(height as i32);
+        let x = (width as i32 - toast_w) / 2;
+        let y = ((height as i32 * 70) / 1000)
+            .max(16)
+            .min((height as i32 - toast_h).max(0));
+        let rect = RectPx {
+            x,
+            y,
+            w: toast_w,
+            h: toast_h,
+        };
+        let color = mode_hint_color(hint.mode);
+
+        fill_rect(mmap, width, height, rect, [0x08, 0x12, 0x18, 0xd8]);
+        draw_rect_frame(mmap, width, height, rect, color);
+        fill_rect(
+            mmap,
+            width,
+            height,
+            RectPx {
+                x: rect.x,
+                y: rect.y + rect.h - 6,
+                w: rect.w,
+                h: 6,
+            },
+            color,
+        );
+        draw_label_in_rect_limited(
+            mmap,
+            width,
+            height,
+            rect,
+            mode_hint_label(hint.mode),
+            [0xff, 0xff, 0xff, 0xf0],
+            8,
+        );
     }
 
     fn render_text_keyboard(&self, mmap: &mut [u8], width: u32, height: u32, size: SurfaceSize) {
@@ -2445,6 +2531,7 @@ impl App {
             let result = match effect {
                 EngineEffect::SetCapture(policy) => {
                     self.capture_policy = policy.clone();
+                    self.present_mode_hint_if_changed();
                     self.apply_input_region(qh, &policy)
                 }
                 EngineEffect::Dispatch(action) => {
@@ -2466,6 +2553,24 @@ impl App {
                 break;
             }
         }
+    }
+
+    fn present_mode_hint_if_changed(&mut self) {
+        let mode = self.engine.mode;
+        if self.last_presented_mode == mode {
+            return;
+        }
+
+        self.last_presented_mode = mode;
+        if self.config.mode_hint_ms == 0 {
+            self.mode_hint = None;
+            return;
+        }
+
+        self.mode_hint = Some(ModeHint {
+            mode,
+            until_ms: self.now_ms() + u64::from(self.config.mode_hint_ms),
+        });
     }
 
     fn dispatch_action(&mut self, action: GestureAction) {
@@ -3179,6 +3284,26 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::NiriMomentary => "niri-momentary",
         Mode::NiriLocked => "niri-locked",
         Mode::Passthrough => "passthrough",
+    }
+}
+
+fn mode_hint_label(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Base => "BASE",
+        Mode::Text => "TEXT",
+        Mode::NiriMomentary => "NIRI",
+        Mode::NiriLocked => "NIRI-LK",
+        Mode::Passthrough => "PASS",
+    }
+}
+
+fn mode_hint_color(mode: Mode) -> [u8; 4] {
+    match mode {
+        Mode::Base => [0xff, 0xff, 0xff, 0xb0],
+        Mode::Text => [0x40, 0xff, 0xb0, 0xd0],
+        Mode::NiriMomentary => [0x30, 0xa0, 0xff, 0xd0],
+        Mode::NiriLocked => [0xff, 0x90, 0x30, 0xd8],
+        Mode::Passthrough => [0xb0, 0xb0, 0xb0, 0xc0],
     }
 }
 
@@ -4928,6 +5053,7 @@ mod tests {
             swipe_threshold_max: 140.0,
             debug_alpha: 0,
             debug_draw: false,
+            mode_hint_ms: 700,
             log_touch: false,
             record_trace_path: None,
             xkb_keymap_path: None,
