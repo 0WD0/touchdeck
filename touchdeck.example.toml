@@ -185,13 +185,13 @@ behavior = { type = "exit" }
 mode = "niri_locked"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "left" }
-behavior = { type = "niri", action = "focus-workspace-up" }
+behavior = { type = "niri", action = "focus-workspace-down" }
 
 [[bindings]]
 mode = "niri_locked"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "right" }
-behavior = { type = "niri", action = "focus-workspace-down" }
+behavior = { type = "niri", action = "focus-workspace-up" }
 
 [[bindings]]
 mode = "niri_locked"

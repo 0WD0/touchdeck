@@ -188,8 +188,8 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         let mut config = Self {
-            action_swipe_left: env_niri_action("TOUCHDECK_ACTION_SWIPE_LEFT", "focus-workspace-up"),
-            action_swipe_right: env_niri_action("TOUCHDECK_ACTION_SWIPE_RIGHT", "focus-workspace-down"),
+            action_swipe_left: env_niri_action("TOUCHDECK_ACTION_SWIPE_LEFT", "focus-workspace-down"),
+            action_swipe_right: env_niri_action("TOUCHDECK_ACTION_SWIPE_RIGHT", "focus-workspace-up"),
             action_swipe_up: env_niri_action("TOUCHDECK_ACTION_SWIPE_UP", "focus-column-right"),
             action_swipe_down: env_niri_action("TOUCHDECK_ACTION_SWIPE_DOWN", "focus-column-left"),
             action_two_finger_tap: env_niri_action("TOUCHDECK_ACTION_TWO_FINGER_TAP", "toggle-overview"),
@@ -5038,8 +5038,8 @@ mod tests {
 
     fn test_config() -> Config {
         Config {
-            action_swipe_left: Some(NiriAction::FocusWorkspaceUp),
-            action_swipe_right: Some(NiriAction::FocusWorkspaceDown),
+            action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
+            action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
             action_swipe_up: Some(NiriAction::FocusColumnRight),
             action_swipe_down: Some(NiriAction::FocusColumnLeft),
             action_two_finger_tap: Some(NiriAction::ToggleOverview),
