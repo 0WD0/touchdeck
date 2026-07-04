@@ -100,7 +100,9 @@ struct App {
 
 impl Default for App {
     fn default() -> Self {
+        let config = Config::default();
         let engine = Engine::default();
+        let capture_policy = engine.capture_policy(&config);
         Self {
             compositor: None,
             shm: None,
@@ -113,10 +115,10 @@ impl Default for App {
             surface: None,
             layer_surface: None,
             buffers: Vec::new(),
-            config: Config::default(),
+            config,
             width: 0,
             height: 0,
-            capture_policy: engine.capture_policy(),
+            capture_policy,
             engine,
             trace: None,
             started_at: None,
@@ -623,6 +625,31 @@ impl Keymap {
 
         None
     }
+
+    fn capture_rects(&self, mode: Mode, layers: &[Layer]) -> Vec<RectNorm> {
+        let mut rects = Vec::new();
+        let mut seen = Vec::new();
+
+        for binding in &self.bindings {
+            if binding.mode != mode
+                || !layers.contains(&binding.layer)
+                || !binding.consume
+                || binding.behavior.is_transparent()
+            {
+                continue;
+            }
+
+            let target = binding.trigger.target();
+            if !target.capture || seen.iter().any(|id: &String| id == &target.id) {
+                continue;
+            }
+
+            seen.push(target.id.clone());
+            rects.push(target.rect);
+        }
+
+        rects
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -667,6 +694,9 @@ enum SlotRole {
 struct SlotTarget {
     id: String,
     rect: RectNorm,
+    role: SlotRole,
+    capture: bool,
+    label: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -862,8 +892,15 @@ impl SlotRegistry {
             .map(|slot| SlotTarget {
                 id: slot.id.clone(),
                 rect: slot.rect,
+                role: slot.role,
+                capture: slot.capture,
+                label: slot.label.clone(),
             })
             .ok_or_else(|| anyhow!("unknown slot {name}"))
+    }
+
+    fn slots(&self) -> impl Iterator<Item = &Slot> {
+        self.layout.slots.values()
     }
 
     fn insert_slot(
@@ -1003,23 +1040,22 @@ enum Trigger {
 }
 
 impl Trigger {
-    fn rect(&self) -> RectNorm {
+    fn target(&self) -> &SlotTarget {
         match self {
             Self::Tap { target, .. }
             | Self::DoubleTap { target, .. }
             | Self::Hold { target, .. }
-            | Self::Swipe { target, .. } => target.rect,
+            | Self::Swipe { target, .. } => target,
         }
+    }
+
+    fn rect(&self) -> RectNorm {
+        self.target().rect
     }
 
     #[allow(dead_code)]
     fn target_id(&self) -> &str {
-        match self {
-            Self::Tap { target, .. }
-            | Self::DoubleTap { target, .. }
-            | Self::Hold { target, .. }
-            | Self::Swipe { target, .. } => &target.id,
-        }
+        &self.target().id
     }
 
     fn max_ms(&self) -> Option<u32> {
@@ -1364,6 +1400,9 @@ fn expand_keyboard_row(row: KeyboardRowFileConfig, row_index: usize) -> Result<V
                 x1: key_x1,
                 y1,
             },
+            role: SlotRole::Key,
+            capture: true,
+            label: Some(key.clone()),
         };
         bindings.push(Binding {
             mode,
@@ -1454,19 +1493,6 @@ struct RectPx {
 struct SurfaceSize {
     width: u32,
     height: u32,
-}
-
-#[derive(Clone, Copy)]
-struct ControlZone {
-    kind: ZoneKind,
-    rect: RectNorm,
-}
-
-#[derive(Clone, Copy)]
-enum ZoneKind {
-    TopLeft,
-    LeftBottom,
-    BottomEdge,
 }
 
 #[derive(Clone, Debug)]
@@ -1892,31 +1918,29 @@ impl App {
             ),
         }
 
-        for zone in control_zones() {
-            let color = match zone.kind {
-                ZoneKind::TopLeft => [0x20, 0x20, 0xff, 0x90],
-                ZoneKind::LeftBottom => [0x20, 0xff, 0x80, 0x90],
-                ZoneKind::BottomEdge => [0xff, 0x90, 0x20, 0x70],
-            };
-            fill_rect(mmap, width, height, zone.rect.to_px(size), color);
+        for slot in self.config.slots.slots() {
+            fill_rect(mmap, width, height, slot.rect.to_px(size), slot_debug_color(slot));
+            if slot.label.is_some() {
+                let mut label_mark = slot.rect.to_px(size);
+                label_mark.h = label_mark.h.min(8);
+                fill_rect(mmap, width, height, label_mark, [0xff, 0xff, 0xff, 0x70]);
+            }
         }
 
-        if self.engine.mode == Mode::Text {
-            for binding in self
-                .config
-                .keymap
-                .bindings
-                .iter()
-                .filter(|binding| binding.mode == Mode::Text && self.engine.layer_stack.contains(&binding.layer))
-            {
-                fill_rect(
-                    mmap,
-                    width,
-                    height,
-                    binding.trigger.rect().to_px(size),
-                    [0x10, 0xff, 0xb0, 0x48],
-                );
-            }
+        for binding in self
+            .config
+            .keymap
+            .bindings
+            .iter()
+            .filter(|binding| binding.mode == self.engine.mode && self.engine.layer_stack.contains(&binding.layer))
+        {
+            fill_rect(
+                mmap,
+                width,
+                height,
+                binding.trigger.rect().to_px(size),
+                active_binding_debug_color(binding.trigger.target()),
+            );
         }
 
         if let Some(candidate) = &self.engine.hold_candidate {
@@ -2166,16 +2190,17 @@ impl App {
             eprintln!("touchdeck: touch cancel");
         }
 
-        let effects = self.engine.handle_cancel();
+        let config = self.config.clone();
+        let effects = self.engine.handle_cancel(&config);
         self.apply_effects_or_stop(qh, effects);
     }
 }
 
 impl Engine {
-    fn capture_policy(&self) -> CapturePolicy {
+    fn capture_policy(&self, config: &Config) -> CapturePolicy {
         match self.mode {
             Mode::Passthrough => {
-                CapturePolicy::Zones(control_zones().iter().map(|zone| zone.rect).collect())
+                CapturePolicy::Zones(config.keymap.capture_rects(self.mode, &self.layer_stack))
             }
             Mode::NiriMomentary | Mode::NiriLocked => CapturePolicy::Fullscreen,
             Mode::Base | Mode::Text => CapturePolicy::Fullscreen,
@@ -2222,7 +2247,7 @@ impl Engine {
         self.last_tap = None;
 
         let mut effects = Vec::new();
-        self.perform_action(action, &mut effects, Some(candidate.id));
+        self.perform_action(action, &mut effects, config, Some(candidate.id));
         effects
     }
 
@@ -2314,7 +2339,7 @@ impl Engine {
                 .is_some_and(|momentary| momentary.hold_id == id)
         {
             let mut effects = Vec::new();
-            self.return_from_momentary(&mut effects);
+            self.return_from_momentary(&mut effects, config);
             self.reset_contacts();
             return effects;
         }
@@ -2359,8 +2384,8 @@ impl Engine {
                         max_active: 1,
                     };
                     let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
-                    self.perform_action(action, &mut effects, None);
-                    self.return_from_momentary(&mut effects);
+                    self.perform_action(action, &mut effects, config, None);
+                    self.return_from_momentary(&mut effects, config);
                     self.reset_contacts();
                     effects
                 } else {
@@ -2369,7 +2394,7 @@ impl Engine {
                         let gesture = self.take_finished_non_hold_gesture();
                         let mut effects = redraw_if_debug(config);
                         let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
-                        self.perform_action(action, &mut effects, None);
+                        self.perform_action(action, &mut effects, config, None);
                         effects
                     } else {
                         redraw_if_debug(config)
@@ -2379,9 +2404,9 @@ impl Engine {
         }
     }
 
-    fn handle_cancel(&mut self) -> Vec<EngineEffect> {
+    fn handle_cancel(&mut self, config: &Config) -> Vec<EngineEffect> {
         let mut effects = Vec::new();
-        self.set_mode(Mode::Base, &mut effects);
+        self.set_mode(Mode::Base, &mut effects, config);
         self.reset_contacts();
         effects.push(EngineEffect::Redraw);
         effects
@@ -2410,7 +2435,7 @@ impl Engine {
                 ..
             } => self.handle_motion(id, wl_time, x, y, config),
             TraceEvent::Up { t, wl_time, id } => self.handle_up(t, wl_time, id, config, size),
-            TraceEvent::Cancel { .. } => self.handle_cancel(),
+            TraceEvent::Cancel { .. } => self.handle_cancel(config),
         }
     }
 
@@ -2429,7 +2454,7 @@ impl Engine {
         }
 
         let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
-        self.perform_action(action, &mut effects, None);
+        self.perform_action(action, &mut effects, config, None);
 
         effects
     }
@@ -2449,7 +2474,7 @@ impl Engine {
         }
 
         let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
-        self.perform_action(action, &mut effects, None);
+        self.perform_action(action, &mut effects, config, None);
 
         effects
     }
@@ -2469,7 +2494,7 @@ impl Engine {
         }
 
         let action = self.resolve_configured_or_niri(&gesture, config, size, now_ms);
-        self.perform_action(action, &mut effects, None);
+        self.perform_action(action, &mut effects, config, None);
         effects
     }
 
@@ -2504,6 +2529,7 @@ impl Engine {
         &mut self,
         action: GestureAction,
         effects: &mut Vec<EngineEffect>,
+        config: &Config,
         hold_id: Option<i32>,
     ) {
         match action {
@@ -2514,20 +2540,20 @@ impl Engine {
                 effects.push(EngineEffect::Dispatch(action));
             }
             GestureAction::ModeSet(mode) => {
-                self.set_mode(mode, effects);
+                self.set_mode(mode, effects, config);
             }
             GestureAction::ModeToggle(mode) => {
                 if self.mode == mode {
-                    self.set_mode(Mode::Base, effects);
+                    self.set_mode(Mode::Base, effects, config);
                 } else {
-                    self.set_mode(mode, effects);
+                    self.set_mode(mode, effects, config);
                 }
             }
             GestureAction::ModeMomentary(mode) => {
                 if let Some(hold_id) = hold_id {
-                    self.start_momentary(hold_id, Some(mode), None, effects);
+                    self.start_momentary(hold_id, Some(mode), None, effects, config);
                 } else {
-                    self.set_mode(mode, effects);
+                    self.set_mode(mode, effects, config);
                 }
             }
             GestureAction::LayerSet(layer) => {
@@ -2542,7 +2568,7 @@ impl Engine {
             }
             GestureAction::LayerMomentary(layer) => {
                 if let Some(hold_id) = hold_id {
-                    self.start_momentary(hold_id, None, Some(layer), effects);
+                    self.start_momentary(hold_id, None, Some(layer), effects, config);
                 } else {
                     self.set_layer(layer, effects);
                 }
@@ -2557,6 +2583,7 @@ impl Engine {
         mode: Option<Mode>,
         layer: Option<Layer>,
         effects: &mut Vec<EngineEffect>,
+        config: &Config,
     ) {
         self.momentary = Some(MomentaryState {
             hold_id,
@@ -2576,11 +2603,11 @@ impl Engine {
         }
 
         self.last_tap = None;
-        effects.push(EngineEffect::SetCapture(self.capture_policy()));
+        effects.push(EngineEffect::SetCapture(self.capture_policy(config)));
         effects.push(EngineEffect::Redraw);
     }
 
-    fn return_from_momentary(&mut self, effects: &mut Vec<EngineEffect>) {
+    fn return_from_momentary(&mut self, effects: &mut Vec<EngineEffect>, config: &Config) {
         let Some(momentary) = self.momentary.take() else {
             return;
         };
@@ -2594,18 +2621,18 @@ impl Engine {
             mode_name(self.mode),
             layer_name(self.current_layer())
         );
-        effects.push(EngineEffect::SetCapture(self.capture_policy()));
+        effects.push(EngineEffect::SetCapture(self.capture_policy(config)));
         effects.push(EngineEffect::Redraw);
     }
 
-    fn set_mode(&mut self, mode: Mode, effects: &mut Vec<EngineEffect>) {
+    fn set_mode(&mut self, mode: Mode, effects: &mut Vec<EngineEffect>, config: &Config) {
         self.mode = mode;
         self.layer_stack = default_layer_stack_for_mode(mode);
         self.momentary = None;
         self.hold_candidate = None;
         self.last_tap = None;
         eprintln!("touchdeck: mode {}", mode_name(mode));
-        effects.push(EngineEffect::SetCapture(self.capture_policy()));
+        effects.push(EngineEffect::SetCapture(self.capture_policy(config)));
         effects.push(EngineEffect::Redraw);
     }
 
@@ -2809,23 +2836,6 @@ fn send_niri_action_socket(action: NiriAction) -> Result<()> {
 
 fn niri_action_request_json(action: NiriAction) -> &'static str {
     action.ipc_request_json()
-}
-
-fn control_zones() -> [ControlZone; 3] {
-    [
-        ControlZone {
-            kind: ZoneKind::LeftBottom,
-            rect: left_bottom_rect(),
-        },
-        ControlZone {
-            kind: ZoneKind::BottomEdge,
-            rect: bottom_edge_rect(),
-        },
-        ControlZone {
-            kind: ZoneKind::TopLeft,
-            rect: top_left_rect(),
-        },
-    ]
 }
 
 #[cfg(test)]
@@ -3418,6 +3428,26 @@ fn is_top_left_corner(contact: &Contact, config: &Config, size: SurfaceSize) -> 
     rect.contains_px(size, contact.start_x, contact.start_y)
 }
 
+fn slot_debug_color(slot: &Slot) -> [u8; 4] {
+    match (slot.capture, slot.role) {
+        (true, SlotRole::Key) => [0x10, 0xff, 0xb0, 0x38],
+        (true, SlotRole::Zone) => [0x20, 0xff, 0x80, 0x50],
+        (true, SlotRole::GestureArea) => [0xff, 0x90, 0x20, 0x44],
+        (false, SlotRole::Key) => [0x80, 0x80, 0x80, 0x24],
+        (false, SlotRole::Zone) => [0x80, 0x80, 0x80, 0x20],
+        (false, SlotRole::GestureArea) => [0x60, 0x60, 0x60, 0x18],
+    }
+}
+
+fn active_binding_debug_color(target: &SlotTarget) -> [u8; 4] {
+    match (target.capture, target.role) {
+        (true, SlotRole::Key) => [0x10, 0xff, 0xb0, 0x70],
+        (true, SlotRole::Zone) => [0xe0, 0xff, 0x50, 0x70],
+        (true, SlotRole::GestureArea) => [0xff, 0xb0, 0x20, 0x70],
+        (false, _) => [0xff, 0xff, 0xff, 0x36],
+    }
+}
+
 fn fill_rect(buf: &mut [u8], width: u32, height: u32, rect: RectPx, color: [u8; 4]) {
     let x0 = rect.x.max(0).min(width as i32) as u32;
     let y0 = rect.y.max(0).min(height as i32) as u32;
@@ -3772,7 +3802,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for App {
                 layer_surface.ack_configure(serial);
                 state.width = width;
                 state.height = height;
-                state.capture_policy = state.engine.capture_policy();
+                state.capture_policy = state.engine.capture_policy(&state.config);
                 if let Err(err) = state.attach_overlay_buffer(qh, width, height) {
                     eprintln!("touchdeck: failed to attach overlay buffer: {err:?}");
                     state.running = false;
@@ -3897,7 +3927,8 @@ mod tests {
     #[test]
     fn default_mode_uses_fullscreen_capture() {
         let engine = Engine::default();
-        assert_eq!(engine.capture_policy(), CapturePolicy::Fullscreen);
+        let config = test_config();
+        assert_eq!(engine.capture_policy(&config), CapturePolicy::Fullscreen);
     }
 
     #[test]
@@ -3989,7 +4020,7 @@ mod tests {
         let size = test_size();
         let mut engine = Engine::default();
         let mut effects = Vec::new();
-        engine.set_mode(Mode::Text, &mut effects);
+        engine.set_mode(Mode::Text, &mut effects, &config);
 
         engine.handle_down(0, 0, 1, 84.0, 1180.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
@@ -4110,6 +4141,9 @@ behavior = { type = "key", key = "C-x C-s" }
         let target = slots.get("thumb").unwrap();
 
         assert_eq!(target.id, "thumb");
+        assert_eq!(target.role, SlotRole::Key);
+        assert!(target.capture);
+        assert_eq!(target.label.as_deref(), Some("TH"));
         assert_eq!(
             target.rect,
             RectNorm {
@@ -4153,7 +4187,7 @@ behavior = { type = "key", key = "C-x C-s" }
             },
         ];
 
-        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut Vec::new(), None);
+        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut Vec::new(), &config, None);
         engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
@@ -4193,7 +4227,7 @@ behavior = { type = "key", key = "C-x C-s" }
             },
         ];
 
-        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut Vec::new(), None);
+        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut Vec::new(), &config, None);
         engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
@@ -4245,15 +4279,15 @@ behavior = { type = "macro", macro = "copy" }
         let mut engine = Engine::default();
         let mut effects = Vec::new();
 
-        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut effects, None);
+        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut effects, &config, None);
         assert_eq!(engine.current_layer(), Layer::Niri);
         assert_eq!(engine.layer_stack, vec![Layer::Base, Layer::Niri]);
 
-        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut effects, None);
+        engine.perform_action(GestureAction::LayerToggle(Layer::Niri), &mut effects, &config, None);
         assert_eq!(engine.current_layer(), Layer::Base);
         assert_eq!(engine.layer_stack, vec![Layer::Base]);
 
-        assert_eq!(engine.capture_policy(), CapturePolicy::Fullscreen);
+        assert_eq!(engine.capture_policy(&config), CapturePolicy::Fullscreen);
         assert!(effects.contains(&EngineEffect::Redraw));
         assert_eq!(config.hold_ms, 180);
         assert_eq!(size.width, 1000);
@@ -4339,6 +4373,13 @@ behavior = { type = "macro", macro = "copy" }
 
         assert_eq!(engine.mode, Mode::Passthrough);
         assert!(matches!(effects.as_slice(), [.., EngineEffect::SetCapture(CapturePolicy::Zones(_)), EngineEffect::Redraw]));
+        let CapturePolicy::Zones(rects) = engine.capture_policy(&config) else {
+            panic!("passthrough should use zoned capture");
+        };
+        assert!(rects.contains(&named_target("left_bottom").unwrap().rect));
+        assert!(rects.contains(&named_target("bottom_edge").unwrap().rect));
+        assert!(rects.contains(&named_target("top_left").unwrap().rect));
+        assert!(!rects.contains(&named_target("center").unwrap().rect));
 
         engine.handle_down(380, 380, 1, 500.0, 1950.0, &config, size);
         engine.handle_up(430, 430, 1, &config, size);

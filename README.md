@@ -15,7 +15,7 @@ The prototype separates input ownership from application passthrough:
 - `Text`: fullscreen capture for virtual-keyboard text/key output.
 - `NiriMomentary`: fullscreen capture while a configured momentary mode trigger is held.
 - `NiriLocked`: fullscreen capture after a configured lock trigger.
-- `Passthrough`: only small control zones are captured; the rest of the screen passes through to applications.
+- `Passthrough`: only the active binding targets for the current mode/layer are captured; the rest of the screen passes through to applications.
 
 `Passthrough` is a mode, not the default behavior.
 
@@ -74,6 +74,10 @@ Supported SVG slot attributes:
 
 SVG `viewBox` is used to normalize coordinates. `path`, `circle`, transforms,
 and group-level inheritance are not supported yet.
+
+In debug draw mode, slot `role`, `capture`, and `label` metadata are used to
+color slot rectangles and mark labeled slots. Current mode/layer binding targets
+are highlighted on top of the base layout.
 
 ## Built-in bindings
 
