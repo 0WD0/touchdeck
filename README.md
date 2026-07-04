@@ -98,12 +98,6 @@ Mode ownership controls are now represented as default bindings:
 - `text/base`, bottom-edge swipe down: `mode:base`
 - Top-left tap in base, text, passthrough, or niri locked: `exit`
 
-Base keyboard bindings:
-
-- Right-bottom tap: virtual keyboard `Space`
-- Right-bottom swipe left: virtual keyboard `Backspace`
-- Right-bottom swipe right: virtual keyboard `Enter`
-
 Text mode uses key slots defined by the active SVG layout. Config files map
 slot IDs to key behavior with `[[keyboard.maps]]`; geometry stays in SVG.
 `keyboard.maps` supports direct per-slot gestures: tap, hold, and four swipe
@@ -186,8 +180,8 @@ Example binding:
 [[bindings]]
 mode = "base"
 layer = "base"
-trigger = { type = "swipe", target = "right_bottom", direction = "up" }
-behavior = { type = "key", key = "C-c" }
+trigger = { type = "swipe", target = "bottom_edge", direction = "up" }
+behavior = { type = "mode", mode = "text" }
 ```
 
 Keyboard maps generate tap/hold/swipe bindings from existing SVG slots. They do
@@ -304,111 +298,3 @@ Key syntax for `key`, `key_sequence`, and `key_sequence` macro steps follows the
 - Modifiers are parsed in Emacs order: `A-C-H-M-S-s`
 - Current backend maps `C` to left Ctrl, `M`/`A` to left Alt, and `s`/`H` to left Super
 
-Macro definitions:
-
-```toml
-[macros.copy]
-steps = [
-  { type = "key_sequence", keys = "C-c" },
-]
-
-[macros.ctrl_c_manual]
-steps = [
-  { type = "key_down", key = "<leftctrl>" },
-  { type = "tap_key", key = "c" },
-  { type = "key_up", key = "<leftctrl>" },
-]
-```
-
-Supported macro step types:
-
-- `key_down` with one physical key token, for example `<leftctrl>`
-- `key_up` with one physical key token
-- `tap_key` with one physical key token
-- `key_sequence` with Emacs-style `keys`, for example `C-x C-s`
-- `niri` with `action`
-- `delay_ms` with `ms`
-
-Layer fallthrough:
-
-- `transparent` means skip this binding and continue resolving lower layers.
-- `consume = false` on a binding also lets resolution continue instead of using that binding.
-- Top-layer bindings normally override lower-layer bindings.
-
-Supported mode names:
-
-- `base`
-- `text`
-- `passthrough`
-- `niri`
-- `niri_momentary`
-- `niri_locked`
-
-Supported layer names:
-
-- `base`
-- `niri`
-
-## Run
-
-```sh
-cd /home/disk/Projects/touchdeck-prototype
-cargo run --release
-```
-
-Or use the launcher that loads `config.example.env`:
-
-```sh
-sh /home/disk/Projects/touchdeck-prototype/scripts/run.sh
-```
-
-Debug run with visible zones and touch points:
-
-```sh
-sh /home/disk/Projects/touchdeck-prototype/scripts/run-debug.sh
-```
-
-## Check
-
-```sh
-sh /home/disk/Projects/touchdeck-prototype/scripts/check.sh
-```
-
-## Trace recording
-
-Record raw touch events as JSONL:
-
-```sh
-TOUCHDECK_RECORD_TRACE=/tmp/touchdeck-trace.jsonl sh scripts/run-debug.sh
-```
-
-Each line contains a relative timestamp, Wayland touch time, touch id, and
-coordinates. The engine has replay tests built around this same format.
-
-## Manual smoke test checklist
-
-1. Start with `scripts/run-debug.sh`; Base mode should visibly cover the whole overlay in debug mode.
-2. Right-bottom tap should send Space through the virtual keyboard.
-3. Right-bottom swipe left should send Backspace.
-4. Bottom-edge double tap should enter Passthrough; central app touch should pass through only in this mode.
-5. Bottom-edge double tap again should return to Base fullscreen capture.
-6. Hold the left-bottom zone for `TOUCHDECK_HOLD_MS`; niri mode tint should appear.
-7. While holding, one-finger left/right/up/down swipes should control niri.
-8. Releasing the hold finger should return to the previous mode.
-9. Left-bottom double tap should lock niri mode; double tap again should unlock.
-10. A top-left one-finger tap or three-finger tap should exit the prototype.
-11. With `TOUCHDECK_CONFIG=touchdeck.example.toml`, right-bottom swipe up should send `Ctrl+C`.
-
-## niri notes
-
-The overlay does not request a specific `wl_output`; niri will place it on the
-active output. For multi-output setups, map Sunshine's virtual touch device to
-the streamed output in niri config if needed:
-
-```kdl
-input {
-    touch {
-        map-to-output "YOUR-OUTPUT-NAME"
-    }
-}
-```

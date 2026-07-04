@@ -467,46 +467,6 @@ impl Default for Keymap {
                     priority: 0,
                     consume: true,
                 },
-                Binding {
-                    mode: Mode::Base,
-                    layer: Layer::Base,
-                    trigger: Trigger::Tap {
-                        target: slots.get("right_bottom").unwrap(),
-                        fingers: 1,
-                        max_ms: None,
-                    },
-                    behavior: Behavior::Key(KEY_SPACE),
-                    priority: 0,
-                    consume: true,
-                },
-                Binding {
-                    mode: Mode::Base,
-                    layer: Layer::Base,
-                    trigger: Trigger::Swipe {
-                        target: slots.get("right_bottom").unwrap(),
-                        fingers: 1,
-                        direction: SwipeDirection::Left,
-                        min_px: None,
-                        max_ms: None,
-                    },
-                    behavior: Behavior::Key(KEY_BACKSPACE),
-                    priority: 0,
-                    consume: true,
-                },
-                Binding {
-                    mode: Mode::Base,
-                    layer: Layer::Base,
-                    trigger: Trigger::Swipe {
-                        target: slots.get("right_bottom").unwrap(),
-                        fingers: 1,
-                        direction: SwipeDirection::Right,
-                        min_px: None,
-                        max_ms: None,
-                    },
-                    behavior: Behavior::Key(KEY_ENTER),
-                    priority: 0,
-                    consume: true,
-                },
             ];
 
         bindings.extend(expand_keyboard_maps(default_keyboard_maps(), &slots).expect("default keyboard map"));
@@ -4994,18 +4954,6 @@ mod tests {
             resolve_niri_gesture(&gesture, &config, test_size()),
             GestureAction::None
         );
-    }
-
-    #[test]
-    fn default_keymap_right_bottom_tap_sends_space() {
-        let config = test_config();
-        let size = test_size();
-        let mut engine = Engine::default();
-
-        engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
-        let effects = engine.handle_up(80, 80, 1, &config, size);
-
-        assert!(dispatched_actions(&effects).contains(&GestureAction::Key(KEY_SPACE)));
     }
 
     #[test]

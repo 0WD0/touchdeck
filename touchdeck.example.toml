@@ -92,21 +92,6 @@ key_spc = "RET"
 key_del = "C-<right>"
 key_ret = "C-<right>"
 
-# Macros are reusable backend action sequences.
-# key_sequence uses Emacs kbd style; key_down/key_up/tap_key use one physical key token.
-
-[macros.copy]
-steps = [
-  { type = "key_sequence", keys = "C-c" },
-]
-
-[macros.ctrl_c_manual]
-steps = [
-  { type = "key_down", key = "<leftctrl>" },
-  { type = "tap_key", key = "c" },
-  { type = "key_up", key = "<leftctrl>" },
-]
-
 # Mode ownership controls.
 
 [[bindings]]
@@ -186,38 +171,6 @@ mode = "text"
 layer = "base"
 trigger = { type = "tap", target = "top_left" }
 behavior = { type = "exit" }
-
-# Base keyboard output. Keys use Emacs kbd/read-kbd-macro style.
-
-[[bindings]]
-mode = "base"
-layer = "base"
-trigger = { type = "tap", target = "right_bottom" }
-behavior = { type = "key", key = "SPC" }
-
-[[bindings]]
-mode = "base"
-layer = "base"
-trigger = { type = "swipe", target = "right_bottom", direction = "left" }
-behavior = { type = "key", key = "DEL" }
-
-[[bindings]]
-mode = "base"
-layer = "base"
-trigger = { type = "swipe", target = "right_bottom", direction = "right" }
-behavior = { type = "key", key = "RET" }
-
-[[bindings]]
-mode = "base"
-layer = "base"
-trigger = { type = "swipe", target = "right_bottom", direction = "up" }
-behavior = { type = "macro", macro = "copy" }
-
-[[bindings]]
-mode = "base"
-layer = "base"
-trigger = { type = "swipe", target = "right_bottom", direction = "down" }
-behavior = { type = "key_sequence", keys = "C-x C-s" }
 
 # Layer examples.
 
