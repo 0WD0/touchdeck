@@ -36,6 +36,8 @@ const KEY_7: u32 = 8;
 const KEY_8: u32 = 9;
 const KEY_9: u32 = 10;
 const KEY_0: u32 = 11;
+const KEY_MINUS: u32 = 12;
+const KEY_EQUAL: u32 = 13;
 const KEY_BACKSPACE: u32 = 14;
 const KEY_TAB: u32 = 15;
 const KEY_LEFTCTRL: u32 = 29;
@@ -49,6 +51,8 @@ const KEY_U: u32 = 22;
 const KEY_I: u32 = 23;
 const KEY_O: u32 = 24;
 const KEY_P: u32 = 25;
+const KEY_LEFTBRACE: u32 = 26;
+const KEY_RIGHTBRACE: u32 = 27;
 const KEY_ENTER: u32 = 28;
 const KEY_A: u32 = 30;
 const KEY_S: u32 = 31;
@@ -59,7 +63,11 @@ const KEY_H: u32 = 35;
 const KEY_J: u32 = 36;
 const KEY_K: u32 = 37;
 const KEY_L: u32 = 38;
+const KEY_SEMICOLON: u32 = 39;
+const KEY_APOSTROPHE: u32 = 40;
+const KEY_GRAVE: u32 = 41;
 const KEY_Z: u32 = 44;
+const KEY_BACKSLASH: u32 = 43;
 const KEY_LEFTSHIFT: u32 = 42;
 const KEY_X: u32 = 45;
 const KEY_C: u32 = 46;
@@ -67,6 +75,9 @@ const KEY_V: u32 = 47;
 const KEY_B: u32 = 48;
 const KEY_N: u32 = 49;
 const KEY_M: u32 = 50;
+const KEY_COMMA: u32 = 51;
+const KEY_DOT: u32 = 52;
+const KEY_SLASH: u32 = 53;
 const KEY_SPACE: u32 = 57;
 const KEY_LEFTALT: u32 = 56;
 const KEY_LEFT: u32 = 105;
@@ -271,6 +282,8 @@ enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Layer {
     Base,
+    Symbols,
+    Nav,
     Niri,
 }
 
@@ -358,6 +371,30 @@ impl Default for Keymap {
                         max_ms: None,
                     },
                     behavior: Behavior::Exit,
+                    priority: 100,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Text,
+                    layer: Layer::Base,
+                    trigger: Trigger::Hold {
+                        target: slots.get("key_ret").unwrap(),
+                        fingers: 1,
+                        min_ms: Some(180),
+                    },
+                    behavior: Behavior::LayerMomentary(Layer::Symbols),
+                    priority: 100,
+                    consume: true,
+                },
+                Binding {
+                    mode: Mode::Text,
+                    layer: Layer::Base,
+                    trigger: Trigger::Hold {
+                        target: slots.get("key_esc").unwrap(),
+                        fingers: 1,
+                        min_ms: Some(180),
+                    },
+                    behavior: Behavior::LayerMomentary(Layer::Nav),
                     priority: 100,
                     consume: true,
                 },
@@ -645,6 +682,46 @@ impl Keymap {
         }
 
         rects
+    }
+
+    fn slot_label(&self, mode: Mode, layers: &[Layer], slot_id: &str) -> Option<String> {
+        self.slot_label_from_bindings(mode, layers, slot_id, true)
+            .or_else(|| self.slot_label_from_bindings(mode, layers, slot_id, false))
+    }
+
+    fn slot_label_from_bindings(
+        &self,
+        mode: Mode,
+        layers: &[Layer],
+        slot_id: &str,
+        tap_only: bool,
+    ) -> Option<String> {
+        for layer in layers.iter().rev() {
+            let mut matches = self
+                .bindings
+                .iter()
+                .filter(|binding| {
+                    binding.mode == mode
+                        && binding.layer == *layer
+                        && binding.consume
+                        && binding.trigger.target_id() == slot_id
+                        && (!tap_only || binding.trigger.is_tap())
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by_key(|binding| std::cmp::Reverse(binding.priority));
+
+            for binding in matches {
+                if binding.behavior.is_transparent() {
+                    continue;
+                }
+
+                if let Some(label) = behavior_label(&binding.behavior) {
+                    return Some(label);
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -1101,6 +1178,10 @@ impl Trigger {
         &self.target().id
     }
 
+    fn is_tap(&self) -> bool {
+        matches!(self, Self::Tap { .. })
+    }
+
     fn max_ms(&self) -> Option<u32> {
         match self {
             Self::Tap { max_ms, .. }
@@ -1328,51 +1409,118 @@ impl Binding {
 }
 
 fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
-    let keys = [
-        ("key_q", "q"),
-        ("key_w", "w"),
-        ("key_e", "e"),
-        ("key_r", "r"),
-        ("key_t", "t"),
-        ("key_y", "y"),
-        ("key_u", "u"),
-        ("key_i", "i"),
-        ("key_o", "o"),
-        ("key_p", "p"),
-        ("key_a", "a"),
-        ("key_s", "s"),
-        ("key_d", "d"),
-        ("key_f", "f"),
-        ("key_g", "g"),
-        ("key_h", "h"),
-        ("key_j", "j"),
-        ("key_k", "k"),
-        ("key_l", "l"),
-        ("key_z", "z"),
-        ("key_x", "x"),
-        ("key_c", "c"),
-        ("key_v", "v"),
-        ("key_b", "b"),
-        ("key_n", "n"),
-        ("key_m", "m"),
-        ("key_esc", "ESC"),
-        ("key_spc", "SPC"),
-        ("key_del", "DEL"),
-        ("key_ret", "RET"),
+    vec![
+        keyboard_map_config(
+            "base",
+            &[
+                ("key_q", "q"),
+                ("key_w", "w"),
+                ("key_e", "e"),
+                ("key_r", "r"),
+                ("key_t", "t"),
+                ("key_y", "y"),
+                ("key_u", "u"),
+                ("key_i", "i"),
+                ("key_o", "o"),
+                ("key_p", "p"),
+                ("key_a", "a"),
+                ("key_s", "s"),
+                ("key_d", "d"),
+                ("key_f", "f"),
+                ("key_g", "g"),
+                ("key_h", "h"),
+                ("key_j", "j"),
+                ("key_k", "k"),
+                ("key_l", "l"),
+                ("key_z", "z"),
+                ("key_x", "x"),
+                ("key_c", "c"),
+                ("key_v", "v"),
+                ("key_b", "b"),
+                ("key_n", "n"),
+                ("key_m", "m"),
+                ("key_esc", "ESC"),
+                ("key_spc", "SPC"),
+                ("key_del", "DEL"),
+                ("key_ret", "RET"),
+            ],
+        ),
+        keyboard_map_config(
+            "symbols",
+            &[
+                ("key_q", "1"),
+                ("key_w", "2"),
+                ("key_e", "3"),
+                ("key_r", "4"),
+                ("key_t", "5"),
+                ("key_y", "6"),
+                ("key_u", "7"),
+                ("key_i", "8"),
+                ("key_o", "9"),
+                ("key_p", "0"),
+                ("key_a", "!"),
+                ("key_s", "@"),
+                ("key_d", "#"),
+                ("key_f", "$"),
+                ("key_g", "%"),
+                ("key_h", "^"),
+                ("key_j", "&"),
+                ("key_k", "*"),
+                ("key_l", "("),
+                ("key_z", ")"),
+                ("key_x", "-"),
+                ("key_c", "="),
+                ("key_v", "["),
+                ("key_b", "]"),
+                ("key_n", "/"),
+                ("key_m", "?"),
+                ("key_esc", "ESC"),
+                ("key_spc", "SPC"),
+                ("key_del", "DEL"),
+                ("key_ret", "RET"),
+            ],
+        ),
+        keyboard_map_config(
+            "nav",
+            &[
+                ("key_q", "ESC"),
+                ("key_w", "<up>"),
+                ("key_e", "C-<up>"),
+                ("key_a", "<left>"),
+                ("key_s", "<down>"),
+                ("key_d", "<right>"),
+                ("key_h", "<left>"),
+                ("key_j", "<down>"),
+                ("key_k", "<up>"),
+                ("key_l", "<right>"),
+                ("key_u", "C-<left>"),
+                ("key_o", "C-<right>"),
+                ("key_z", "C-a"),
+                ("key_x", "C-e"),
+                ("key_c", "C-c"),
+                ("key_v", "C-v"),
+                ("key_esc", "ESC"),
+                ("key_spc", "SPC"),
+                ("key_del", "DEL"),
+                ("key_ret", "RET"),
+            ],
+        ),
     ]
-    .into_iter()
-    .map(|(slot, key)| (slot.to_string(), key.to_string()))
-    .collect();
+}
 
-    vec![KeyboardMapFileConfig {
+fn keyboard_map_config(layer: &str, pairs: &[(&str, &str)]) -> KeyboardMapFileConfig {
+    KeyboardMapFileConfig {
         mode: Some("text".to_string()),
-        layer: Some("base".to_string()),
-        keys,
+        layer: Some(layer.to_string()),
+        keys: pairs
+            .iter()
+            .map(|(slot, key)| ((*slot).to_string(), (*key).to_string()))
+            .collect(),
         fingers: None,
         max_ms: None,
         priority: None,
         consume: None,
-    }]
+    }
 }
 
 fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) -> Result<Vec<Binding>> {
@@ -1842,6 +1990,9 @@ impl App {
         }
 
         if !self.config.debug_draw {
+            if self.engine.mode == Mode::Text {
+                self.render_text_keyboard(mmap, width, height, size);
+            }
             return;
         }
 
@@ -1888,10 +2039,23 @@ impl App {
 
         for slot in self.config.slots.slots() {
             fill_rect(mmap, width, height, slot.rect.to_px(size), slot_debug_color(slot));
-            if slot.label.is_some() {
+            let label = self
+                .config
+                .keymap
+                .slot_label(self.engine.mode, &self.engine.layer_stack, &slot.id)
+                .or_else(|| slot.label.clone());
+            if let Some(label) = label {
                 let mut label_mark = slot.rect.to_px(size);
                 label_mark.h = label_mark.h.min(8);
                 fill_rect(mmap, width, height, label_mark, [0xff, 0xff, 0xff, 0x70]);
+                draw_label_in_rect(
+                    mmap,
+                    width,
+                    height,
+                    slot.rect.to_px(size),
+                    &label,
+                    [0xff, 0xff, 0xff, 0xd0],
+                );
             }
         }
 
@@ -1935,6 +2099,40 @@ impl App {
                 24,
                 [0xff, 0xff, 0xff, 0xd0],
             );
+        }
+    }
+
+    fn render_text_keyboard(&self, mmap: &mut [u8], width: u32, height: u32, size: SurfaceSize) {
+        fill_rect(
+            mmap,
+            width,
+            height,
+            RectPx {
+                x: 0,
+                y: 0,
+                w: width as i32,
+                h: height as i32,
+            },
+            [0x08, 0x18, 0x14, 0x20],
+        );
+
+        for slot in self.config.slots.slots() {
+            if slot.role != SlotRole::Key {
+                continue;
+            }
+
+            let Some(label) =
+                self.config
+                    .keymap
+                    .slot_label(Mode::Text, &self.engine.layer_stack, &slot.id)
+            else {
+                continue;
+            };
+
+            let rect = slot.rect.to_px(size);
+            fill_rect(mmap, width, height, rect, [0x12, 0x34, 0x2a, 0xa8]);
+            draw_rect_frame(mmap, width, height, rect, [0x80, 0xff, 0xc8, 0xb0]);
+            draw_label_in_rect(mmap, width, height, rect, &label, [0xff, 0xff, 0xff, 0xe8]);
         }
     }
 
@@ -2685,6 +2883,8 @@ fn mode_name(mode: Mode) -> &'static str {
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Base => "base",
+        Layer::Symbols => "symbols",
+        Layer::Nav => "nav",
         Layer::Niri => "niri",
     }
 }
@@ -2852,6 +3052,8 @@ fn parse_mode(value: &str) -> Result<Mode> {
 fn parse_layer(value: &str) -> Result<Layer> {
     match normalize_name(value).as_str() {
         "base" => Ok(Layer::Base),
+        "symbol" | "symbols" | "sym" => Ok(Layer::Symbols),
+        "nav" | "navigation" => Ok(Layer::Nav),
         "niri" => Ok(Layer::Niri),
         _ => Err(anyhow!("unknown layer {value}")),
     }
@@ -3146,10 +3348,27 @@ fn parse_emacs_base_key(value: &str) -> Option<(u32, Vec<u32>)> {
         }
     }
 
-    parse_key_name(key_name).map(|key| (key, Vec::new()))
+    parse_key_name(key_name)
+        .map(|key| (key, Vec::new()))
+        .or_else(|| parse_shifted_symbol_key(key_name).map(|key| (key, vec![KEY_LEFTSHIFT])))
 }
 
 fn parse_key_name(value: &str) -> Option<u32> {
+    match value.trim() {
+        "-" => return Some(KEY_MINUS),
+        "=" => return Some(KEY_EQUAL),
+        "[" => return Some(KEY_LEFTBRACE),
+        "]" => return Some(KEY_RIGHTBRACE),
+        ";" => return Some(KEY_SEMICOLON),
+        "'" => return Some(KEY_APOSTROPHE),
+        "`" => return Some(KEY_GRAVE),
+        "\\" => return Some(KEY_BACKSLASH),
+        "," => return Some(KEY_COMMA),
+        "." => return Some(KEY_DOT),
+        "/" => return Some(KEY_SLASH),
+        _ => {}
+    }
+
     match normalize_name(value).as_str() {
         "ctrl" | "control" | "leftctrl" | "left_control" => Some(KEY_LEFTCTRL),
         "shift" | "leftshift" | "left_shift" => Some(KEY_LEFTSHIFT),
@@ -3167,6 +3386,17 @@ fn parse_key_name(value: &str) -> Option<u32> {
         "8" => Some(KEY_8),
         "9" => Some(KEY_9),
         "0" => Some(KEY_0),
+        "-" | "minus" => Some(KEY_MINUS),
+        "=" | "equal" | "equals" => Some(KEY_EQUAL),
+        "[" | "leftbrace" | "left_brace" | "leftbracket" | "left_bracket" => Some(KEY_LEFTBRACE),
+        "]" | "rightbrace" | "right_brace" | "rightbracket" | "right_bracket" => Some(KEY_RIGHTBRACE),
+        ";" | "semicolon" | "semi" => Some(KEY_SEMICOLON),
+        "'" | "apostrophe" | "quote" => Some(KEY_APOSTROPHE),
+        "`" | "grave" | "backtick" => Some(KEY_GRAVE),
+        "\\" | "backslash" => Some(KEY_BACKSLASH),
+        "," | "comma" => Some(KEY_COMMA),
+        "." | "dot" | "period" => Some(KEY_DOT),
+        "/" | "slash" => Some(KEY_SLASH),
         "backspace" | "bs" => Some(KEY_BACKSPACE),
         "del" => Some(KEY_BACKSPACE),
         "delete" => Some(KEY_DELETE),
@@ -3203,6 +3433,226 @@ fn parse_key_name(value: &str) -> Option<u32> {
         "x" => Some(KEY_X),
         "y" => Some(KEY_Y),
         "z" => Some(KEY_Z),
+        _ => None,
+    }
+}
+
+fn parse_shifted_symbol_key(value: &str) -> Option<u32> {
+    match value {
+        "!" => Some(KEY_1),
+        "@" => Some(KEY_2),
+        "#" => Some(KEY_3),
+        "$" => Some(KEY_4),
+        "%" => Some(KEY_5),
+        "^" => Some(KEY_6),
+        "&" => Some(KEY_7),
+        "*" => Some(KEY_8),
+        "(" => Some(KEY_9),
+        ")" => Some(KEY_0),
+        "_" => Some(KEY_MINUS),
+        "+" => Some(KEY_EQUAL),
+        "{" => Some(KEY_LEFTBRACE),
+        "}" => Some(KEY_RIGHTBRACE),
+        ":" => Some(KEY_SEMICOLON),
+        "\"" => Some(KEY_APOSTROPHE),
+        "~" => Some(KEY_GRAVE),
+        "|" => Some(KEY_BACKSLASH),
+        "<" => Some(KEY_COMMA),
+        ">" => Some(KEY_DOT),
+        "?" => Some(KEY_SLASH),
+        _ => None,
+    }
+}
+
+fn behavior_label(behavior: &Behavior) -> Option<String> {
+    match behavior {
+        Behavior::Niri(action) => Some(action.as_str().to_string()),
+        Behavior::Key(key) => key_code_label(*key).map(str::to_string),
+        Behavior::KeySequence(sequence) => key_sequence_label(sequence),
+        Behavior::Sequence(_) => Some("macro".to_string()),
+        Behavior::ModeSet(mode) => Some(mode_name(*mode).to_string()),
+        Behavior::ModeToggle(mode) => Some(format!("{}*", mode_name(*mode))),
+        Behavior::ModeMomentary(mode) => Some(format!("{}+", mode_name(*mode))),
+        Behavior::LayerSet(layer) => Some(layer_name(*layer).to_string()),
+        Behavior::LayerToggle(layer) => Some(format!("{}*", layer_name(*layer))),
+        Behavior::LayerMomentary(layer) => Some(format!("{}+", layer_name(*layer))),
+        Behavior::Exit => Some("exit".to_string()),
+        Behavior::Transparent | Behavior::NoOp => None,
+    }
+}
+
+fn key_sequence_label(sequence: &[KeyChord]) -> Option<String> {
+    let labels = sequence
+        .iter()
+        .map(key_chord_label)
+        .collect::<Option<Vec<_>>>()?;
+    Some(labels.join(" "))
+}
+
+fn key_chord_label(chord: &KeyChord) -> Option<String> {
+    let base = *chord.keys.last()?;
+    let mut modifiers = chord.keys[..chord.keys.len().saturating_sub(1)].to_vec();
+
+    let base_label = if remove_modifier(&mut modifiers, KEY_LEFTSHIFT) {
+        shifted_key_label(base)
+            .or_else(|| uppercase_letter_label(base))
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                modifiers.push(KEY_LEFTSHIFT);
+                key_code_label(base).unwrap_or("?").to_string()
+            })
+    } else {
+        key_code_label(base)?.to_string()
+    };
+
+    let mut label = String::new();
+    if remove_modifier(&mut modifiers, KEY_LEFTCTRL) {
+        label.push_str("C-");
+    }
+    if remove_modifier(&mut modifiers, KEY_LEFTALT) {
+        label.push_str("M-");
+    }
+    if remove_modifier(&mut modifiers, KEY_LEFTMETA) {
+        label.push_str("s-");
+    }
+    if remove_modifier(&mut modifiers, KEY_LEFTSHIFT) {
+        label.push_str("S-");
+    }
+    label.push_str(&base_label);
+    Some(label)
+}
+
+fn remove_modifier(modifiers: &mut Vec<u32>, key: u32) -> bool {
+    if let Some(index) = modifiers.iter().position(|modifier| *modifier == key) {
+        modifiers.remove(index);
+        true
+    } else {
+        false
+    }
+}
+
+fn shifted_key_label(key: u32) -> Option<&'static str> {
+    match key {
+        KEY_1 => Some("!"),
+        KEY_2 => Some("@"),
+        KEY_3 => Some("#"),
+        KEY_4 => Some("$"),
+        KEY_5 => Some("%"),
+        KEY_6 => Some("^"),
+        KEY_7 => Some("&"),
+        KEY_8 => Some("*"),
+        KEY_9 => Some("("),
+        KEY_0 => Some(")"),
+        KEY_MINUS => Some("_"),
+        KEY_EQUAL => Some("+"),
+        KEY_LEFTBRACE => Some("{"),
+        KEY_RIGHTBRACE => Some("}"),
+        KEY_SEMICOLON => Some(":"),
+        KEY_APOSTROPHE => Some("\""),
+        KEY_GRAVE => Some("~"),
+        KEY_BACKSLASH => Some("|"),
+        KEY_COMMA => Some("<"),
+        KEY_DOT => Some(">"),
+        KEY_SLASH => Some("?"),
+        _ => None,
+    }
+}
+
+fn uppercase_letter_label(key: u32) -> Option<&'static str> {
+    match key {
+        KEY_A => Some("A"),
+        KEY_B => Some("B"),
+        KEY_C => Some("C"),
+        KEY_D => Some("D"),
+        KEY_E => Some("E"),
+        KEY_F => Some("F"),
+        KEY_G => Some("G"),
+        KEY_H => Some("H"),
+        KEY_I => Some("I"),
+        KEY_J => Some("J"),
+        KEY_K => Some("K"),
+        KEY_L => Some("L"),
+        KEY_M => Some("M"),
+        KEY_N => Some("N"),
+        KEY_O => Some("O"),
+        KEY_P => Some("P"),
+        KEY_Q => Some("Q"),
+        KEY_R => Some("R"),
+        KEY_S => Some("S"),
+        KEY_T => Some("T"),
+        KEY_U => Some("U"),
+        KEY_V => Some("V"),
+        KEY_W => Some("W"),
+        KEY_X => Some("X"),
+        KEY_Y => Some("Y"),
+        KEY_Z => Some("Z"),
+        _ => None,
+    }
+}
+
+fn key_code_label(key: u32) -> Option<&'static str> {
+    match key {
+        KEY_LEFTCTRL => Some("CTRL"),
+        KEY_LEFTSHIFT => Some("SHIFT"),
+        KEY_LEFTALT => Some("ALT"),
+        KEY_LEFTMETA => Some("SUPER"),
+        KEY_ESC => Some("ESC"),
+        KEY_ENTER => Some("RET"),
+        KEY_BACKSPACE => Some("DEL"),
+        KEY_DELETE => Some("DELETE"),
+        KEY_TAB => Some("TAB"),
+        KEY_SPACE => Some("SPC"),
+        KEY_LEFT => Some("LEFT"),
+        KEY_RIGHT => Some("RIGHT"),
+        KEY_UP => Some("UP"),
+        KEY_DOWN => Some("DOWN"),
+        KEY_1 => Some("1"),
+        KEY_2 => Some("2"),
+        KEY_3 => Some("3"),
+        KEY_4 => Some("4"),
+        KEY_5 => Some("5"),
+        KEY_6 => Some("6"),
+        KEY_7 => Some("7"),
+        KEY_8 => Some("8"),
+        KEY_9 => Some("9"),
+        KEY_0 => Some("0"),
+        KEY_MINUS => Some("-"),
+        KEY_EQUAL => Some("="),
+        KEY_LEFTBRACE => Some("["),
+        KEY_RIGHTBRACE => Some("]"),
+        KEY_SEMICOLON => Some(";"),
+        KEY_APOSTROPHE => Some("'"),
+        KEY_GRAVE => Some("`"),
+        KEY_BACKSLASH => Some("\\"),
+        KEY_COMMA => Some(","),
+        KEY_DOT => Some("."),
+        KEY_SLASH => Some("/"),
+        KEY_A => Some("a"),
+        KEY_B => Some("b"),
+        KEY_C => Some("c"),
+        KEY_D => Some("d"),
+        KEY_E => Some("e"),
+        KEY_F => Some("f"),
+        KEY_G => Some("g"),
+        KEY_H => Some("h"),
+        KEY_I => Some("i"),
+        KEY_J => Some("j"),
+        KEY_K => Some("k"),
+        KEY_L => Some("l"),
+        KEY_M => Some("m"),
+        KEY_N => Some("n"),
+        KEY_O => Some("o"),
+        KEY_P => Some("p"),
+        KEY_Q => Some("q"),
+        KEY_R => Some("r"),
+        KEY_S => Some("s"),
+        KEY_T => Some("t"),
+        KEY_U => Some("u"),
+        KEY_V => Some("v"),
+        KEY_W => Some("w"),
+        KEY_X => Some("x"),
+        KEY_Y => Some("y"),
+        KEY_Z => Some("z"),
         _ => None,
     }
 }
@@ -3413,6 +3863,202 @@ fn active_binding_debug_color(target: &SlotTarget) -> [u8; 4] {
         (true, SlotRole::Zone) => [0xe0, 0xff, 0x50, 0x70],
         (true, SlotRole::GestureArea) => [0xff, 0xb0, 0x20, 0x70],
         (false, _) => [0xff, 0xff, 0xff, 0x36],
+    }
+}
+
+fn draw_rect_frame(buf: &mut [u8], width: u32, height: u32, rect: RectPx, color: [u8; 4]) {
+    let thickness = 2.max((rect.w.min(rect.h) / 36).max(1));
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: thickness,
+        },
+        color,
+    );
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: rect.x,
+            y: rect.y + rect.h - thickness,
+            w: rect.w,
+            h: thickness,
+        },
+        color,
+    );
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: rect.x,
+            y: rect.y,
+            w: thickness,
+            h: rect.h,
+        },
+        color,
+    );
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: rect.x + rect.w - thickness,
+            y: rect.y,
+            w: thickness,
+            h: rect.h,
+        },
+        color,
+    );
+}
+
+fn draw_label_in_rect(
+    buf: &mut [u8],
+    width: u32,
+    height: u32,
+    rect: RectPx,
+    label: &str,
+    color: [u8; 4],
+) {
+    let text = label
+        .chars()
+        .filter(|ch| ch.is_ascii_graphic() || *ch == ' ')
+        .take(8)
+        .map(|ch| ch.to_ascii_uppercase())
+        .collect::<Vec<_>>();
+    if text.is_empty() {
+        return;
+    }
+
+    let glyph_w = 3;
+    let glyph_h = 5;
+    let spacing = 1;
+    let total_units = text.len() as i32 * glyph_w + (text.len() as i32 - 1) * spacing;
+    let scale_x = (rect.w / (total_units + 2)).max(1);
+    let scale_y = (rect.h / (glyph_h + 2)).max(1);
+    let scale = scale_x.min(scale_y).clamp(1, 8);
+    let total_w = total_units * scale;
+    let total_h = glyph_h * scale;
+    let mut x = rect.x + (rect.w - total_w) / 2;
+    let y = rect.y + (rect.h - total_h) / 2;
+
+    for ch in text {
+        draw_glyph(buf, width, height, x, y, scale, ch, color);
+        x += (glyph_w + spacing) * scale;
+    }
+}
+
+fn draw_glyph(
+    buf: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    scale: i32,
+    ch: char,
+    color: [u8; 4],
+) {
+    let pattern = glyph_3x5(ch);
+    for (row, bits) in pattern.iter().enumerate() {
+        for col in 0usize..3 {
+            if *bits & (1u8 << (2 - col)) == 0 {
+                continue;
+            }
+
+            fill_rect(
+                buf,
+                width,
+                height,
+                RectPx {
+                    x: x + col as i32 * scale,
+                    y: y + row as i32 * scale,
+                    w: scale,
+                    h: scale,
+                },
+                color,
+            );
+        }
+    }
+}
+
+fn glyph_3x5(ch: char) -> [u8; 5] {
+    match ch {
+        'A' => [0b010, 0b101, 0b111, 0b101, 0b101],
+        'B' => [0b110, 0b101, 0b110, 0b101, 0b110],
+        'C' => [0b111, 0b100, 0b100, 0b100, 0b111],
+        'D' => [0b110, 0b101, 0b101, 0b101, 0b110],
+        'E' => [0b111, 0b100, 0b110, 0b100, 0b111],
+        'F' => [0b111, 0b100, 0b110, 0b100, 0b100],
+        'G' => [0b111, 0b100, 0b101, 0b101, 0b111],
+        'H' => [0b101, 0b101, 0b111, 0b101, 0b101],
+        'I' => [0b111, 0b010, 0b010, 0b010, 0b111],
+        'J' => [0b001, 0b001, 0b001, 0b101, 0b111],
+        'K' => [0b101, 0b101, 0b110, 0b101, 0b101],
+        'L' => [0b100, 0b100, 0b100, 0b100, 0b111],
+        'M' => [0b101, 0b111, 0b111, 0b101, 0b101],
+        'N' => [0b101, 0b111, 0b111, 0b111, 0b101],
+        'O' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        'P' => [0b111, 0b101, 0b111, 0b100, 0b100],
+        'Q' => [0b111, 0b101, 0b101, 0b111, 0b001],
+        'R' => [0b110, 0b101, 0b110, 0b101, 0b101],
+        'S' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        'T' => [0b111, 0b010, 0b010, 0b010, 0b010],
+        'U' => [0b101, 0b101, 0b101, 0b101, 0b111],
+        'V' => [0b101, 0b101, 0b101, 0b101, 0b010],
+        'W' => [0b101, 0b101, 0b111, 0b111, 0b101],
+        'X' => [0b101, 0b101, 0b010, 0b101, 0b101],
+        'Y' => [0b101, 0b101, 0b010, 0b010, 0b010],
+        'Z' => [0b111, 0b001, 0b010, 0b100, 0b111],
+        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+        '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
+        '3' => [0b111, 0b001, 0b111, 0b001, 0b111],
+        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+        '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
+        '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
+        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+        '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
+        '-' => [0b000, 0b000, 0b111, 0b000, 0b000],
+        '_' => [0b000, 0b000, 0b000, 0b000, 0b111],
+        '+' => [0b000, 0b010, 0b111, 0b010, 0b000],
+        '=' => [0b000, 0b111, 0b000, 0b111, 0b000],
+        '!' => [0b010, 0b010, 0b010, 0b000, 0b010],
+        '?' => [0b111, 0b001, 0b010, 0b000, 0b010],
+        '@' => [0b111, 0b101, 0b111, 0b100, 0b111],
+        '#' => [0b101, 0b111, 0b101, 0b111, 0b101],
+        '$' => [0b011, 0b110, 0b010, 0b011, 0b110],
+        '%' => [0b101, 0b001, 0b010, 0b100, 0b101],
+        '^' => [0b010, 0b101, 0b000, 0b000, 0b000],
+        '&' => [0b010, 0b101, 0b010, 0b101, 0b011],
+        '*' => [0b101, 0b010, 0b111, 0b010, 0b101],
+        '(' => [0b001, 0b010, 0b010, 0b010, 0b001],
+        ')' => [0b100, 0b010, 0b010, 0b010, 0b100],
+        '[' => [0b111, 0b100, 0b100, 0b100, 0b111],
+        ']' => [0b111, 0b001, 0b001, 0b001, 0b111],
+        '{' => [0b011, 0b010, 0b110, 0b010, 0b011],
+        '}' => [0b110, 0b010, 0b011, 0b010, 0b110],
+        ';' => [0b000, 0b010, 0b000, 0b010, 0b100],
+        ':' => [0b000, 0b010, 0b000, 0b010, 0b000],
+        '\'' => [0b010, 0b010, 0b000, 0b000, 0b000],
+        '"' => [0b101, 0b101, 0b000, 0b000, 0b000],
+        '`' => [0b100, 0b010, 0b000, 0b000, 0b000],
+        '~' => [0b000, 0b011, 0b110, 0b000, 0b000],
+        '\\' => [0b100, 0b100, 0b010, 0b001, 0b001],
+        '|' => [0b010, 0b010, 0b010, 0b010, 0b010],
+        ',' => [0b000, 0b000, 0b000, 0b010, 0b100],
+        '.' => [0b000, 0b000, 0b000, 0b000, 0b010],
+        '/' => [0b001, 0b001, 0b010, 0b100, 0b100],
+        '<' => [0b001, 0b010, 0b100, 0b010, 0b001],
+        '>' => [0b100, 0b010, 0b001, 0b010, 0b100],
+        ' ' => [0b000, 0b000, 0b000, 0b000, 0b000],
+        _ => [0b111, 0b001, 0b010, 0b000, 0b010],
     }
 }
 
@@ -4075,6 +4721,41 @@ key_c = "C-c"
     }
 
     #[test]
+    fn default_keyboard_label_follows_active_text_layer() {
+        let keymap = Keymap::default();
+
+        assert_eq!(
+            keymap.slot_label(Mode::Text, &[Layer::Base], "key_q"),
+            Some("q".to_string())
+        );
+        assert_eq!(
+            keymap.slot_label(Mode::Text, &[Layer::Base, Layer::Symbols], "key_q"),
+            Some("1".to_string())
+        );
+        assert_eq!(
+            keymap.slot_label(Mode::Text, &[Layer::Base, Layer::Nav], "key_h"),
+            Some("LEFT".to_string())
+        );
+    }
+
+    #[test]
+    fn symbols_layer_tap_uses_symbols_keyboard_map() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        let mut effects = Vec::new();
+        engine.set_mode(Mode::Text, &mut effects, &config);
+        engine.perform_action(GestureAction::LayerToggle(Layer::Symbols), &mut effects, &config, None);
+
+        engine.handle_down(0, 0, 1, 84.0, 1180.0, &config, size);
+        let effects = engine.handle_up(80, 80, 1, &config, size);
+
+        assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![
+            KeyChord { keys: vec![KEY_1] },
+        ])));
+    }
+
+    #[test]
     fn toml_binding_parses_emacs_key_sequence() {
         let source = r#"
 [[bindings]]
@@ -4101,6 +4782,22 @@ behavior = { type = "key", key = "C-x C-s" }
                     keys: vec![KEY_LEFTCTRL, KEY_S],
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn emacs_key_parser_supports_punctuation_symbols() {
+        assert_eq!(
+            parse_emacs_key_sequence("-").unwrap(),
+            vec![KeyChord {
+                keys: vec![KEY_MINUS],
+            }]
+        );
+        assert_eq!(
+            parse_emacs_key_sequence("!").unwrap(),
+            vec![KeyChord {
+                keys: vec![KEY_LEFTSHIFT, KEY_1],
+            }]
         );
     }
 
@@ -4141,8 +4838,10 @@ behavior = { type = "key", key = "C-x C-s" }
             Some("layouts/phone-portrait.svg")
         );
         let maps = config.keyboard.unwrap().maps.unwrap();
-        assert_eq!(maps.len(), 1);
+        assert_eq!(maps.len(), 3);
         assert_eq!(maps[0].keys.get("key_q").map(String::as_str), Some("q"));
+        assert_eq!(maps[1].layer.as_deref(), Some("symbols"));
+        assert_eq!(maps[2].layer.as_deref(), Some("nav"));
     }
 
     #[test]

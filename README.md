@@ -22,6 +22,8 @@ The prototype separates input ownership from application passthrough:
 There is also a layer stack:
 
 - `base`: default key bindings.
+- `symbols`: text-mode symbol/number keyboard layer.
+- `nav`: text-mode navigation/editing keyboard layer.
 - `niri`: niri control bindings.
 - Layer resolution checks the top layer first, then lower layers.
 - `layer_momentary` pushes a layer and restores the previous stack on release.
@@ -92,6 +94,8 @@ Mode ownership controls are now represented as default bindings:
 - `base/base`, bottom-edge swipe up: `mode_toggle:text`
 - `passthrough/base`, bottom-edge swipe up: `mode:text`
 - `text/base`, bottom-edge swipe down: `mode:base`
+- `text/base`, key-ret hold: `layer_momentary:symbols`
+- `text/base`, key-esc hold: `layer_momentary:nav`
 - Top-left tap in base, text, passthrough, or niri locked: `exit`
 
 Base keyboard bindings:
@@ -101,7 +105,15 @@ Base keyboard bindings:
 - Right-bottom swipe right: virtual keyboard `Enter`
 
 Text mode uses key slots defined by the active SVG layout. Config files map
-slot IDs to key behavior with `[[keyboard.maps]]`; geometry stays in SVG.
+slot IDs to key behavior with `[[keyboard.maps]]`; geometry stays in SVG. Text
+mode draws keycaps even when debug draw is disabled, and labels are resolved
+from the active mode/layer keymap rather than from static SVG metadata.
+
+The built-in text keyboard currently has three layers:
+
+- `base`: alphabetic QWERTY layer.
+- `symbols`: numbers and common US-keyboard punctuation.
+- `nav`: arrows and a few Emacs-style editing chords.
 
 Default niri gestures still exist when no configured binding matches in niri modes:
 
@@ -180,6 +192,26 @@ key_q = "q"
 key_w = "w"
 key_spc = "SPC"
 key_del = "DEL"
+
+[[keyboard.maps]]
+mode = "text"
+layer = "symbols"
+
+[keyboard.maps.keys]
+key_q = "1"
+key_w = "2"
+key_a = "!"
+key_s = "@"
+
+[[keyboard.maps]]
+mode = "text"
+layer = "nav"
+
+[keyboard.maps.keys]
+key_h = "<left>"
+key_j = "<down>"
+key_k = "<up>"
+key_l = "<right>"
 ```
 
 Map fields:
@@ -191,6 +223,10 @@ Map fields:
 - `max_ms`: optional tap time limit
 - `priority`: defaults to `0`
 - `consume`: defaults to `true`
+
+The same slot can be bound in multiple layers. Label rendering uses the topmost
+active layer first and falls back to lower layers when no binding exists or the
+top binding is transparent.
 
 Supported trigger types:
 
@@ -230,6 +266,7 @@ Key syntax for `key`, `key_sequence`, and `key_sequence` macro steps follows the
 - Examples: `f`, `C-c`, `C-x C-s`, `M-RET`, `C-M-<return>`, `s-<left>`
 - Shorthands: `RET`, `SPC`, `TAB`, `ESC`, `DEL`
 - Angle keys: `<return>`, `<space>`, `<tab>`, `<escape>`, `<backspace>`, `<delete>`, `<left>`, `<right>`, `<up>`, `<down>`
+- US punctuation: common unshifted punctuation keys, plus shifted forms like `!`, `@`, `#`, `$`, `%`, `^`, `&`, `*`, `(`, `)`, `_`, `+`, `{`, `}`, and `?`
 - Modifiers are parsed in Emacs order: `A-C-H-M-S-s`
 - Current backend maps `C` to left Ctrl, `M`/`A` to left Alt, and `s`/`H` to left Super
 
