@@ -185,22 +185,22 @@ behavior = { type = "exit" }
 mode = "niri_locked"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "left" }
-behavior = { type = "niri", action = "focus-column-left" }
-
-[[bindings]]
-mode = "niri_locked"
-layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "right" }
-behavior = { type = "niri", action = "focus-column-right" }
-
-[[bindings]]
-mode = "niri_locked"
-layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "up" }
 behavior = { type = "niri", action = "focus-workspace-up" }
 
 [[bindings]]
 mode = "niri_locked"
 layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "down" }
+trigger = { type = "swipe", target = "full", direction = "right" }
 behavior = { type = "niri", action = "focus-workspace-down" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "up" }
+behavior = { type = "niri", action = "focus-column-right" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "down" }
+behavior = { type = "niri", action = "focus-column-left" }

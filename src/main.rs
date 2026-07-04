@@ -188,10 +188,10 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         let mut config = Self {
-            action_swipe_left: env_niri_action("TOUCHDECK_ACTION_SWIPE_LEFT", "focus-column-left"),
-            action_swipe_right: env_niri_action("TOUCHDECK_ACTION_SWIPE_RIGHT", "focus-column-right"),
-            action_swipe_up: env_niri_action("TOUCHDECK_ACTION_SWIPE_UP", "focus-workspace-up"),
-            action_swipe_down: env_niri_action("TOUCHDECK_ACTION_SWIPE_DOWN", "focus-workspace-down"),
+            action_swipe_left: env_niri_action("TOUCHDECK_ACTION_SWIPE_LEFT", "focus-workspace-up"),
+            action_swipe_right: env_niri_action("TOUCHDECK_ACTION_SWIPE_RIGHT", "focus-workspace-down"),
+            action_swipe_up: env_niri_action("TOUCHDECK_ACTION_SWIPE_UP", "focus-column-right"),
+            action_swipe_down: env_niri_action("TOUCHDECK_ACTION_SWIPE_DOWN", "focus-column-left"),
             action_two_finger_tap: env_niri_action("TOUCHDECK_ACTION_TWO_FINGER_TAP", "toggle-overview"),
             tap_radius: env_f64("TOUCHDECK_TAP_RADIUS", 48.0),
             two_finger_tap_ms: env_u32("TOUCHDECK_TWO_FINGER_TAP_MS", 350),
@@ -5038,10 +5038,10 @@ mod tests {
 
     fn test_config() -> Config {
         Config {
-            action_swipe_left: Some(NiriAction::FocusColumnLeft),
-            action_swipe_right: Some(NiriAction::FocusColumnRight),
-            action_swipe_up: Some(NiriAction::FocusWorkspaceUp),
-            action_swipe_down: Some(NiriAction::FocusWorkspaceDown),
+            action_swipe_left: Some(NiriAction::FocusWorkspaceUp),
+            action_swipe_right: Some(NiriAction::FocusWorkspaceDown),
+            action_swipe_up: Some(NiriAction::FocusColumnRight),
+            action_swipe_down: Some(NiriAction::FocusColumnLeft),
             action_two_finger_tap: Some(NiriAction::ToggleOverview),
             tap_radius: 48.0,
             two_finger_tap_ms: 350,
@@ -5144,9 +5144,9 @@ mod tests {
     }
 
     #[test]
-    fn one_finger_swipe_left_maps_to_focus_column_left() {
+    fn one_finger_swipe_down_maps_to_focus_column_left() {
         let config = test_config();
-        let gesture = gesture(1, vec![contact(800.0, 1000.0, 600.0, 1000.0)]);
+        let gesture = gesture(1, vec![contact(500.0, 900.0, 500.0, 1200.0)]);
 
         assert_eq!(
             resolve_niri_gesture(&gesture, &config, test_size()),
@@ -5155,13 +5155,13 @@ mod tests {
     }
 
     #[test]
-    fn one_finger_swipe_up_maps_to_focus_workspace_up() {
+    fn one_finger_swipe_up_maps_to_focus_column_right() {
         let config = test_config();
         let gesture = gesture(1, vec![contact(500.0, 1200.0, 500.0, 900.0)]);
 
         assert_eq!(
             resolve_niri_gesture(&gesture, &config, test_size()),
-            GestureAction::Niri(NiriAction::FocusWorkspaceUp)
+            GestureAction::Niri(NiriAction::FocusColumnRight)
         );
     }
 
@@ -5771,7 +5771,7 @@ behavior = { type = "macro", macro = "copy" }
         let config = test_config();
         let trace = r#"
 {"type":"down","t":0,"wl_time":0,"id":1,"x":100.0,"y":1800.0}
-{"type":"motion","t":220,"wl_time":220,"id":1,"x":260.0,"y":1800.0}
+{"type":"motion","t":220,"wl_time":220,"id":1,"x":100.0,"y":1500.0}
 {"type":"up","t":260,"wl_time":260,"id":1}
 "#;
 
@@ -5786,8 +5786,8 @@ behavior = { type = "macro", macro = "copy" }
         let config = test_config();
         let trace = r#"
 {"type":"down","t":0,"wl_time":0,"id":1,"x":100.0,"y":1800.0}
-{"type":"down","t":220,"wl_time":220,"id":2,"x":800.0,"y":1000.0}
-{"type":"motion","t":240,"wl_time":240,"id":2,"x":600.0,"y":1000.0}
+{"type":"down","t":220,"wl_time":220,"id":2,"x":800.0,"y":900.0}
+{"type":"motion","t":240,"wl_time":240,"id":2,"x":800.0,"y":1200.0}
 {"type":"up","t":260,"wl_time":260,"id":2}
 {"type":"up","t":300,"wl_time":300,"id":1}
 "#;
