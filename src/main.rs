@@ -1286,7 +1286,6 @@ impl Trigger {
 #[derive(Clone, Debug, PartialEq)]
 enum Behavior {
     Niri(NiriAction),
-    Key(u32),
     KeySequence(Vec<KeyChord>),
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
@@ -1308,7 +1307,6 @@ impl Behavior {
     fn into_action(self) -> GestureAction {
         match self {
             Self::Niri(action) => GestureAction::Niri(action),
-            Self::Key(key) => GestureAction::Key(key),
             Self::KeySequence(sequence) => GestureAction::KeySequence(sequence),
             Self::Sequence(steps) => GestureAction::Sequence(steps),
             Self::ModeSet(mode) => GestureAction::ModeSet(mode),
@@ -1841,7 +1839,6 @@ enum EngineEffect {
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum GestureAction {
     Niri(NiriAction),
-    Key(u32),
     KeySequence(Vec<KeyChord>),
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
@@ -2423,9 +2420,6 @@ impl App {
                 eprintln!("touchdeck: niri action {action}");
                 spawn_niri_action(action);
             }
-            GestureAction::Key(key) => {
-                self.send_key(key);
-            }
             GestureAction::KeySequence(sequence) => {
                 self.send_key_sequence(&sequence);
             }
@@ -2914,7 +2908,7 @@ impl Engine {
         hold_id: Option<i32>,
     ) {
         match action {
-            GestureAction::Niri(_) | GestureAction::Key(_) | GestureAction::KeySequence(_) | GestureAction::Exit => {
+            GestureAction::Niri(_) | GestureAction::KeySequence(_) | GestureAction::Exit => {
                 effects.push(EngineEffect::Dispatch(action));
             }
             GestureAction::Sequence(_) => {
@@ -3678,7 +3672,6 @@ fn parse_shifted_symbol_key(value: &str) -> Option<u32> {
 fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
         Behavior::Niri(action) => Some(action.as_str().to_string()),
-        Behavior::Key(key) => key_code_label(*key).map(str::to_string),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),
         Behavior::Sequence(_) => Some("macro".to_string()),
         Behavior::ModeSet(mode) => Some(mode_name(*mode).to_string()),
@@ -5280,7 +5273,7 @@ behavior = { type = "key", key = "C-x C-s" }
                     fingers: 1,
                     max_ms: None,
                 },
-                behavior: Behavior::Key(KEY_SPACE),
+                behavior: Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_SPACE] }]),
                 priority: 0,
                 consume: true,
             },
@@ -5292,7 +5285,7 @@ behavior = { type = "key", key = "C-x C-s" }
                     fingers: 1,
                     max_ms: None,
                 },
-                behavior: Behavior::Key(KEY_ENTER),
+                behavior: Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_ENTER] }]),
                 priority: 0,
                 consume: true,
             },
@@ -5302,8 +5295,8 @@ behavior = { type = "key", key = "C-x C-s" }
         engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
-        assert!(dispatched_actions(&effects).contains(&GestureAction::Key(KEY_ENTER)));
-        assert!(!dispatched_actions(&effects).contains(&GestureAction::Key(KEY_SPACE)));
+        assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![KeyChord { keys: vec![KEY_ENTER] }])));
+        assert!(!dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![KeyChord { keys: vec![KEY_SPACE] }])));
     }
 
     #[test]
@@ -5320,7 +5313,7 @@ behavior = { type = "key", key = "C-x C-s" }
                     fingers: 1,
                     max_ms: None,
                 },
-                behavior: Behavior::Key(KEY_SPACE),
+                behavior: Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_SPACE] }]),
                 priority: 0,
                 consume: true,
             },
@@ -5342,7 +5335,7 @@ behavior = { type = "key", key = "C-x C-s" }
         engine.handle_down(0, 0, 1, 900.0, 1800.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
-        assert!(dispatched_actions(&effects).contains(&GestureAction::Key(KEY_SPACE)));
+        assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![KeyChord { keys: vec![KEY_SPACE] }])));
     }
 
     #[test]
