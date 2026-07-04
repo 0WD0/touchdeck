@@ -142,7 +142,8 @@ struct BufferBacking {
     _file: File,
     _mmap: MmapMut,
     _pool: wl_shm_pool::WlShmPool,
-    _buffer: wl_buffer::WlBuffer,
+    buffer: wl_buffer::WlBuffer,
+    released: bool,
 }
 
 #[derive(Clone)]
@@ -2151,16 +2152,14 @@ impl App {
         surface.damage_buffer(0, 0, width as i32, height as i32);
         surface.commit();
 
+        self.buffers.retain(|backing| !backing.released);
         self.buffers.push_back(BufferBacking {
             _file: file,
             _mmap: mmap,
             _pool: pool,
-            _buffer: buffer,
+            buffer,
+            released: false,
         });
-
-        while self.buffers.len() > 2 {
-            self.buffers.pop_front();
-        }
 
         Ok(())
     }
@@ -4687,13 +4686,22 @@ impl Dispatch<wl_shm_pool::WlShmPool, ()> for App {
 
 impl Dispatch<wl_buffer::WlBuffer, ()> for App {
     fn event(
-        _state: &mut Self,
-        _proxy: &wl_buffer::WlBuffer,
-        _event: wl_buffer::Event,
+        state: &mut Self,
+        proxy: &wl_buffer::WlBuffer,
+        event: wl_buffer::Event,
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
+        if matches!(event, wl_buffer::Event::Release) {
+            for backing in &mut state.buffers {
+                if backing.buffer == proxy.clone() {
+                    backing.released = true;
+                    break;
+                }
+            }
+            state.buffers.retain(|backing| !backing.released);
+        }
     }
 }
 
