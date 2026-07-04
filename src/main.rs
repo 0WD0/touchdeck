@@ -3473,7 +3473,7 @@ fn bottom_edge_rect() -> RectNorm {
     RectNorm {
         x0: 0.18,
         y0: 0.94,
-        x1: 0.82,
+        x1: 0.94,
         y1: 1.00,
     }
 }
