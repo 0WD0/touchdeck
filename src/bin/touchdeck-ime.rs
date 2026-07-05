@@ -705,13 +705,16 @@ impl ImeApp {
         };
 
         if !self.active {
-            if route == KeyRoute::AppKey {
-                self.passthrough_touchdeck_key(event.time, event.key, state);
-            } else {
-                eprintln!(
-                    "touchdeck-ime: ignored key {} because input method is inactive",
-                    event.key
-                );
+            match route {
+                KeyRoute::ImeOnly => {
+                    eprintln!(
+                        "touchdeck-ime: ignored ime-only key {} because input method is inactive",
+                        event.key
+                    );
+                }
+                KeyRoute::ImeKey | KeyRoute::ImeText | KeyRoute::AppKey => {
+                    self.passthrough_touchdeck_key(event.time, event.key, state);
+                }
             }
             return self.current_status_with_source("touchdeck");
         }

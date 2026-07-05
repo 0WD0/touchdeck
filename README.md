@@ -453,6 +453,7 @@ handled, and current preedit.
 Common issues:
 
 - Key reaches app but not Rime: use `output = "ime"`, start `touchdeck-ime`, and keep route as `ime-key`.
+- Emacs PGTK with `(setopt pgtk-use-im-context-on-new-connection nil)`: Emacs disables `GtkIMContext`, so it will not activate Wayland text-input/input-method. TouchDeck keys fall back to virtual-keyboard passthrough, but Rime commit/preedit cannot be delivered to Emacs through the standard Wayland IM path.
 - Cursor key edits app instead of candidate/preedit: keep route as `ime-key`; if Rime handles it, it will be consumed.
 - Cursor key must always bypass Rime: use `route = "app-key"` or `&ak KEY`.
 - Swipe jumps too far: increase `repeat_start_ms` or `start_ms`; increase `repeat_interval_ms` if continuous repeat is too fast.
