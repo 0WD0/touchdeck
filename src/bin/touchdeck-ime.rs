@@ -577,7 +577,7 @@ fn main() -> Result<()> {
         }
 
         while let Ok(request) = fcitx_rx.try_recv() {
-            app.handle_fcitx_dbus_request(request);
+            app.handle_fcitx_dbus_request(&qh, request);
         }
 
         event_queue.flush().context("flush Wayland requests")?;
@@ -741,14 +741,13 @@ impl ImeApp {
         status: &ImeStatus,
     ) -> Result<bool> {
         let (width, height) = self.popup_dimensions(status);
-        let (left, top) = self.server_popup_position(width, height);
+        let Some((left, top)) = self.server_popup_position(width, height) else {
+            return Ok(false);
+        };
 
         if let Some(layer_surface) = &self.server_popup_layer_surface {
             layer_surface.set_size(width, height);
             layer_surface.set_margin(top, 0, 0, left);
-            if let Some(surface) = &self.server_popup_surface {
-                surface.commit();
-            }
             return Ok(self.server_popup_layer_configured);
         }
 
@@ -790,9 +789,9 @@ impl ImeApp {
         Ok(false)
     }
 
-    fn server_popup_position(&self, width: u32, height: u32) -> (i32, i32) {
+    fn server_popup_position(&self, width: u32, height: u32) -> Option<(i32, i32)> {
         let gap = 6;
-        let Some(rect) = self
+        let rect = self
             .fcitx_cursor_rect
             .as_ref()
             .filter(|rect| {
@@ -800,10 +799,7 @@ impl ImeApp {
                     .as_ref()
                     .map(|target| rect.target.matches(target))
                     .unwrap_or(false)
-            })
-        else {
-            return (0, 0);
-        };
+            })?;
 
         let left = (rect.x + rect.w - width as i32).max(0);
         let above = rect.y - height as i32 - gap;
@@ -813,7 +809,7 @@ impl ImeApp {
             rect.y + rect.h + gap
         };
 
-        (left, top.max(0))
+        Some((left, top.max(0)))
     }
 
     fn render_input_popup(&mut self, qh: &QueueHandle<Self>, status: &ImeStatus) -> Result<()> {
@@ -1038,7 +1034,11 @@ impl ImeApp {
         }
     }
 
-    fn handle_fcitx_dbus_request(&mut self, request: FcitxDbusRequest) {
+    fn handle_fcitx_dbus_request(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        request: FcitxDbusRequest,
+    ) {
         match request {
             FcitxDbusRequest::FocusIn { target, response } => {
                 self.active = true;
@@ -1128,6 +1128,16 @@ impl ImeApp {
                         h,
                         scale,
                     });
+                    if self.active
+                        && !status_is_empty(&self.status)
+                        && !self.fcitx_uses_client_side_input_panel()
+                    {
+                        if let Err(err) = self.update_popup(qh, "physical") {
+                            eprintln!(
+                                "touchdeck-ime: failed to update popup after cursor rect: {err:?}"
+                            );
+                        }
+                    }
                 }
             }
             FcitxDbusRequest::SetCapability { target, capability } => {
