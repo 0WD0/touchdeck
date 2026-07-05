@@ -679,7 +679,8 @@ impl ImeApp {
             eprintln!("touchdeck-ime: ignored unknown evdev key {}", event.key);
             return self.current_status_with_source("touchdeck");
         };
-        if self.rime_state_is_empty() && is_direct_passthrough_key(keysym) {
+        let rime_was_empty = self.rime_state_is_empty();
+        if rime_was_empty && is_direct_passthrough_key(keysym) {
             self.passthrough_touchdeck_key(event.time, event.key, state);
             self.hide_popup(qh);
             return self.current_status_with_source("touchdeck");
@@ -721,6 +722,7 @@ impl ImeApp {
                 keysym,
                 state,
                 event.modifiers,
+                rime_was_empty,
             );
         }
 
@@ -793,9 +795,12 @@ impl ImeApp {
         keysym: u32,
         state: KeyState,
         modifiers: u32,
+        rime_was_empty: bool,
     ) {
         if is_direct_passthrough_key(keysym) {
-            self.passthrough_touchdeck_key(time, key, state);
+            if rime_was_empty {
+                self.passthrough_touchdeck_key(time, key, state);
+            }
             return;
         }
 
@@ -805,7 +810,9 @@ impl ImeApp {
 
         let rime_mask = rime_modifier_mask(modifiers);
         if rime_mask & (RIME_CONTROL_MASK | RIME_ALT_MASK | RIME_SUPER_MASK) != 0 {
-            self.passthrough_touchdeck_key(time, key, state);
+            if rime_was_empty {
+                self.passthrough_touchdeck_key(time, key, state);
+            }
             return;
         }
 
