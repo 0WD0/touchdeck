@@ -554,6 +554,10 @@ fn main() -> Result<()> {
         event_queue
             .dispatch_pending(&mut app)
             .context("dispatch pending Wayland events")?;
+        event_queue
+            .flush()
+            .context("flush Wayland configure acknowledgements")?;
+        app.flush_deferred_server_popup(&qh);
 
         while let Ok(request) = event_rx.try_recv() {
             match request {
@@ -654,9 +658,38 @@ impl ImeApp {
             surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
             surface.commit();
         }
-        if let Some(surface) = &self.server_popup_surface {
-            surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
-            surface.commit();
+        self.pending_server_popup_status = None;
+        if self.server_popup_layer_configured {
+            if let Some(surface) = &self.server_popup_surface {
+                surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
+                surface.commit();
+            }
+        }
+    }
+
+    fn flush_deferred_server_popup(&mut self, qh: &QueueHandle<Self>) {
+        if !self.server_popup_layer_configured {
+            return;
+        }
+
+        let Some(status) = self.pending_server_popup_status.take() else {
+            return;
+        };
+
+        if !status.active
+            || status_is_empty(&status)
+            || self.fcitx_focus.is_none()
+            || self.fcitx_uses_client_side_input_panel()
+        {
+            if let Some(surface) = &self.server_popup_surface {
+                surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
+                surface.commit();
+            }
+            return;
+        }
+
+        if let Err(err) = self.render_server_popup(qh, &status) {
+            eprintln!("touchdeck-ime: failed to render deferred server popup: {err:?}");
         }
     }
 
@@ -1710,7 +1743,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ImeApp {
         event: zwlr_layer_surface_v1::Event,
         _data: &(),
         _conn: &Connection,
-        qh: &QueueHandle<Self>,
+        _qh: &QueueHandle<Self>,
     ) {
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, .. } => {
@@ -1722,13 +1755,6 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ImeApp {
                     .unwrap_or(false)
                 {
                     state.server_popup_layer_configured = true;
-                    if let Some(status) = state.pending_server_popup_status.take() {
-                        if let Err(err) = state.render_server_popup(qh, &status) {
-                            eprintln!(
-                                "touchdeck-ime: failed to render configured server popup: {err:?}"
-                            );
-                        }
-                    }
                 }
             }
             zwlr_layer_surface_v1::Event::Closed => {
