@@ -1054,14 +1054,11 @@ struct RimeEngine {
 
 impl RimeEngine {
     fn new() -> Result<Self> {
-        let shared_data_dir_path = env_path("TOUCHDECK_RIME_SHARED_DATA_DIR")
-            .unwrap_or_else(default_rime_shared_data_dir);
+        let shared_data_dir_path = default_rime_shared_data_dir();
         let user_data_dir_path = env_path("TOUCHDECK_RIME_USER_DATA_DIR")
             .unwrap_or_else(default_rime_user_data_dir);
-        let prebuilt_data_dir_path = env_path("TOUCHDECK_RIME_PREBUILT_DATA_DIR")
-            .unwrap_or_else(|| shared_data_dir_path.join("build"));
-        let staging_dir_path = env_path("TOUCHDECK_RIME_STAGING_DIR")
-            .unwrap_or_else(|| user_data_dir_path.join("build"));
+        let prebuilt_data_dir_path = shared_data_dir_path.join("build");
+        let staging_dir_path = user_data_dir_path.join("build");
 
         if !shared_data_dir_path.join("default.yaml").exists() {
             return Err(anyhow!(
