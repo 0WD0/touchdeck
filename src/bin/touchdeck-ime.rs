@@ -660,23 +660,58 @@ impl ImeApp {
             return Ok(());
         }
 
+        if self.fcitx_focus.is_some() {
+            self.hide_popup(qh);
+            return Ok(());
+        }
+
         if !self.ensure_popup(qh)? {
             return Ok(());
         }
 
-        self.render_popup(qh, &status)
+        self.render_input_popup(qh, &status)
     }
 
-    fn render_popup(&mut self, qh: &QueueHandle<Self>, status: &ImeStatus) -> Result<()> {
-        let shm = self
-            .shm
-            .as_ref()
-            .ok_or_else(|| anyhow!("wl_shm global is unavailable"))?;
+    fn render_input_popup(&mut self, qh: &QueueHandle<Self>, status: &ImeStatus) -> Result<()> {
         let surface = self
             .popup_surface
             .as_ref()
+            .cloned()
             .ok_or_else(|| anyhow!("input popup surface is unavailable"))?;
+        self.render_popup_to_surface(qh, &surface, status)
+    }
 
+    fn render_popup_to_surface(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        status: &ImeStatus,
+    ) -> Result<()> {
+        let shm = self
+            .shm
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow!("wl_shm global is unavailable"))?;
+        let (backing, width, height) = self.create_popup_buffer(qh, &shm, status)?;
+        surface.attach(Some(&backing.buffer), 0, 0);
+        surface.damage_buffer(0, 0, width, height);
+        surface.commit();
+
+        self.popup_buffers.push_back(backing);
+        self.popup_buffers.retain(|buffer| !buffer.released);
+        while self.popup_buffers.len() > 8 {
+            self.popup_buffers.pop_front();
+        }
+
+        Ok(())
+    }
+
+    fn create_popup_buffer(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        shm: &wl_shm::WlShm,
+        status: &ImeStatus,
+    ) -> Result<(PopupBuffer, i32, i32)> {
         let popup = self.config.popup.clone();
         let width = env_u32("TOUCHDECK_IME_POPUP_WIDTH", popup.width).clamp(220, 1600);
         let candidate_count = status.candidates.iter().take(popup.max_candidates).count();
@@ -718,23 +753,17 @@ impl ImeApp {
             (),
         );
 
-        surface.attach(Some(&buffer), 0, 0);
-        surface.damage_buffer(0, 0, width as i32, height as i32);
-        surface.commit();
-
-        self.popup_buffers.push_back(PopupBuffer {
-            _file: file,
-            _mmap: mmap,
-            _pool: pool,
-            buffer,
-            released: false,
-        });
-        self.popup_buffers.retain(|buffer| !buffer.released);
-        while self.popup_buffers.len() > 8 {
-            self.popup_buffers.pop_front();
-        }
-
-        Ok(())
+        Ok((
+            PopupBuffer {
+                _file: file,
+                _mmap: mmap,
+                _pool: pool,
+                buffer,
+                released: false,
+            },
+            width as i32,
+            height as i32,
+        ))
     }
 
     fn handle_physical_key(
