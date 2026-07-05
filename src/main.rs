@@ -1607,6 +1607,12 @@ enum Behavior {
     Niri(NiriAction),
     KeySequence(Vec<KeyChord>),
     KeyHold(u32),
+    ModMorph {
+        mods: u32,
+        keep_mods: u32,
+        normal: Box<Behavior>,
+        morph: Box<Behavior>,
+    },
     KeyRepeat,
     HoldRepeat {
         sequence: Vec<KeyChord>,
@@ -1643,6 +1649,17 @@ impl Behavior {
             Self::Niri(action) => GestureAction::Niri(action),
             Self::KeySequence(sequence) => GestureAction::KeySequence(sequence),
             Self::KeyHold(key) => GestureAction::KeyHold(key),
+            Self::ModMorph {
+                mods,
+                keep_mods,
+                normal,
+                morph,
+            } => GestureAction::ModMorph {
+                mods,
+                keep_mods,
+                normal: Box::new(normal.into_action()),
+                morph: Box::new(morph.into_action()),
+            },
             Self::KeyRepeat => GestureAction::KeyRepeat,
             Self::HoldRepeat {
                 sequence,
@@ -1776,6 +1793,10 @@ struct BehaviorFileConfig {
     layer: Option<String>,
     interval_ms: Option<u32>,
     translation: Option<String>,
+    mods: Option<Vec<String>>,
+    keep_mods: Option<Vec<String>>,
+    normal: Option<String>,
+    morph: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -1794,6 +1815,10 @@ struct BehaviorDefinitionFileConfig {
     layer: Option<String>,
     interval_ms: Option<u32>,
     translation: Option<String>,
+    mods: Option<Vec<String>>,
+    keep_mods: Option<Vec<String>>,
+    normal: Option<String>,
+    morph: Option<String>,
 }
 
 impl Binding {
@@ -2406,6 +2431,12 @@ enum GestureAction {
     },
     KeyHold(u32),
     KeyRelease(u32),
+    ModMorph {
+        mods: u32,
+        keep_mods: u32,
+        normal: Box<GestureAction>,
+        morph: Box<GestureAction>,
+    },
     KeyRepeat,
     HoldRepeat {
         sequence: Vec<KeyChord>,
@@ -3247,6 +3278,21 @@ impl App {
             } => {
                 self.send_key_sequence(&sequence, Some(translation));
             }
+            GestureAction::ModMorph {
+                mods,
+                keep_mods,
+                normal,
+                morph,
+            } => {
+                if self.modifier_mask & mods == 0 {
+                    self.dispatch_action(*normal);
+                } else {
+                    let saved_modifier_mask = self.modifier_mask;
+                    self.modifier_mask &= !(mods & !keep_mods);
+                    self.dispatch_action(*morph);
+                    self.modifier_mask = saved_modifier_mask;
+                }
+            }
             GestureAction::KeyRepeat => {
                 self.repeat_last_key_sequence();
             }
@@ -3953,6 +3999,7 @@ impl Engine {
             GestureAction::Niri(_)
             | GestureAction::KeySequence(_)
             | GestureAction::KeySequenceWithPolicy { .. }
+            | GestureAction::ModMorph { .. }
             | GestureAction::KeyRepeat
             | GestureAction::HoldRepeat { .. }
             | GestureAction::KeyRelease(_)
@@ -4596,6 +4643,43 @@ fn parse_defined_behavior_invocation(
         .kind
         .as_deref()
         .unwrap_or(name);
+    if normalize_name(kind) == "mod_morph" {
+        let mods = parse_modifier_flags(
+            definition
+                .mods
+                .as_deref()
+                .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing mods"))?,
+        )?;
+        let keep_mods = definition
+            .keep_mods
+            .as_deref()
+            .map(parse_modifier_flags)
+            .transpose()?
+            .unwrap_or(0);
+        let normal = definition
+            .normal
+            .as_deref()
+            .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing normal binding"))?;
+        let morph = definition
+            .morph
+            .as_deref()
+            .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing morph binding"))?;
+
+        return Ok(Behavior::ModMorph {
+            mods,
+            keep_mods,
+            normal: Box::new(parse_behavior_invocation(
+                &expand_behavior_template(normal, args),
+                macros,
+                behavior_registry,
+            )?),
+            morph: Box::new(parse_behavior_invocation(
+                &expand_behavior_template(morph, args),
+                macros,
+                behavior_registry,
+            )?),
+        });
+    }
     parse_behavior_invocation_kind(
         kind,
         args,
@@ -4799,6 +4883,25 @@ fn parse_key_translation_policy(value: &str) -> Result<KeyTranslationPolicy> {
         "raw" | "raw_keysym" | "base" => Ok(KeyTranslationPolicy::Raw),
         other => Err(anyhow!("unknown key translation policy {other:?}")),
     }
+}
+
+fn parse_modifier_flags(values: &[String]) -> Result<u32> {
+    let mut flags = 0;
+    for value in values {
+        flags |= match normalize_name(value).as_str() {
+            "shift" | "lshift" | "leftshift" | "left_shift" | "rshift" | "rightshift"
+            | "right_shift" => XKB_MOD_SHIFT,
+            "ctrl" | "control" | "lctrl" | "leftctrl" | "left_control" | "rctrl"
+            | "rightctrl" | "right_control" => XKB_MOD_CONTROL,
+            "alt" | "lalt" | "leftalt" | "left_alt" | "ralt" | "rightalt"
+            | "right_alt" => XKB_MOD_ALT,
+            "super" | "meta" | "win" | "gui" | "lgui" | "leftgui" | "left_gui"
+            | "leftmeta" | "left_meta" | "rgui" | "rightgui" | "right_gui"
+            | "rightmeta" | "right_meta" => XKB_MOD_SUPER,
+            other => return Err(anyhow!("unknown modifier {other:?}")),
+        };
+    }
+    Ok(flags)
 }
 
 fn parse_action_steps(steps: Vec<ActionStepFileConfig>) -> Result<Vec<ActionStep>> {
@@ -5065,6 +5168,7 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
             translation,
         } => key_sequence_label(sequence).map(|label| format!("{label}/{}", translation.as_str())),
         Behavior::KeyHold(key) => key_code_label(*key).map(|label| format!("{}+", label)),
+        Behavior::ModMorph { .. } => Some("morph".to_string()),
         Behavior::KeyRepeat => Some("repeat".to_string()),
         Behavior::HoldRepeat { sequence, .. } => {
             key_sequence_label(sequence).map(|label| format!("{}...", label))
