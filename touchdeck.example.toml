@@ -89,8 +89,10 @@ first_candidate_background_color = "#2e3d4470"
 [[keyboard.layers]]
 mode = "text"
 layer = "base"
-repeat_start_ms = 360
-repeat_interval_ms = 45
+# First repeat is deliberately slower than subsequent repeats, so swipe-hold
+# gives one movement immediately and only repeats after a clear hold.
+repeat_start_ms = 520
+repeat_interval_ms = 55
 
 [keyboard.layers.tap]
 key_n1 = "&kp N1"

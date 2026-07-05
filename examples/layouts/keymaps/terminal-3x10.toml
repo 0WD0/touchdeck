@@ -8,8 +8,8 @@ keys = "BSPC"
 [[keyboard.layers]]
 mode = "text"
 layer = "base"
-repeat_start_ms = 320
-repeat_interval_ms = 38
+repeat_start_ms = 460
+repeat_interval_ms = 45
 
 [keyboard.layers.tap]
 key_q = "&kp Q"

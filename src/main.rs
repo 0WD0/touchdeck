@@ -298,7 +298,7 @@ impl Default for Config {
             two_finger_tap_ms: env_u32("TOUCHDECK_TWO_FINGER_TAP_MS", 350),
             exit_tap_ms: env_u32("TOUCHDECK_EXIT_TAP_MS", 450),
             hold_ms: env_u32("TOUCHDECK_HOLD_MS", 180),
-            repeat_start_ms: env_u32("TOUCHDECK_REPEAT_START_MS", 360),
+            repeat_start_ms: env_u32("TOUCHDECK_REPEAT_START_MS", 520),
             repeat_interval_ms: env_u32("TOUCHDECK_REPEAT_INTERVAL_MS", 45),
             double_tap_ms: env_u32("TOUCHDECK_DOUBLE_TAP_MS", 280),
             swipe_threshold_ratio: env_f64("TOUCHDECK_SWIPE_THRESHOLD_RATIO", 0.08),
@@ -1431,6 +1431,7 @@ enum Behavior {
     KeyRepeat,
     HoldRepeat {
         sequence: Vec<KeyChord>,
+        start_ms: Option<u32>,
         interval_ms: Option<u32>,
         translation: Option<KeyTranslationPolicy>,
         route: Option<KeyRoute>,
@@ -1480,11 +1481,13 @@ impl Behavior {
             Self::KeyRepeat => GestureAction::KeyRepeat,
             Self::HoldRepeat {
                 sequence,
+                start_ms,
                 interval_ms,
                 translation,
                 route,
             } => GestureAction::HoldRepeat {
                 sequence,
+                start_ms,
                 interval_ms,
                 translation,
                 route,
@@ -1612,6 +1615,7 @@ struct BehaviorFileConfig {
     steps: Option<Vec<ActionStepFileConfig>>,
     mode: Option<String>,
     layer: Option<String>,
+    start_ms: Option<u32>,
     interval_ms: Option<u32>,
     translation: Option<String>,
     route: Option<String>,
@@ -1637,6 +1641,7 @@ struct BehaviorDefinitionFileConfig {
     steps: Option<Vec<ActionStepFileConfig>>,
     mode: Option<String>,
     layer: Option<String>,
+    start_ms: Option<u32>,
     interval_ms: Option<u32>,
     translation: Option<String>,
     route: Option<String>,
@@ -1727,6 +1732,8 @@ fn expand_keyboard_maps(
             },
             priority,
             consume,
+            repeat_start_ms,
+            repeat_interval_ms,
         )?;
         expand_keyboard_hold_map(
             &mut bindings,
@@ -1741,6 +1748,8 @@ fn expand_keyboard_maps(
             hold_ms,
             priority,
             consume,
+            repeat_start_ms,
+            repeat_interval_ms,
         )?;
         expand_keyboard_repeat_map(
             &mut bindings,
@@ -1776,6 +1785,8 @@ fn expand_keyboard_maps(
             },
             priority,
             consume,
+            repeat_start_ms,
+            repeat_interval_ms,
         )?;
         expand_keyboard_gesture_map(
             &mut bindings,
@@ -1796,6 +1807,8 @@ fn expand_keyboard_maps(
             },
             priority,
             consume,
+            repeat_start_ms,
+            repeat_interval_ms,
         )?;
         expand_keyboard_gesture_map(
             &mut bindings,
@@ -1816,6 +1829,8 @@ fn expand_keyboard_maps(
             },
             priority,
             consume,
+            repeat_start_ms,
+            repeat_interval_ms,
         )?;
         expand_keyboard_gesture_map(
             &mut bindings,
@@ -1836,6 +1851,8 @@ fn expand_keyboard_maps(
             },
             priority,
             consume,
+            repeat_start_ms,
+            repeat_interval_ms,
         )?;
     }
 
@@ -1855,6 +1872,8 @@ fn expand_keyboard_hold_map(
     hold_ms: Option<u32>,
     priority: i32,
     consume: bool,
+    repeat_start_ms: Option<u32>,
+    repeat_interval_ms: Option<u32>,
 ) -> Result<()> {
     let Some(behavior_invocations) = behavior_invocations else {
         return Ok(());
@@ -1864,6 +1883,11 @@ fn expand_keyboard_hold_map(
         let target = slots
             .get(&slot_id)
             .with_context(|| format!("keyboard map {map_index} hold target {slot_id}"))?;
+        let mut behavior = parse_behavior_invocation(&invocation, macros, behavior_registry)
+            .with_context(|| {
+                format!("parse keyboard map {map_index} hold behavior for {slot_id} ({invocation})")
+            })?;
+        apply_hold_repeat_defaults(&mut behavior, repeat_start_ms, repeat_interval_ms);
         bindings.push(Binding {
             mode,
             layer,
@@ -1872,18 +1896,33 @@ fn expand_keyboard_hold_map(
                 fingers,
                 min_ms: hold_ms,
             },
-            behavior: parse_behavior_invocation(&invocation, macros, behavior_registry)
-                .with_context(|| {
-                    format!(
-                        "parse keyboard map {map_index} hold behavior for {slot_id} ({invocation})"
-                    )
-                })?,
+            behavior,
             priority,
             consume,
         });
     }
 
     Ok(())
+}
+
+fn apply_hold_repeat_defaults(
+    behavior: &mut Behavior,
+    start_ms: Option<u32>,
+    interval_ms: Option<u32>,
+) {
+    if let Behavior::HoldRepeat {
+        start_ms: behavior_start_ms,
+        interval_ms: behavior_interval_ms,
+        ..
+    } = behavior
+    {
+        if behavior_start_ms.is_none() {
+            *behavior_start_ms = start_ms;
+        }
+        if behavior_interval_ms.is_none() {
+            *behavior_interval_ms = interval_ms;
+        }
+    }
 }
 
 fn expand_keyboard_repeat_map(
@@ -1915,11 +1954,7 @@ fn expand_keyboard_repeat_map(
                     "parse keyboard map {map_index} repeat behavior for {slot_id} ({invocation})"
                 )
             })?;
-        if let Behavior::HoldRepeat { interval_ms, .. } = &mut behavior {
-            if interval_ms.is_none() {
-                *interval_ms = repeat_interval_ms;
-            }
-        }
+        apply_hold_repeat_defaults(&mut behavior, repeat_start_ms, repeat_interval_ms);
         bindings.push(Binding {
             mode,
             layer,
@@ -1950,6 +1985,8 @@ fn expand_keyboard_gesture_map<F>(
     make_trigger: F,
     priority: i32,
     consume: bool,
+    repeat_start_ms: Option<u32>,
+    repeat_interval_ms: Option<u32>,
 ) -> Result<()>
 where
     F: Fn(SlotTarget) -> Trigger,
@@ -1962,15 +1999,18 @@ where
         let target = slots
             .get(&slot_id)
             .with_context(|| format!("keyboard map {map_index} {gesture_name} target {slot_id}"))?;
+        let mut behavior =
+            parse_behavior_invocation(&invocation, macros, behavior_registry).with_context(|| {
+                format!(
+                    "parse keyboard map {map_index} {gesture_name} behavior for {slot_id} ({invocation})"
+                )
+            })?;
+        apply_hold_repeat_defaults(&mut behavior, repeat_start_ms, repeat_interval_ms);
         bindings.push(Binding {
             mode,
             layer,
             trigger: make_trigger(target),
-            behavior: parse_behavior_invocation(&invocation, macros, behavior_registry).with_context(|| {
-                format!(
-                    "parse keyboard map {map_index} {gesture_name} behavior for {slot_id} ({invocation})"
-                )
-            })?,
+            behavior,
             priority,
             consume,
         });
@@ -2150,6 +2190,7 @@ enum GestureAction {
     KeyRepeat,
     HoldRepeat {
         sequence: Vec<KeyChord>,
+        start_ms: Option<u32>,
         interval_ms: Option<u32>,
         translation: Option<KeyTranslationPolicy>,
         route: Option<KeyRoute>,
@@ -3477,16 +3518,18 @@ impl Engine {
                 self.last_tap = None;
 
                 match action {
-                    GestureAction::HoldRepeat {
-                        sequence,
-                        interval_ms,
-                        translation,
-                        route,
-                    } => {
+            GestureAction::HoldRepeat {
+                sequence,
+                start_ms,
+                interval_ms,
+                translation,
+                route,
+            } => {
                         self.start_hold_repeat(
                             candidate.id,
                             now_ms,
                             sequence,
+                            start_ms,
                             interval_ms,
                             translation,
                             route,
@@ -3952,6 +3995,7 @@ impl Engine {
         match action {
             GestureAction::HoldRepeat {
                 sequence,
+                start_ms,
                 interval_ms,
                 translation,
                 route,
@@ -3959,6 +4003,7 @@ impl Engine {
                 hold_id,
                 now_ms,
                 sequence,
+                start_ms,
                 interval_ms,
                 translation,
                 route,
@@ -3974,12 +4019,14 @@ impl Engine {
         hold_id: i32,
         now_ms: u64,
         sequence: Vec<KeyChord>,
+        start_ms: Option<u32>,
         interval_ms: Option<u32>,
         translation: Option<KeyTranslationPolicy>,
         route: Option<KeyRoute>,
         config: &Config,
         effects: &mut Vec<EngineEffect>,
     ) {
+        let start_ms = start_ms.unwrap_or(config.repeat_start_ms);
         let interval_ms = interval_ms.unwrap_or(config.repeat_interval_ms).max(1);
         if translation.is_some() || route.is_some() {
             effects.push(EngineEffect::Dispatch(
@@ -3999,7 +4046,7 @@ impl Engine {
             .retain(|repeater| repeater.hold_id != hold_id);
         self.repeaters.push(RepeatState {
             hold_id,
-            next_ms: now_ms + u64::from(interval_ms),
+            next_ms: now_ms + u64::from(start_ms),
             interval_ms,
             sequence,
             translation,
@@ -4519,6 +4566,7 @@ fn parse_behavior(
                 .ok_or_else(|| anyhow!("hold_repeat behavior is missing key/keys"))?;
             Ok(Behavior::HoldRepeat {
                 sequence: parse_key_sequence(&keys)?,
+                start_ms: value.start_ms,
                 interval_ms: value.interval_ms,
                 translation: value
                     .translation
@@ -4661,6 +4709,7 @@ fn parse_defined_behavior_invocation(
             steps: definition.steps.clone(),
             mode: definition.mode.as_deref(),
             layer: definition.layer.as_deref(),
+            start_ms: definition.start_ms,
             interval_ms: definition.interval_ms,
             translation: definition.translation.as_deref(),
             route: definition.route.as_deref(),
@@ -4749,6 +4798,7 @@ struct BehaviorFields<'a> {
     steps: Option<Vec<ActionStepFileConfig>>,
     mode: Option<&'a str>,
     layer: Option<&'a str>,
+    start_ms: Option<u32>,
     interval_ms: Option<u32>,
     translation: Option<&'a str>,
     route: Option<&'a str>,
@@ -4850,6 +4900,7 @@ fn parse_behavior_invocation_kind(
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
             Ok(Behavior::HoldRepeat {
                 sequence: parse_key_sequence(&keys)?,
+                start_ms: fields.start_ms,
                 interval_ms: fields.interval_ms,
                 translation,
                 route,

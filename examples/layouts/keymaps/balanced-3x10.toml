@@ -15,8 +15,8 @@ morph = "&kpe QUESTION"
 [[keyboard.layers]]
 mode = "text"
 layer = "base"
-repeat_start_ms = 360
-repeat_interval_ms = 45
+repeat_start_ms = 520
+repeat_interval_ms = 55
 
 [keyboard.layers.tap]
 key_q = "&kp Q"
