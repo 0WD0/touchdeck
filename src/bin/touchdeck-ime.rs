@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::{CStr, CString};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::raw::{c_char, c_int, c_void};
 use std::os::unix::ffi::OsStrExt;
@@ -13,7 +13,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
@@ -72,6 +72,7 @@ struct ImeApp {
     active: bool,
     serial: u32,
     preedit: String,
+    status: ImeStatus,
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
     running: bool,
@@ -83,10 +84,19 @@ struct TouchDeckEvent {
     #[serde(rename = "type")]
     kind: String,
     source: String,
+    #[serde(default)]
     time: u32,
+    #[serde(default)]
     key: u32,
+    #[serde(default)]
     state: String,
+    #[serde(default)]
     modifiers: u32,
+}
+
+struct TouchDeckRequest {
+    event: TouchDeckEvent,
+    response: Sender<ImeStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +109,44 @@ enum KeyState {
 struct RimeOutput {
     handled: bool,
     commit: Option<String>,
+    status: ImeStatus,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+struct ImeCandidate {
+    label: String,
+    text: String,
+    comment: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ImeStatus {
+    protocol: String,
+    #[serde(rename = "type")]
+    kind: String,
+    active: bool,
     preedit: String,
+    commit_preview: String,
+    candidates: Vec<ImeCandidate>,
+    highlighted_candidate_index: Option<usize>,
+    page_no: i32,
+    is_last_page: bool,
+}
+
+impl Default for ImeStatus {
+    fn default() -> Self {
+        Self {
+            protocol: "touchdeck-ime-v1".to_string(),
+            kind: "status".to_string(),
+            active: false,
+            preedit: String::new(),
+            commit_preview: String::new(),
+            candidates: Vec::new(),
+            highlighted_candidate_index: None,
+            page_no: 0,
+            is_last_page: true,
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -132,8 +179,9 @@ fn main() -> Result<()> {
             .dispatch_pending(&mut app)
             .context("dispatch pending Wayland events")?;
 
-        while let Ok(event) = event_rx.try_recv() {
-            app.handle_touchdeck_event(event);
+        while let Ok(request) = event_rx.try_recv() {
+            let status = app.handle_touchdeck_event(request.event);
+            let _ = request.response.send(status);
         }
 
         event_queue.flush().context("flush Wayland requests")?;
@@ -260,15 +308,15 @@ impl ImeApp {
         }
     }
 
-    fn handle_touchdeck_event(&mut self, event: TouchDeckEvent) {
+    fn handle_touchdeck_event(&mut self, event: TouchDeckEvent) -> ImeStatus {
         if event.protocol != "touchdeck-ime-v1" || event.kind != "key" || event.source != "touchdeck" {
             eprintln!("touchdeck-ime: ignored unsupported event {event:?}");
-            return;
+            return self.current_status();
         }
 
         let Some(state) = parse_key_state(&event.state) else {
             eprintln!("touchdeck-ime: ignored key with unknown state {event:?}");
-            return;
+            return self.current_status();
         };
 
         if !self.active {
@@ -276,25 +324,25 @@ impl ImeApp {
                 "touchdeck-ime: ignored key {} because input method is inactive",
                 event.key
             );
-            return;
+            return self.current_status();
         }
 
         let Some(keysym) = evdev_key_to_keysym(event.key) else {
             eprintln!("touchdeck-ime: ignored unknown evdev key {}", event.key);
-            return;
+            return self.current_status();
         };
 
         let output = {
             let Some(rime) = self.rime.as_mut() else {
                 eprintln!("touchdeck-ime: rime engine unavailable");
-                return;
+                return self.current_status();
             };
 
             match rime.process_key(keysym, state, event.modifiers) {
                 Ok(output) => output,
                 Err(err) => {
                     eprintln!("touchdeck-ime: rime error for key {}: {err:?}", event.key);
-                    return;
+                    return self.current_status();
                 }
             }
         };
@@ -310,11 +358,17 @@ impl ImeApp {
             "touchdeck-ime: key={} state={:?} time={} modifiers={} handled={} preedit={:?}",
             event.key, state, event.time, event.modifiers, handled, self.preedit
         );
+
+        self.current_status()
     }
 
     fn apply_rime_output(&mut self, output: RimeOutput) {
-        if output.preedit != self.preedit {
-            self.set_preedit(output.preedit);
+        let preedit = output.status.preedit.clone();
+        self.status = output.status;
+        self.status.active = self.active;
+
+        if preedit != self.preedit {
+            self.set_preedit(preedit);
         }
 
         if let Some(text) = output.commit {
@@ -336,6 +390,10 @@ impl ImeApp {
 
     fn clear_preedit(&mut self) {
         self.set_preedit(String::new());
+        self.status.preedit.clear();
+        self.status.commit_preview.clear();
+        self.status.candidates.clear();
+        self.status.highlighted_candidate_index = None;
     }
 
     fn commit_text(&mut self, text: String) {
@@ -390,6 +448,12 @@ impl ImeApp {
                 }
             }
         }
+    }
+
+    fn current_status(&self) -> ImeStatus {
+        let mut status = self.status.clone();
+        status.active = self.active;
+        status
     }
 }
 
@@ -487,6 +551,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
             zwp_input_method_v2::Event::Activate => {
                 state.active = true;
                 state.clear_preedit();
+                state.status.active = true;
                 if let Some(rime) = state.rime.as_mut() {
                     rime.clear();
                 }
@@ -495,6 +560,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
             zwp_input_method_v2::Event::Deactivate => {
                 state.active = false;
                 state.clear_preedit();
+                state.status.active = false;
                 if let Some(rime) = state.rime.as_mut() {
                     rime.clear();
                 }
@@ -706,12 +772,12 @@ impl RimeEngine {
         };
 
         let commit = self.take_commit()?;
-        let preedit = self.current_preedit()?;
+        let status = self.current_status()?;
 
         Ok(RimeOutput {
             handled,
             commit,
-            preedit,
+            status,
         })
     }
 
@@ -755,18 +821,18 @@ impl RimeEngine {
         }
     }
 
-    fn current_preedit(&self) -> Result<String> {
+    fn current_status(&self) -> Result<ImeStatus> {
         unsafe {
             let Some(get_context) = self.api().get_context else {
-                return Ok(String::new());
+                return Ok(ImeStatus::default());
             };
             let Some(free_context) = self.api().free_context else {
-                return Ok(String::new());
+                return Ok(ImeStatus::default());
             };
 
             let mut context = empty_rime_context();
             if get_context(self.session, &mut context) == RIME_FALSE {
-                return Ok(String::new());
+                return Ok(ImeStatus::default());
             }
 
             let preedit = if context.composition.preedit.is_null() {
@@ -776,8 +842,25 @@ impl RimeEngine {
                     .to_string_lossy()
                     .into_owned()
             };
+            let commit_preview = c_string_lossy(context.commit_text_preview);
+            let candidates = context_candidates(&context);
+            let highlighted_candidate_index = if context.menu.highlighted_candidate_index >= 0 {
+                Some(context.menu.highlighted_candidate_index as usize)
+            } else {
+                None
+            };
+            let status = ImeStatus {
+                active: true,
+                preedit,
+                commit_preview,
+                candidates,
+                highlighted_candidate_index,
+                page_no: context.menu.page_no,
+                is_last_page: context.menu.is_last_page != RIME_FALSE,
+                ..ImeStatus::default()
+            };
             free_context(&mut context);
-            Ok(preedit)
+            Ok(status)
         }
     }
 }
@@ -795,7 +878,7 @@ impl Drop for RimeEngine {
     }
 }
 
-fn spawn_socket_listener(socket_path: PathBuf) -> Result<Receiver<TouchDeckEvent>> {
+fn spawn_socket_listener(socket_path: PathBuf) -> Result<Receiver<TouchDeckRequest>> {
     if socket_path.exists() {
         fs::remove_file(&socket_path)
             .with_context(|| format!("remove stale socket {}", socket_path.display()))?;
@@ -866,8 +949,11 @@ fn path_to_cstring(path: &Path) -> Result<CString> {
         .with_context(|| format!("path contains NUL: {}", path.display()))
 }
 
-fn handle_client(stream: UnixStream, tx: Sender<TouchDeckEvent>) -> Result<()> {
-    let reader = BufReader::new(stream);
+fn handle_client(mut stream: UnixStream, tx: Sender<TouchDeckRequest>) -> Result<()> {
+    let reader_stream = stream
+        .try_clone()
+        .context("clone touchdeck-ime client stream")?;
+    let reader = BufReader::new(reader_stream);
     for line in reader.lines() {
         let line = line.context("read touchdeck-ime line")?;
         if line.trim().is_empty() {
@@ -876,12 +962,65 @@ fn handle_client(stream: UnixStream, tx: Sender<TouchDeckEvent>) -> Result<()> {
 
         let event: TouchDeckEvent =
             serde_json::from_str(&line).with_context(|| format!("parse event {line}"))?;
-        if tx.send(event).is_err() {
+        let (response_tx, response_rx) = mpsc::channel();
+        if tx
+            .send(TouchDeckRequest {
+                event,
+                response: response_tx,
+            })
+            .is_err()
+        {
             break;
         }
+        let status = response_rx
+            .recv_timeout(Duration::from_millis(500))
+            .context("wait for touchdeck-ime status")?;
+        serde_json::to_writer(&mut stream, &status).context("write touchdeck-ime status")?;
+        stream
+            .write_all(b"\n")
+            .context("write touchdeck-ime status newline")?;
     }
 
     Ok(())
+}
+
+unsafe fn context_candidates(context: &RimeContext) -> Vec<ImeCandidate> {
+    let count = context.menu.num_candidates.max(0) as usize;
+    if count == 0 || context.menu.candidates.is_null() {
+        return Vec::new();
+    }
+
+    let select_keys = c_string_lossy(context.menu.select_keys);
+    let select_key_chars = select_keys.chars().collect::<Vec<_>>();
+    let has_select_labels = !context.select_labels.is_null();
+
+    let mut candidates = Vec::with_capacity(count);
+    for index in 0..count {
+        let candidate = &*context.menu.candidates.add(index);
+        let label = if has_select_labels && index < context.menu.page_size.max(0) as usize {
+            c_string_lossy(*context.select_labels.add(index))
+        } else if let Some(ch) = select_key_chars.get(index) {
+            ch.to_string()
+        } else {
+            ((index + 1) % 10).to_string()
+        };
+
+        candidates.push(ImeCandidate {
+            label,
+            text: c_string_lossy(candidate.text),
+            comment: c_string_lossy(candidate.comment),
+        });
+    }
+
+    candidates
+}
+
+unsafe fn c_string_lossy(ptr: *const c_char) -> String {
+    if ptr.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(ptr).to_string_lossy().into_owned()
+    }
 }
 
 fn parse_key_state(state: &str) -> Option<KeyState> {

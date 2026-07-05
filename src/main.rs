@@ -24,7 +24,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1, zwlr_layer_surface_v1,
 };
 
-const NAMESPACE: &str = "touchdeck-prototype";
+const NAMESPACE: &str = "touchdeck";
 const KEY_ESC: u32 = 1;
 const KEY_1: u32 = 2;
 const KEY_2: u32 = 3;
@@ -113,6 +113,8 @@ struct App {
     started_at: Option<Instant>,
     mode_hint: Option<ModeHint>,
     last_presented_mode: Mode,
+    ime_status: ImeStatus,
+    ime_status_dirty: bool,
     modifier_mask: u32,
     running: bool,
 }
@@ -143,6 +145,8 @@ impl Default for App {
             started_at: None,
             mode_hint: None,
             last_presented_mode: Mode::Base,
+            ime_status: ImeStatus::default(),
+            ime_status_dirty: false,
             modifier_mask: 0,
             running: false,
         }
@@ -313,6 +317,27 @@ impl Config {
 struct TextOutputConfig {
     backend: TextOutputBackend,
     ime_socket: PathBuf,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+struct ImeStatus {
+    protocol: String,
+    #[serde(rename = "type")]
+    kind: String,
+    active: bool,
+    preedit: String,
+    commit_preview: String,
+    candidates: Vec<ImeCandidate>,
+    highlighted_candidate_index: Option<usize>,
+    page_no: i32,
+    is_last_page: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+struct ImeCandidate {
+    label: String,
+    text: String,
+    comment: String,
 }
 
 impl TextOutputConfig {
@@ -2340,6 +2365,7 @@ impl App {
         if !self.config.debug_draw {
             if self.engine.mode == Mode::Text {
                 self.render_text_keyboard(mmap, width, height, size);
+                self.render_ime_status(mmap, width, height);
             }
             self.render_mode_hint(mmap, width, height);
             return;
@@ -2458,6 +2484,10 @@ impl App {
                 24,
                 [0xff, 0xff, 0xff, 0xd0],
             );
+        }
+
+        if self.engine.mode == Mode::Text {
+            self.render_ime_status(mmap, width, height);
         }
 
         self.render_mode_hint(mmap, width, height);
@@ -2595,6 +2625,106 @@ impl App {
         }
     }
 
+    fn render_ime_status(&self, mmap: &mut [u8], width: u32, height: u32) {
+        if self.ime_status.preedit.is_empty()
+            && self.ime_status.commit_preview.is_empty()
+            && self.ime_status.candidates.is_empty()
+        {
+            return;
+        }
+
+        let panel_x = ((width as i32 * 3) / 100).max(4);
+        let panel_w = (width as i32 - panel_x * 2).max(80);
+        let panel_h = ((height as i32 * 78) / 1000).clamp(54, 118);
+        let panel_y = ((height as i32 * 430) / 1000)
+            .max(8)
+            .min((height as i32 - panel_h - 8).max(0));
+        let panel = RectPx {
+            x: panel_x,
+            y: panel_y,
+            w: panel_w,
+            h: panel_h,
+        };
+
+        fill_rect(mmap, width, height, panel, [0x08, 0x14, 0x18, 0xd8]);
+        draw_rect_frame(mmap, width, height, panel, [0x40, 0xff, 0xd0, 0xc8]);
+
+        let header_h = (panel.h * 42 / 100).max(22);
+        let mut header = String::new();
+        if !self.ime_status.preedit.is_empty() {
+            header.push_str(&ascii_compact(&self.ime_status.preedit));
+        }
+        if !self.ime_status.commit_preview.is_empty() {
+            if !header.is_empty() {
+                header.push_str(" > ");
+            }
+            header.push_str(&ascii_compact(&self.ime_status.commit_preview));
+        }
+        if header.is_empty() {
+            header.push_str("IME");
+        }
+        draw_label_in_rect_limited(
+            mmap,
+            width,
+            height,
+            RectPx {
+                x: panel.x + 8,
+                y: panel.y + 4,
+                w: panel.w - 16,
+                h: header_h - 6,
+            },
+            &header,
+            [0xff, 0xff, 0xff, 0xe8],
+            5,
+        );
+
+        let row_y = panel.y + header_h;
+        let row_h = (panel.h - header_h - 8).max(18);
+        let visible = self.ime_status.candidates.iter().take(5).collect::<Vec<_>>();
+        if visible.is_empty() {
+            return;
+        }
+
+        let gap = 6;
+        let box_w = ((panel.w - 16 - gap * (visible.len() as i32 - 1)) / visible.len() as i32)
+            .max(24);
+        for (index, candidate) in visible.into_iter().enumerate() {
+            let rect = RectPx {
+                x: panel.x + 8 + index as i32 * (box_w + gap),
+                y: row_y,
+                w: box_w,
+                h: row_h,
+            };
+            let highlighted = self.ime_status.highlighted_candidate_index == Some(index);
+            let fill = if highlighted {
+                [0x10, 0xff, 0xb0, 0xa0]
+            } else {
+                [0x18, 0x38, 0x34, 0xb8]
+            };
+            fill_rect(mmap, width, height, rect, fill);
+            draw_rect_frame(mmap, width, height, rect, [0xb0, 0xff, 0xe0, 0xb0]);
+
+            let mut label = candidate.label.clone();
+            let text = ascii_compact(&candidate.text);
+            if !text.is_empty() {
+                label.push(' ');
+                label.push_str(&text);
+            }
+            if label.trim().is_empty() {
+                label = format!("{} CJK", index + 1);
+            }
+            draw_label_in_rect_limited(
+                mmap,
+                width,
+                height,
+                rect,
+                &label,
+                [0xff, 0xff, 0xff, 0xf0],
+                3,
+            );
+        }
+    }
+
     fn apply_input_region(&self, qh: &QueueHandle<Self>, policy: &CapturePolicy) -> Result<()> {
         let surface = self
             .surface
@@ -2642,7 +2772,12 @@ impl App {
                 }
                 EngineEffect::Dispatch(action) => {
                     self.dispatch_action(action);
-                    Ok(())
+                    if self.ime_status_dirty && self.width != 0 && self.height != 0 {
+                        self.ime_status_dirty = false;
+                        self.attach_overlay_buffer(qh, self.width, self.height)
+                    } else {
+                        Ok(())
+                    }
                 }
                 EngineEffect::Redraw => {
                     if self.width != 0 && self.height != 0 {
@@ -2787,7 +2922,7 @@ impl App {
         self.emit_ime_key_state(time, key, pressed);
     }
 
-    fn emit_ime_key_state(&self, time: u32, key: u32, pressed: bool) {
+    fn emit_ime_key_state(&mut self, time: u32, key: u32, pressed: bool) {
         if !self.config.text_output.backend.uses_ime() {
             return;
         }
@@ -2817,6 +2952,33 @@ impl App {
             .and_then(|()| stream.write_all(b"\n").map_err(serde_json::Error::io))
         {
             eprintln!("touchdeck: failed to write touchdeck-ime event: {err}");
+            return;
+        }
+
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {}
+            Ok(_) => match serde_json::from_str::<ImeStatus>(line.trim()) {
+                Ok(status)
+                    if status.protocol == "touchdeck-ime-v1" && status.kind == "status" =>
+                {
+                    if status != self.ime_status {
+                        self.ime_status = status;
+                        self.ime_status_dirty = true;
+                    }
+                }
+                Ok(status) => {
+                    eprintln!("touchdeck: ignored unsupported touchdeck-ime status {status:?}");
+                }
+                Err(err) => {
+                    eprintln!("touchdeck: failed to parse touchdeck-ime status: {err}");
+                }
+            },
+            Err(err) => {
+                eprintln!("touchdeck: failed to read touchdeck-ime status: {err}");
+            }
         }
     }
 
@@ -4680,6 +4842,24 @@ fn draw_label_in_rect(
     color: [u8; 4],
 ) {
     draw_label_in_rect_limited(buf, width, height, rect, label, color, 8);
+}
+
+fn ascii_compact(value: &str) -> String {
+    let ascii = value
+        .chars()
+        .filter(|ch| ch.is_ascii_graphic() || *ch == ' ')
+        .take(12)
+        .collect::<String>();
+    if !ascii.trim().is_empty() {
+        return ascii;
+    }
+
+    let count = value.chars().count();
+    if count == 0 {
+        String::new()
+    } else {
+        format!("{count}CJK")
+    }
 }
 
 fn draw_label_in_rect_limited(
