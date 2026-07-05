@@ -40,6 +40,8 @@ const RIME_CONTROL_MASK: u32 = 1 << 2;
 const RIME_ALT_MASK: u32 = 1 << 3;
 const RIME_SUPER_MASK: u32 = 1 << 26;
 const RIME_RELEASE_MASK: u32 = 1 << 30;
+const RIME_MODULE_DEFAULT: &[u8] = b"default\0";
+const RIME_MODULE_PLUGINS: &[u8] = b"plugins\0";
 
 const XKB_SHIFT_MASK: u32 = 1 << 0;
 const XKB_CONTROL_MASK: u32 = 1 << 2;
@@ -1091,6 +1093,11 @@ impl RimeEngine {
             .context("TOUCHDECK_RIME_LOG_DIR contains NUL")?;
 
         let api = NonNull::new(unsafe { rime_get_api() }).context("rime_get_api returned null")?;
+        let rime_modules = [
+            RIME_MODULE_DEFAULT.as_ptr() as *const c_char,
+            RIME_MODULE_PLUGINS.as_ptr() as *const c_char,
+            ptr::null(),
+        ];
 
         let mut traits = RimeTraits {
             data_size: rime_traits_data_size(),
@@ -1100,7 +1107,7 @@ impl RimeEngine {
             distribution_code_name: ptr::null(),
             distribution_version: ptr::null(),
             app_name: app_name.as_ptr(),
-            modules: ptr::null(),
+            modules: rime_modules.as_ptr(),
             min_log_level: env::var("TOUCHDECK_RIME_LOG_LEVEL")
                 .ok()
                 .and_then(|value| value.parse::<c_int>().ok())
