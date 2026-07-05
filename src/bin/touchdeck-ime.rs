@@ -109,6 +109,8 @@ struct ImeApp {
     fcitx_output_tx: Option<Sender<FcitxDbusOutput>>,
     fcitx_focus: Option<FcitxDbusTarget>,
     fcitx_cursor_rect: Option<FcitxCursorRect>,
+    fcitx_capability: u64,
+    fcitx_supported_capability: u64,
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
     running: bool,
@@ -370,6 +372,14 @@ enum FcitxDbusRequest {
         h: i32,
         scale: f64,
     },
+    SetCapability {
+        target: FcitxDbusTarget,
+        capability: u64,
+    },
+    SetSupportedCapability {
+        target: FcitxDbusTarget,
+        capability: u64,
+    },
     SetSurroundingText {
         text: String,
         cursor: u32,
@@ -418,6 +428,7 @@ struct FcitxDbusKeyResponse {
 
 const FCITX_BATCHED_COMMIT_STRING: u32 = 0;
 const FCITX_BATCHED_PREEDIT: u32 = 1;
+const FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL: u64 = 1 << 39;
 
 type FcitxFormattedText = Vec<(String, i32)>;
 type FcitxCandidateList = Vec<(String, String)>;
@@ -774,7 +785,9 @@ impl ImeApp {
         if !handled {
             self.passthrough_physical_key(time, key, state);
         }
-        if let Err(err) = self.update_popup(qh, "physical") {
+        if self.fcitx_uses_client_side_input_panel() {
+            self.hide_popup(qh);
+        } else if let Err(err) = self.update_popup(qh, "physical") {
             eprintln!("touchdeck-ime: failed to update popup: {err:?}");
         }
 
@@ -878,6 +891,8 @@ impl ImeApp {
                 {
                     self.fcitx_focus = None;
                     self.fcitx_cursor_rect = None;
+                    self.fcitx_capability = 0;
+                    self.fcitx_supported_capability = 0;
                 }
                 if let Some(rime) = self.rime.as_mut() {
                     rime.clear();
@@ -933,6 +948,40 @@ impl ImeApp {
                         h,
                         scale,
                     });
+                }
+            }
+            FcitxDbusRequest::SetCapability { target, capability } => {
+                let client_side =
+                    (capability & FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL) != 0;
+                eprintln!(
+                    "touchdeck-ime: fcitx dbus capability path={} client={} capability=0x{capability:x} client_side_input_panel={client_side}",
+                    target.path.as_str(),
+                    target.client.as_str()
+                );
+                if self
+                    .fcitx_focus
+                    .as_ref()
+                    .map(|focus| focus.matches(&target))
+                    .unwrap_or(false)
+                {
+                    self.fcitx_capability = capability;
+                }
+            }
+            FcitxDbusRequest::SetSupportedCapability { target, capability } => {
+                let client_side =
+                    (capability & FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL) != 0;
+                eprintln!(
+                    "touchdeck-ime: fcitx dbus supported capability path={} client={} capability=0x{capability:x} client_side_input_panel={client_side}",
+                    target.path.as_str(),
+                    target.client.as_str()
+                );
+                if self
+                    .fcitx_focus
+                    .as_ref()
+                    .map(|focus| focus.matches(&target))
+                    .unwrap_or(false)
+                {
+                    self.fcitx_supported_capability = capability;
                 }
             }
             FcitxDbusRequest::SetSurroundingText {
@@ -1197,6 +1246,11 @@ impl ImeApp {
         if let Some(text) = commit {
             self.commit_text(text);
         }
+    }
+
+    fn fcitx_uses_client_side_input_panel(&self) -> bool {
+        self.fcitx_focus.is_some()
+            && (self.fcitx_capability & FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL) != 0
     }
 
     fn emit_fcitx_output(&mut self, preedit: String, commit: Option<String>, status: ImeStatus) {
@@ -2244,6 +2298,19 @@ impl FcitxInputContext {
         });
     }
 
+    fn send_capability(&self, capability: u64, supported: bool) {
+        let target = FcitxDbusTarget {
+            path: self.path.clone(),
+            client: self.client.clone(),
+        };
+        let request = if supported {
+            FcitxDbusRequest::SetSupportedCapability { target, capability }
+        } else {
+            FcitxDbusRequest::SetCapability { target, capability }
+        };
+        let _ = self.tx.send(request);
+    }
+
     fn send_surrounding_text(&self, text: String, cursor: u32, anchor: u32) {
         let _ = self.tx.send(FcitxDbusRequest::SetSurroundingText {
             text,
@@ -2473,10 +2540,18 @@ impl FcitxInputContext {
     }
 
     #[zbus(name = "SetCapability")]
-    fn set_capability(&self, _capability: u64, #[zbus(header)] _header: Header<'_>) {}
+    fn set_capability(&self, capability: u64, #[zbus(header)] header: Header<'_>) {
+        if self.check_sender(&header) {
+            self.send_capability(capability, false);
+        }
+    }
 
     #[zbus(name = "SetSupportedCapability")]
-    fn set_supported_capability(&self, _capability: u64, #[zbus(header)] _header: Header<'_>) {}
+    fn set_supported_capability(&self, capability: u64, #[zbus(header)] header: Header<'_>) {
+        if self.check_sender(&header) {
+            self.send_capability(capability, true);
+        }
+    }
 
     #[zbus(name = "SetSurroundingText")]
     fn set_surrounding_text(
