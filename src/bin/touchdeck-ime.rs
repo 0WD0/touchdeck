@@ -280,6 +280,8 @@ struct TouchDeckEvent {
     state: String,
     #[serde(default)]
     modifiers: u32,
+    #[serde(default)]
+    translation: Option<String>,
 }
 
 enum TouchDeckRequest {
@@ -591,7 +593,7 @@ impl ImeApp {
                 return;
             };
 
-            match rime.process_key(keysym, key_state, self.physical_modifiers) {
+            match rime.process_key(keysym, key_state, self.physical_modifiers, None) {
                 Ok(output) => output,
                 Err(err) => {
                     eprintln!("touchdeck-ime: rime error for physical key {key}: {err:?}");
@@ -689,7 +691,18 @@ impl ImeApp {
                 return self.current_status_with_source("touchdeck");
             };
 
-            match rime.process_key(keysym, state, event.modifiers) {
+            let translation = match event.translation.as_deref() {
+                Some(value) => match parse_key_translation_policy(value) {
+                    Ok(policy) => Some(policy),
+                    Err(err) => {
+                        eprintln!("touchdeck-ime: ignored invalid key translation policy: {err:?}");
+                        None
+                    }
+                },
+                None => None,
+            };
+
+            match rime.process_key(keysym, state, event.modifiers, translation) {
                 Ok(output) => output,
                 Err(err) => {
                     eprintln!("touchdeck-ime: rime error for key {}: {err:?}", event.key);
@@ -1299,12 +1312,13 @@ impl RimeEngine {
         keysym: u32,
         state: KeyState,
         xkb_modifiers: u32,
+        translation: Option<KeyTranslationPolicy>,
     ) -> Result<RimeOutput> {
         let mut mask = rime_modifier_mask(xkb_modifiers);
         if state == KeyState::Released {
             mask |= RIME_RELEASE_MASK;
         }
-        let keysym = match self.key_translation {
+        let keysym = match translation.unwrap_or(self.key_translation) {
             KeyTranslationPolicy::Effective => rime_effective_keysym(keysym, mask),
             KeyTranslationPolicy::Raw => keysym,
         };

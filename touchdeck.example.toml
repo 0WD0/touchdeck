@@ -16,14 +16,32 @@ output = "ime"
 # Optional raw XKB keymap file. If omitted, touchdeck uses a built-in us/pc105 keymap.
 # xkb_keymap = "/path/to/keymap.xkb"
 
+# ZMK-like behavior registry. Builtins are available even if this section is omitted:
+#   &kp KEY       tap a key sequence
+#   &kpe KEY      tap a key sequence and force effective Rime keysym translation
+#   &kpr KEY      tap a key sequence and force raw Rime keysym translation
+#   &hold KEY     press on hold, release when the touch is released
+#   &repeat KEY   repeat while held
+#   &trans        fall through to a lower active layer
+#   &none         consume without action
+#
+# Named behaviors are aliases/templates.
+[behaviors.shift_toggle]
+binding = "&kp <leftshift>"
+
+[behaviors.del_repeat]
+type = "key_repeat"
+keys = "DEL"
+
 [ime]
 # touchdeck-ime listens here by default when XDG_RUNTIME_DIR is set.
 # output can also be set here and overrides [keyboard].output.
 # output = "ime"
 # socket = "/run/user/1000/touchdeck-ime.sock"
 # Rime key translation:
-#   effective  Shift+/ is sent to Rime as "?"
-#   raw        Shift+/ is sent to Rime as "/" with Shift modifier
+#   effective  Physical Shift+/ is sent to Rime as "?"
+#   raw        Physical Shift+/ is sent to Rime as "/" with Shift modifier
+# Touch keyboard bindings can override this per behavior with &kpe / &kpr.
 key_translation = "effective"
 
 [ime.popup]
@@ -50,101 +68,101 @@ candidate_text_color = "#fffffff0"
 highlight_background_color = "#3b86f2dc"
 first_candidate_background_color = "#2e3d4470"
 
-[[keyboard.maps]]
+[[keyboard.layers]]
 mode = "text"
 layer = "base"
 repeat_start_ms = 360
 repeat_interval_ms = 45
 
-[keyboard.maps.tap]
-key_q = "q"
-key_w = "w"
-key_e = "e"
-key_r = "r"
-key_t = "t"
-key_y = "y"
-key_u = "u"
-key_i = "i"
-key_o = "o"
-key_p = "p"
-key_a = "a"
-key_s = "s"
-key_d = "d"
-key_f = "f"
-key_g = "g"
-key_h = "h"
-key_j = "j"
-key_k = "k"
-key_l = "l"
-key_z = "z"
-key_x = "x"
-key_c = "c"
-key_v = "v"
-key_b = "b"
-key_n = "n"
-key_m = "m"
-key_esc = "ESC"
-key_spc = "SPC"
-key_del = "DEL"
-key_ret = "RET"
-key_shift = "<leftshift>"
+[keyboard.layers.tap]
+key_q = "&kp q"
+key_w = "&kp w"
+key_e = "&kp e"
+key_r = "&kp r"
+key_t = "&kp t"
+key_y = "&kp y"
+key_u = "&kp u"
+key_i = "&kp i"
+key_o = "&kp o"
+key_p = "&kp p"
+key_a = "&kp a"
+key_s = "&kp s"
+key_d = "&kp d"
+key_f = "&kp f"
+key_g = "&kp g"
+key_h = "&kp h"
+key_j = "&kp j"
+key_k = "&kp k"
+key_l = "&kp l"
+key_z = "&kp z"
+key_x = "&kp x"
+key_c = "&kp c"
+key_v = "&kp v"
+key_b = "&kp b"
+key_n = "&kp n"
+key_m = "&kp m"
+key_esc = "&kp ESC"
+key_spc = "&kp SPC"
+key_del = "&kp DEL"
+key_ret = "&kp RET"
+key_shift = "&kp <leftshift>"
 
-[keyboard.maps.hold]
-key_shift = "<leftshift>"
-key_ctrl = "<leftctrl>"
-key_alt = "<leftalt>"
-key_super = "<leftmeta>"
+[keyboard.layers.hold]
+key_shift = "&hold <leftshift>"
+key_ctrl = "&hold <leftctrl>"
+key_alt = "&hold <leftalt>"
+key_super = "&hold <leftmeta>"
 
-[keyboard.maps.repeat]
-key_del = "DEL"
+[keyboard.layers.repeat]
+key_del = "&del_repeat"
 
-[keyboard.maps.swipe_up]
-key_q = "1"
-key_w = "2"
-key_e = "3"
-key_r = "4"
-key_t = "5"
-key_y = "6"
-key_u = "7"
-key_i = "8"
-key_o = "9"
-key_p = "0"
-key_a = "!"
-key_s = "@"
-key_d = "#"
-key_f = "$"
-key_g = "%"
-key_h = "^"
-key_j = "&"
-key_k = "<up>"
-key_l = "_"
-key_z = "`"
-key_x = "-"
-key_c = "="
-key_v = "["
-key_b = "]"
-key_n = "/"
-key_m = "?"
-key_spc = "TAB"
-key_del = "DELETE"
-key_ret = "C-RET"
+[keyboard.layers.swipe_up]
+key_q = "&kp 1"
+key_w = "&kp 2"
+key_e = "&kp 3"
+key_r = "&kp 4"
+key_t = "&kp 5"
+key_y = "&kp 6"
+key_u = "&kp 7"
+key_i = "&kp 8"
+key_o = "&kp 9"
+key_p = "&kp 0"
+key_a = "&kp !"
+key_s = "&kp @"
+key_d = "&kp #"
+key_f = "&kp $"
+key_g = "&kp %"
+key_h = "&kp ^"
+key_j = "&kp &"
+key_k = "&kp <up>"
+key_l = "&kp _"
+key_z = "&kp `"
+key_x = "&kp -"
+key_c = "&kp ="
+key_v = "&kp ["
+key_b = "&kp ]"
+key_n = "&kp /"
+key_m = "&kpe ?"
+key_spc = "&kp TAB"
+key_del = "&kp DELETE"
+key_ret = "&kp C-RET"
 
-[keyboard.maps.swipe_down]
-key_j = "<down>"
-key_k = "*"
-key_spc = "ESC"
+[keyboard.layers.swipe_down]
+key_j = "&kp <down>"
+key_k = "&kp *"
+key_spc = "&kp ESC"
 
-[keyboard.maps.swipe_left]
-key_h = "<left>"
-key_spc = "DEL"
-key_del = "M-DEL"
-key_ret = "C-<left>"
+[keyboard.layers.swipe_left]
+key_h = "&kp <left>"
+key_spc = "&kp DEL"
+key_del = "&kp M-DEL"
+key_ret = "&kp C-<left>"
 
-[keyboard.maps.swipe_right]
-key_l = "<right>"
-key_spc = "RET"
-key_del = "C-<right>"
-key_ret = "C-<right>"
+[keyboard.layers.swipe_right]
+key_l = "&kp <right>"
+key_spc = "&kp RET"
+key_del = "&kp C-<right>"
+key_ret = "&kp C-<right>"
 
 # Mode ownership controls.
 

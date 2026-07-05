@@ -368,6 +368,16 @@ impl Config {
             }
         }
 
+        let mut behavior_registry = BehaviorRegistry::default();
+        if let Some(behaviors) = file_config.behaviors {
+            behavior_registry.extend(behaviors);
+        }
+        if let Some(keyboard) = &keyboard {
+            if let Some(behaviors) = &keyboard.behaviors {
+                behavior_registry.extend(behaviors.clone());
+            }
+        }
+
         if let Some(bindings) = file_config.bindings {
             self.keymap.bindings.clear();
             for binding in bindings {
@@ -378,10 +388,10 @@ impl Config {
         }
 
         if let Some(keyboard) = keyboard {
-            if let Some(maps) = keyboard.maps {
+            if let Some(maps) = keyboard.layers {
                 self.keymap
                     .bindings
-                    .extend(expand_keyboard_maps(maps, &self.slots)?);
+                    .extend(expand_keyboard_maps(maps, &self.slots, &self.macros, &behavior_registry)?);
             }
         }
 
@@ -451,6 +461,21 @@ enum TextOutputBackend {
     VirtualKeyboard,
     Ime,
     Both,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyTranslationPolicy {
+    Effective,
+    Raw,
+}
+
+impl KeyTranslationPolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Effective => "effective",
+            Self::Raw => "raw",
+        }
+    }
 }
 
 impl TextOutputBackend {
@@ -737,7 +762,15 @@ impl Default for Keymap {
                 },
             ];
 
-        bindings.extend(expand_keyboard_maps(default_keyboard_maps(), &slots).expect("default keyboard map"));
+        bindings.extend(
+            expand_keyboard_maps(
+                default_keyboard_maps(),
+                &slots,
+                &MacroRegistry::default(),
+                &BehaviorRegistry::default(),
+            )
+            .expect("default keyboard map"),
+        );
 
         Self { bindings }
     }
@@ -1569,6 +1602,11 @@ enum Behavior {
     KeyRepeat {
         sequence: Vec<KeyChord>,
         interval_ms: Option<u32>,
+        translation: Option<KeyTranslationPolicy>,
+    },
+    KeySequenceWithPolicy {
+        sequence: Vec<KeyChord>,
+        translation: KeyTranslationPolicy,
     },
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
@@ -1599,9 +1637,18 @@ impl Behavior {
             Self::KeyRepeat {
                 sequence,
                 interval_ms,
+                translation,
             } => GestureAction::KeyRepeat {
                 sequence,
                 interval_ms,
+                translation,
+            },
+            Self::KeySequenceWithPolicy {
+                sequence,
+                translation,
+            } => GestureAction::KeySequenceWithPolicy {
+                sequence,
+                translation,
             },
             Self::Sequence(steps) => GestureAction::Sequence(steps),
             Self::ModeSet(mode) => GestureAction::ModeSet(mode),
@@ -1621,6 +1668,7 @@ struct FileConfig {
     layout: Option<LayoutFileConfig>,
     keyboard: Option<KeyboardFileConfig>,
     ime: Option<ImeFileConfig>,
+    behaviors: Option<HashMap<String, BehaviorDefinitionFileConfig>>,
     macros: Option<HashMap<String, MacroFileConfig>>,
     bindings: Option<Vec<BindingFileConfig>>,
 }
@@ -1635,7 +1683,8 @@ struct KeyboardFileConfig {
     output: Option<String>,
     ime_socket: Option<String>,
     xkb_keymap: Option<String>,
-    maps: Option<Vec<KeyboardMapFileConfig>>,
+    behaviors: Option<HashMap<String, BehaviorDefinitionFileConfig>>,
+    layers: Option<Vec<KeyboardMapFileConfig>>,
 }
 
 #[derive(Deserialize)]
@@ -1670,7 +1719,7 @@ struct MacroFileConfig {
     steps: Vec<ActionStepFileConfig>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ActionStepFileConfig {
     #[serde(rename = "type")]
     kind: String,
@@ -1716,6 +1765,25 @@ struct BehaviorFileConfig {
     mode: Option<String>,
     layer: Option<String>,
     interval_ms: Option<u32>,
+    translation: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+struct BehaviorDefinitionFileConfig {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    binding: Option<String>,
+    key: Option<String>,
+    keys: Option<String>,
+    action: Option<String>,
+    macro_name: Option<String>,
+    #[serde(rename = "macro")]
+    macro_alias: Option<String>,
+    steps: Option<Vec<ActionStepFileConfig>>,
+    mode: Option<String>,
+    layer: Option<String>,
+    interval_ms: Option<u32>,
+    translation: Option<String>,
 }
 
 impl Binding {
@@ -1740,84 +1808,103 @@ impl Binding {
     }
 }
 
+#[derive(Clone, Default)]
+struct BehaviorRegistry {
+    definitions: HashMap<String, BehaviorDefinitionFileConfig>,
+}
+
+impl BehaviorRegistry {
+    fn extend(&mut self, definitions: HashMap<String, BehaviorDefinitionFileConfig>) {
+        self.definitions.extend(
+            definitions
+                .into_iter()
+                .map(|(name, definition)| (normalize_name(&name), definition)),
+        );
+    }
+
+    fn get(&self, name: &str) -> Option<&BehaviorDefinitionFileConfig> {
+        self.definitions.get(&normalize_name(name))
+    }
+}
+
 fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
     vec![keyboard_map_config(
         &[
-            ("key_q", "q"),
-            ("key_w", "w"),
-            ("key_e", "e"),
-            ("key_r", "r"),
-            ("key_t", "t"),
-            ("key_y", "y"),
-            ("key_u", "u"),
-            ("key_i", "i"),
-            ("key_o", "o"),
-            ("key_p", "p"),
-            ("key_a", "a"),
-            ("key_s", "s"),
-            ("key_d", "d"),
-            ("key_f", "f"),
-            ("key_g", "g"),
-            ("key_h", "h"),
-            ("key_j", "j"),
-            ("key_k", "k"),
-            ("key_l", "l"),
-            ("key_z", "z"),
-            ("key_x", "x"),
-            ("key_c", "c"),
-            ("key_v", "v"),
-            ("key_b", "b"),
-            ("key_n", "n"),
-            ("key_m", "m"),
-            ("key_esc", "ESC"),
-            ("key_spc", "SPC"),
-            ("key_del", "DEL"),
-            ("key_ret", "RET"),
-            ("key_shift", "<leftshift>"),
+            ("key_q", "&kp q"),
+            ("key_w", "&kp w"),
+            ("key_e", "&kp e"),
+            ("key_r", "&kp r"),
+            ("key_t", "&kp t"),
+            ("key_y", "&kp y"),
+            ("key_u", "&kp u"),
+            ("key_i", "&kp i"),
+            ("key_o", "&kp o"),
+            ("key_p", "&kp p"),
+            ("key_a", "&kp a"),
+            ("key_s", "&kp s"),
+            ("key_d", "&kp d"),
+            ("key_f", "&kp f"),
+            ("key_g", "&kp g"),
+            ("key_h", "&kp h"),
+            ("key_j", "&kp j"),
+            ("key_k", "&kp k"),
+            ("key_l", "&kp l"),
+            ("key_z", "&kp z"),
+            ("key_x", "&kp x"),
+            ("key_c", "&kp c"),
+            ("key_v", "&kp v"),
+            ("key_b", "&kp b"),
+            ("key_n", "&kp n"),
+            ("key_m", "&kp m"),
+            ("key_esc", "&kp ESC"),
+            ("key_spc", "&kp SPC"),
+            ("key_del", "&kp DEL"),
+            ("key_ret", "&kp RET"),
+            ("key_shift", "&kp <leftshift>"),
         ],
         &[
-            ("key_q", "1"),
-            ("key_w", "2"),
-            ("key_e", "3"),
-            ("key_r", "4"),
-            ("key_t", "5"),
-            ("key_y", "6"),
-            ("key_u", "7"),
-            ("key_i", "8"),
-            ("key_o", "9"),
-            ("key_p", "0"),
-            ("key_a", "!"),
-            ("key_s", "@"),
-            ("key_d", "#"),
-            ("key_f", "$"),
-            ("key_g", "%"),
-            ("key_h", "^"),
-            ("key_j", "&"),
-            ("key_k", "<up>"),
-            ("key_l", "_"),
-            ("key_z", "`"),
-            ("key_x", "-"),
-            ("key_c", "="),
-            ("key_v", "["),
-            ("key_b", "]"),
-            ("key_n", "/"),
-            ("key_m", "?"),
-            ("key_spc", "TAB"),
-            ("key_del", "DELETE"),
-            ("key_ret", "C-RET"),
+            ("key_q", "&kp 1"),
+            ("key_w", "&kp 2"),
+            ("key_e", "&kp 3"),
+            ("key_r", "&kp 4"),
+            ("key_t", "&kp 5"),
+            ("key_y", "&kp 6"),
+            ("key_u", "&kp 7"),
+            ("key_i", "&kp 8"),
+            ("key_o", "&kp 9"),
+            ("key_p", "&kp 0"),
+            ("key_a", "&kp !"),
+            ("key_s", "&kp @"),
+            ("key_d", "&kp #"),
+            ("key_f", "&kp $"),
+            ("key_g", "&kp %"),
+            ("key_h", "&kp ^"),
+            ("key_j", "&kp &"),
+            ("key_k", "&kp <up>"),
+            ("key_l", "&kp _"),
+            ("key_z", "&kp `"),
+            ("key_x", "&kp -"),
+            ("key_c", "&kp ="),
+            ("key_v", "&kp ["),
+            ("key_b", "&kp ]"),
+            ("key_n", "&kp /"),
+            ("key_m", "&kp ?"),
+            ("key_spc", "&kp TAB"),
+            ("key_del", "&kp DELETE"),
+            ("key_ret", "&kp C-RET"),
         ],
-        &[("key_j", "<down>"), ("key_k", "*"), ("key_spc", "ESC")],
+        &[("key_j", "&kp <down>"), ("key_k", "&kp *"), ("key_spc", "&kp ESC")],
         &[
-            ("key_h", "<left>"),
-            ("key_spc", "DEL"),
-            ("key_del", "M-DEL"),
-            ("key_ret", "C-<left>"),
+            ("key_h", "&kp <left>"),
+            ("key_spc", "&kp DEL"),
+            ("key_del", "&kp M-DEL"),
+            ("key_ret", "&kp C-<left>"),
         ],
         &[
-            ("key_l", "<right>"),
-            ("key_spc", "RET"),
-            ("key_del", "C-<right>"),
-            ("key_ret", "C-<right>"),
+            ("key_l", "&kp <right>"),
+            ("key_spc", "&kp RET"),
+            ("key_del", "&kp C-<right>"),
+            ("key_ret", "&kp C-<right>"),
         ],
     )]
 }
@@ -1834,12 +1921,12 @@ fn keyboard_map_config(
         layer: Some("base".to_string()),
         tap: Some(key_pairs(tap)),
         hold: Some(key_pairs(&[
-            ("key_shift", "<leftshift>"),
-            ("key_ctrl", "<leftctrl>"),
-            ("key_alt", "<leftalt>"),
-            ("key_super", "<leftmeta>"),
+            ("key_shift", "&hold <leftshift>"),
+            ("key_ctrl", "&hold <leftctrl>"),
+            ("key_alt", "&hold <leftalt>"),
+            ("key_super", "&hold <leftmeta>"),
         ])),
-        repeat: Some(key_pairs(&[("key_del", "DEL")])),
+        repeat: Some(key_pairs(&[("key_del", "&repeat DEL")])),
         swipe_up: Some(key_pairs(swipe_up)),
         swipe_down: Some(key_pairs(swipe_down)),
         swipe_left: Some(key_pairs(swipe_left)),
@@ -1862,7 +1949,12 @@ fn key_pairs(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         .collect()
 }
 
-fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) -> Result<Vec<Binding>> {
+fn expand_keyboard_maps(
+    maps: Vec<KeyboardMapFileConfig>,
+    slots: &SlotRegistry,
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
+) -> Result<Vec<Binding>> {
     let mut bindings = Vec::new();
 
     for (map_index, map) in maps.into_iter().enumerate() {
@@ -1880,6 +1972,8 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
         expand_keyboard_gesture_map(
             &mut bindings,
             slots,
+            macros,
+            behavior_registry,
             map_index,
             mode,
             layer,
@@ -1896,6 +1990,8 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
         expand_keyboard_hold_map(
             &mut bindings,
             slots,
+            macros,
+            behavior_registry,
             map_index,
             mode,
             layer,
@@ -1908,6 +2004,8 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
         expand_keyboard_repeat_map(
             &mut bindings,
             slots,
+            macros,
+            behavior_registry,
             map_index,
             mode,
             layer,
@@ -1921,6 +2019,8 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
         expand_keyboard_gesture_map(
             &mut bindings,
             slots,
+            macros,
+            behavior_registry,
             map_index,
             mode,
             layer,
@@ -1939,6 +2039,8 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
         expand_keyboard_gesture_map(
             &mut bindings,
             slots,
+            macros,
+            behavior_registry,
             map_index,
             mode,
             layer,
@@ -1957,6 +2059,8 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
         expand_keyboard_gesture_map(
             &mut bindings,
             slots,
+            macros,
+            behavior_registry,
             map_index,
             mode,
             layer,
@@ -1975,6 +2079,8 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
         expand_keyboard_gesture_map(
             &mut bindings,
             slots,
+            macros,
+            behavior_registry,
             map_index,
             mode,
             layer,
@@ -1998,20 +2104,22 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
 fn expand_keyboard_hold_map(
     bindings: &mut Vec<Binding>,
     slots: &SlotRegistry,
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
     map_index: usize,
     mode: Mode,
     layer: Layer,
-    keys: Option<HashMap<String, String>>,
+    behavior_invocations: Option<HashMap<String, String>>,
     fingers: usize,
     hold_ms: Option<u32>,
     priority: i32,
     consume: bool,
 ) -> Result<()> {
-    let Some(keys) = keys else {
+    let Some(behavior_invocations) = behavior_invocations else {
         return Ok(());
     };
 
-    for (slot_id, key) in keys {
+    for (slot_id, invocation) in behavior_invocations {
         let target = slots
             .get(&slot_id)
             .with_context(|| format!("keyboard map {map_index} hold target {slot_id}"))?;
@@ -2023,9 +2131,9 @@ fn expand_keyboard_hold_map(
                 fingers,
                 min_ms: hold_ms,
             },
-            behavior: Behavior::KeyHold(parse_single_emacs_key(&key).with_context(|| {
-                format!("parse keyboard map {map_index} hold key for {slot_id} ({key})")
-            })?),
+            behavior: parse_behavior_invocation(&invocation, macros, behavior_registry).with_context(|| {
+                format!("parse keyboard map {map_index} hold behavior for {slot_id} ({invocation})")
+            })?,
             priority,
             consume,
         });
@@ -2037,24 +2145,38 @@ fn expand_keyboard_hold_map(
 fn expand_keyboard_repeat_map(
     bindings: &mut Vec<Binding>,
     slots: &SlotRegistry,
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
     map_index: usize,
     mode: Mode,
     layer: Layer,
-    keys: Option<HashMap<String, String>>,
+    behavior_invocations: Option<HashMap<String, String>>,
     fingers: usize,
     repeat_start_ms: Option<u32>,
     repeat_interval_ms: Option<u32>,
     priority: i32,
     consume: bool,
 ) -> Result<()> {
-    let Some(keys) = keys else {
+    let Some(behavior_invocations) = behavior_invocations else {
         return Ok(());
     };
 
-    for (slot_id, key) in keys {
+    for (slot_id, invocation) in behavior_invocations {
         let target = slots
             .get(&slot_id)
             .with_context(|| format!("keyboard map {map_index} repeat target {slot_id}"))?;
+        let mut behavior = parse_behavior_invocation(&invocation, macros, behavior_registry).with_context(|| {
+            format!("parse keyboard map {map_index} repeat behavior for {slot_id} ({invocation})")
+        })?;
+        if let Behavior::KeyRepeat {
+            interval_ms,
+            ..
+        } = &mut behavior
+        {
+            if interval_ms.is_none() {
+                *interval_ms = repeat_interval_ms;
+            }
+        }
         bindings.push(Binding {
             mode,
             layer,
@@ -2063,12 +2185,7 @@ fn expand_keyboard_repeat_map(
                 fingers,
                 min_ms: repeat_start_ms,
             },
-            behavior: Behavior::KeyRepeat {
-                sequence: parse_emacs_key_sequence(&key).with_context(|| {
-                    format!("parse keyboard map {map_index} repeat key for {slot_id} ({key})")
-                })?,
-                interval_ms: repeat_interval_ms,
-            },
+            behavior,
             priority,
             consume,
         });
@@ -2080,11 +2197,13 @@ fn expand_keyboard_repeat_map(
 fn expand_keyboard_gesture_map<F>(
     bindings: &mut Vec<Binding>,
     slots: &SlotRegistry,
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
     map_index: usize,
     mode: Mode,
     layer: Layer,
     gesture_name: &str,
-    keys: Option<HashMap<String, String>>,
+    behavior_invocations: Option<HashMap<String, String>>,
     make_trigger: F,
     priority: i32,
     consume: bool,
@@ -2092,11 +2211,11 @@ fn expand_keyboard_gesture_map<F>(
 where
     F: Fn(SlotTarget) -> Trigger,
 {
-    let Some(keys) = keys else {
+    let Some(behavior_invocations) = behavior_invocations else {
         return Ok(());
     };
 
-    for (slot_id, key) in keys {
+    for (slot_id, invocation) in behavior_invocations {
         let target = slots
             .get(&slot_id)
             .with_context(|| format!("keyboard map {map_index} {gesture_name} target {slot_id}"))?;
@@ -2104,9 +2223,11 @@ where
             mode,
             layer,
             trigger: make_trigger(target),
-            behavior: Behavior::KeySequence(parse_emacs_key_sequence(&key).with_context(|| {
-                format!("parse keyboard map {map_index} {gesture_name} key for {slot_id} ({key})")
-            })?),
+            behavior: parse_behavior_invocation(&invocation, macros, behavior_registry).with_context(|| {
+                format!(
+                    "parse keyboard map {map_index} {gesture_name} behavior for {slot_id} ({invocation})"
+                )
+            })?,
             priority,
             consume,
         });
@@ -2222,6 +2343,7 @@ struct RepeatState {
     next_ms: u64,
     interval_ms: u32,
     sequence: Vec<KeyChord>,
+    translation: Option<KeyTranslationPolicy>,
 }
 
 #[derive(Debug)]
@@ -2268,11 +2390,16 @@ enum EngineEffect {
 enum GestureAction {
     Niri(NiriAction),
     KeySequence(Vec<KeyChord>),
+    KeySequenceWithPolicy {
+        sequence: Vec<KeyChord>,
+        translation: KeyTranslationPolicy,
+    },
     KeyHold(u32),
     KeyRelease(u32),
     KeyRepeat {
         sequence: Vec<KeyChord>,
         interval_ms: Option<u32>,
+        translation: Option<KeyTranslationPolicy>,
     },
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
@@ -3100,10 +3227,20 @@ impl App {
                 spawn_niri_action(action);
             }
             GestureAction::KeySequence(sequence) => {
-                self.send_key_sequence(&sequence);
+                self.send_key_sequence(&sequence, None);
             }
-            GestureAction::KeyRepeat { sequence, .. } => {
-                self.send_key_sequence(&sequence);
+            GestureAction::KeySequenceWithPolicy {
+                sequence,
+                translation,
+            } => {
+                self.send_key_sequence(&sequence, Some(translation));
+            }
+            GestureAction::KeyRepeat {
+                sequence,
+                translation,
+                ..
+            } => {
+                self.send_key_sequence(&sequence, translation);
             }
             GestureAction::KeyHold(key) => {
                 self.send_key_state(key, true);
@@ -3132,23 +3269,23 @@ impl App {
         let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
         let release_time = time.saturating_add(self.key_tap_gap_ms(key));
         eprintln!("touchdeck: key {key}");
-        self.emit_key_output(time, key, true);
-        self.emit_key_output(release_time, key, false);
+        self.emit_key_output(time, key, true, None);
+        self.emit_key_output(release_time, key, false, None);
     }
 
-    fn send_key_sequence(&mut self, sequence: &[KeyChord]) {
+    fn send_key_sequence(&mut self, sequence: &[KeyChord], translation: Option<KeyTranslationPolicy>) {
         let mut time = self.now_ms().min(u64::from(u32::MAX)) as u32;
         eprintln!("touchdeck: key sequence {sequence:?}");
         for chord in sequence {
             for key in &chord.keys {
-                self.emit_key_output(time, *key, true);
+                self.emit_key_output(time, *key, true, translation);
                 time = time.saturating_add(1);
             }
             if chord.keys.len() == 1 {
                 time = time.saturating_add(self.key_tap_gap_ms(chord.keys[0]));
             }
             for key in chord.keys.iter().rev() {
-                self.emit_key_output(time, *key, false);
+                self.emit_key_output(time, *key, false, translation);
                 time = time.saturating_add(1);
             }
         }
@@ -3160,7 +3297,7 @@ impl App {
                 ActionStep::KeyDown(key) => self.send_key_state(*key, true),
                 ActionStep::KeyUp(key) => self.send_key_state(*key, false),
                 ActionStep::TapKey(key) => self.send_key(*key),
-                ActionStep::KeySequence(sequence) => self.send_key_sequence(sequence),
+                ActionStep::KeySequence(sequence) => self.send_key_sequence(sequence, None),
                 ActionStep::Niri(action) => spawn_niri_action(action.clone()),
                 ActionStep::DelayMs(ms) => std::thread::sleep(Duration::from_millis(u64::from(*ms))),
             }
@@ -3169,10 +3306,16 @@ impl App {
 
     fn send_key_state(&mut self, key: u32, pressed: bool) {
         let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
-        self.emit_key_output(time, key, pressed);
+        self.emit_key_output(time, key, pressed, None);
     }
 
-    fn emit_key_output(&mut self, time: u32, key: u32, pressed: bool) {
+    fn emit_key_output(
+        &mut self,
+        time: u32,
+        key: u32,
+        pressed: bool,
+        translation: Option<KeyTranslationPolicy>,
+    ) {
         let keyboard = if self.config.text_output.backend.uses_virtual_keyboard() {
             self.virtual_keyboard.clone()
         } else {
@@ -3188,7 +3331,7 @@ impl App {
         }
 
         let Some(mask) = modifier_mask_for_key(key) else {
-            self.emit_ime_key_state(time, key, pressed);
+            self.emit_ime_key_state(time, key, pressed, translation);
             return;
         };
 
@@ -3200,10 +3343,16 @@ impl App {
         if let Some(keyboard) = &keyboard {
             keyboard.modifiers(self.modifier_mask, 0, 0, 0);
         }
-        self.emit_ime_key_state(time, key, pressed);
+        self.emit_ime_key_state(time, key, pressed, translation);
     }
 
-    fn emit_ime_key_state(&mut self, time: u32, key: u32, pressed: bool) {
+    fn emit_ime_key_state(
+        &mut self,
+        time: u32,
+        key: u32,
+        pressed: bool,
+        translation: Option<KeyTranslationPolicy>,
+    ) {
         if !self.config.text_output.backend.uses_ime() {
             return;
         }
@@ -3216,6 +3365,7 @@ impl App {
             "key": key,
             "state": if pressed { "pressed" } else { "released" },
             "modifiers": self.modifier_mask,
+            "translation": translation.map(KeyTranslationPolicy::as_str),
         });
 
         let mut stream = match UnixStream::connect(&self.config.text_output.ime_socket) {
@@ -3408,16 +3558,25 @@ impl Engine {
                     GestureAction::KeyRepeat {
                         sequence,
                         interval_ms,
+                        translation,
                     } => {
                         let interval_ms = interval_ms.unwrap_or(config.repeat_interval_ms).max(1);
-                        effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
-                            sequence.clone(),
-                        )));
+                        if let Some(translation) = translation {
+                            effects.push(EngineEffect::Dispatch(GestureAction::KeySequenceWithPolicy {
+                                sequence: sequence.clone(),
+                                translation,
+                            }));
+                        } else {
+                            effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
+                                sequence.clone(),
+                            )));
+                        }
                         self.repeaters.push(RepeatState {
                             hold_id: candidate.id,
                             next_ms: now_ms + u64::from(interval_ms),
                             interval_ms,
                             sequence,
+                            translation,
                         });
                     }
                     action => {
@@ -3432,9 +3591,16 @@ impl Engine {
             if now_ms < repeater.next_ms || !active_ids.contains(&repeater.hold_id) {
                 continue;
             }
-            effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
-                repeater.sequence.clone(),
-            )));
+            if let Some(translation) = repeater.translation {
+                effects.push(EngineEffect::Dispatch(GestureAction::KeySequenceWithPolicy {
+                    sequence: repeater.sequence.clone(),
+                    translation,
+                }));
+            } else {
+                effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
+                    repeater.sequence.clone(),
+                )));
+            }
             repeater.next_ms = now_ms + u64::from(repeater.interval_ms.max(1));
         }
         self.repeaters
@@ -3756,6 +3922,7 @@ impl Engine {
         match action {
             GestureAction::Niri(_)
             | GestureAction::KeySequence(_)
+            | GestureAction::KeySequenceWithPolicy { .. }
             | GestureAction::KeyRepeat { .. }
             | GestureAction::KeyRelease(_)
             | GestureAction::Exit => {
@@ -4253,7 +4420,15 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
                 .key
                 .or(value.keys)
                 .ok_or_else(|| anyhow!("key behavior is missing key/keys"))?;
-            Ok(Behavior::KeySequence(parse_emacs_key_sequence(&keys)?))
+            let sequence = parse_emacs_key_sequence(&keys)?;
+            if let Some(translation) = value.translation {
+                Ok(Behavior::KeySequenceWithPolicy {
+                    sequence,
+                    translation: parse_key_translation_policy(&translation)?,
+                })
+            } else {
+                Ok(Behavior::KeySequence(sequence))
+            }
         }
         "key_hold" | "hold_key" | "modifier" => {
             let key = value
@@ -4270,6 +4445,11 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
             Ok(Behavior::KeyRepeat {
                 sequence: parse_emacs_key_sequence(&keys)?,
                 interval_ms: value.interval_ms,
+                translation: value
+                    .translation
+                    .as_deref()
+                    .map(parse_key_translation_policy)
+                    .transpose()?,
             })
         }
         "sequence" => Ok(Behavior::Sequence(parse_action_steps(
@@ -4332,6 +4512,245 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
         "noop" | "no_op" => Ok(Behavior::NoOp),
         "exit" => Ok(Behavior::Exit),
         other => Err(anyhow!("unknown behavior type {other}")),
+    }
+}
+
+fn parse_behavior_invocation(
+    value: &str,
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
+) -> Result<Behavior> {
+    let value = value.trim();
+    let Some(rest) = value.strip_prefix('&') else {
+        return Err(anyhow!(
+            "behavior binding {value:?} must use ZMK-style '&behavior args' syntax"
+        ));
+    };
+
+    let mut parts = rest.split_whitespace();
+    let name = parts
+        .next()
+        .ok_or_else(|| anyhow!("empty behavior binding {value:?}"))?;
+    let args = parts.collect::<Vec<_>>();
+
+    if let Some(definition) = behavior_registry.get(name) {
+        return parse_defined_behavior_invocation(name, definition, &args, macros, behavior_registry);
+    }
+
+    parse_builtin_behavior_invocation(name, &args, macros)
+}
+
+fn parse_defined_behavior_invocation(
+    name: &str,
+    definition: &BehaviorDefinitionFileConfig,
+    args: &[&str],
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
+) -> Result<Behavior> {
+    if let Some(binding) = &definition.binding {
+        let expanded = expand_behavior_template(binding, args);
+        return parse_behavior_invocation(&expanded, macros, behavior_registry)
+            .with_context(|| format!("expand behavior {name} as {expanded:?}"));
+    }
+
+    let kind = definition
+        .kind
+        .as_deref()
+        .unwrap_or(name);
+    parse_behavior_invocation_kind(
+        kind,
+        args,
+        BehaviorFields {
+            key: definition.key.as_deref(),
+            keys: definition.keys.as_deref(),
+            action: definition.action.as_deref(),
+            macro_name: definition
+                .macro_alias
+                .as_deref()
+                .or(definition.macro_name.as_deref()),
+            steps: definition.steps.clone(),
+            mode: definition.mode.as_deref(),
+            layer: definition.layer.as_deref(),
+            interval_ms: definition.interval_ms,
+            translation: definition.translation.as_deref(),
+        },
+        macros,
+    )
+    .with_context(|| format!("resolve behavior {name}"))
+}
+
+fn parse_builtin_behavior_invocation(
+    name: &str,
+    args: &[&str],
+    macros: &MacroRegistry,
+) -> Result<Behavior> {
+    parse_behavior_invocation_kind(
+        name,
+        args,
+        BehaviorFields::default(),
+        macros,
+    )
+}
+
+#[derive(Default)]
+struct BehaviorFields<'a> {
+    key: Option<&'a str>,
+    keys: Option<&'a str>,
+    action: Option<&'a str>,
+    macro_name: Option<&'a str>,
+    steps: Option<Vec<ActionStepFileConfig>>,
+    mode: Option<&'a str>,
+    layer: Option<&'a str>,
+    interval_ms: Option<u32>,
+    translation: Option<&'a str>,
+}
+
+fn parse_behavior_invocation_kind(
+    kind: &str,
+    args: &[&str],
+    fields: BehaviorFields<'_>,
+    macros: &MacroRegistry,
+) -> Result<Behavior> {
+    let args_joined = args.join(" ");
+    let key_arg = fields
+        .keys
+        .or(fields.key)
+        .map(str::to_string)
+        .or_else(|| (!args_joined.is_empty()).then_some(args_joined.clone()));
+    let translation = fields
+        .translation
+        .map(parse_key_translation_policy)
+        .transpose()?;
+
+    match normalize_name(kind).as_str() {
+        "kp" | "key" | "key_sequence" | "keys" => {
+            let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
+            let sequence = parse_emacs_key_sequence(&keys)?;
+            if let Some(translation) = translation {
+                Ok(Behavior::KeySequenceWithPolicy {
+                    sequence,
+                    translation,
+                })
+            } else {
+                Ok(Behavior::KeySequence(sequence))
+            }
+        }
+        "kpe" | "key_effective" | "effective_key" => {
+            let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
+            Ok(Behavior::KeySequenceWithPolicy {
+                sequence: parse_emacs_key_sequence(&keys)?,
+                translation: KeyTranslationPolicy::Effective,
+            })
+        }
+        "kpr" | "key_raw" | "raw_key" => {
+            let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
+            Ok(Behavior::KeySequenceWithPolicy {
+                sequence: parse_emacs_key_sequence(&keys)?,
+                translation: KeyTranslationPolicy::Raw,
+            })
+        }
+        "hold" | "kh" | "key_hold" | "hold_key" | "modifier" => {
+            let key = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key"))?;
+            Ok(Behavior::KeyHold(parse_single_emacs_key(&key)?))
+        }
+        "repeat" | "key_repeat" | "repeat_key" => {
+            let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
+            Ok(Behavior::KeyRepeat {
+                sequence: parse_emacs_key_sequence(&keys)?,
+                interval_ms: fields.interval_ms,
+                translation,
+            })
+        }
+        "macro" => {
+            let name = fields
+                .macro_name
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&macro is missing macro name"))?;
+            Ok(Behavior::Sequence(macros.get(&name)?))
+        }
+        "sequence" => {
+            let steps = fields
+                .steps
+                .ok_or_else(|| anyhow!("sequence behavior requires steps"))?;
+            Ok(Behavior::Sequence(parse_action_steps(steps)?))
+        }
+        "niri" => {
+            let action = fields
+                .action
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&niri is missing action"))?;
+            Ok(Behavior::Niri(parse_niri_action(&action)?))
+        }
+        "mode" | "mode_set" => {
+            let mode = fields
+                .mode
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&mode is missing mode"))?;
+            Ok(Behavior::ModeSet(parse_mode(&mode)?))
+        }
+        "mode_toggle" | "tog_mode" => {
+            let mode = fields
+                .mode
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&mode_toggle is missing mode"))?;
+            Ok(Behavior::ModeToggle(parse_mode(&mode)?))
+        }
+        "mode_momentary" | "mo_mode" => {
+            let mode = fields
+                .mode
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&mode_momentary is missing mode"))?;
+            Ok(Behavior::ModeMomentary(parse_mode(&mode)?))
+        }
+        "layer" | "layer_set" | "to" => {
+            let layer = fields
+                .layer
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&layer is missing layer"))?;
+            Ok(Behavior::LayerSet(parse_layer(&layer)?))
+        }
+        "layer_toggle" | "tog" => {
+            let layer = fields
+                .layer
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&layer_toggle is missing layer"))?;
+            Ok(Behavior::LayerToggle(parse_layer(&layer)?))
+        }
+        "layer_momentary" | "mo" => {
+            let layer = fields
+                .layer
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&layer_momentary is missing layer"))?;
+            Ok(Behavior::LayerMomentary(parse_layer(&layer)?))
+        }
+        "trans" | "transparent" => Ok(Behavior::Transparent),
+        "none" | "noop" | "no_op" => Ok(Behavior::NoOp),
+        "exit" => Ok(Behavior::Exit),
+        other => Err(anyhow!("unknown behavior &{other}")),
+    }
+}
+
+fn expand_behavior_template(template: &str, args: &[&str]) -> String {
+    let mut expanded = template.to_string();
+    for (index, arg) in args.iter().enumerate() {
+        expanded = expanded.replace(&format!("${}", index + 1), arg);
+    }
+    expanded
+}
+
+fn parse_key_translation_policy(value: &str) -> Result<KeyTranslationPolicy> {
+    match normalize_name(value).as_str() {
+        "effective" | "effective_keysym" | "translated" => Ok(KeyTranslationPolicy::Effective),
+        "raw" | "raw_keysym" | "base" => Ok(KeyTranslationPolicy::Raw),
+        other => Err(anyhow!("unknown key translation policy {other:?}")),
     }
 }
 
@@ -4594,6 +5013,10 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
         Behavior::Niri(action) => Some(action.as_str().to_string()),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),
+        Behavior::KeySequenceWithPolicy {
+            sequence,
+            translation,
+        } => key_sequence_label(sequence).map(|label| format!("{label}/{}", translation.as_str())),
         Behavior::KeyHold(key) => key_code_label(*key).map(|label| format!("{}+", label)),
         Behavior::KeyRepeat { sequence, .. } => {
             key_sequence_label(sequence).map(|label| format!("{}...", label))
