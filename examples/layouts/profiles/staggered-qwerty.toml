@@ -1,4 +1,5 @@
-# Staggered QWERTY geometry: closer to phone keyboards and desktop QWERTY muscle memory.
+# Layout-only snippet: closer to phone keyboards and desktop QWERTY muscle memory.
+# Copy this [layout] section into a full touchdeck config.
 
 [layout]
 svg = "../svg/staggered-qwerty.svg"

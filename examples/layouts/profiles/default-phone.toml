@@ -1,0 +1,6 @@
+# Layout-only snippet for the default phone geometry.
+# This is not a complete runnable config now that Rust no longer provides keymap fallback.
+# Copy this [layout] section into a full touchdeck config.
+
+[layout]
+svg = "../../../layouts/phone-portrait.svg"

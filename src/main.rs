@@ -626,183 +626,9 @@ struct Keymap {
 
 impl Default for Keymap {
     fn default() -> Self {
-        let slots = SlotRegistry::default();
-        let mut bindings = vec![
-            Binding {
-                mode: Mode::Base,
-                layer: Layer::Base,
-                trigger: Trigger::Hold {
-                    target: slots.get("left_bottom").unwrap(),
-                    fingers: 1,
-                    min_ms: None,
-                },
-                behavior: Behavior::ModeMomentary(Mode::NiriMomentary),
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Passthrough,
-                layer: Layer::Base,
-                trigger: Trigger::Hold {
-                    target: slots.get("left_bottom").unwrap(),
-                    fingers: 1,
-                    min_ms: None,
-                },
-                behavior: Behavior::ModeMomentary(Mode::NiriMomentary),
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Base,
-                layer: Layer::Base,
-                trigger: Trigger::Swipe {
-                    target: slots.get("bottom_edge").unwrap(),
-                    fingers: 1,
-                    direction: SwipeDirection::Up,
-                    min_px: None,
-                    max_ms: None,
-                },
-                behavior: Behavior::ModeToggle(Mode::Text),
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Passthrough,
-                layer: Layer::Base,
-                trigger: Trigger::Swipe {
-                    target: slots.get("bottom_edge").unwrap(),
-                    fingers: 1,
-                    direction: SwipeDirection::Up,
-                    min_px: None,
-                    max_ms: None,
-                },
-                behavior: Behavior::ModeSet(Mode::Text),
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Text,
-                layer: Layer::Base,
-                trigger: Trigger::Swipe {
-                    target: slots.get("bottom_edge").unwrap(),
-                    fingers: 1,
-                    direction: SwipeDirection::Down,
-                    min_px: None,
-                    max_ms: None,
-                },
-                behavior: Behavior::ModeSet(Mode::Base),
-                priority: 100,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Text,
-                layer: Layer::Base,
-                trigger: Trigger::Tap {
-                    target: slots.get("top_left").unwrap(),
-                    fingers: 1,
-                    max_ms: None,
-                },
-                behavior: Behavior::Exit,
-                priority: 100,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Base,
-                layer: Layer::Base,
-                trigger: Trigger::DoubleTap {
-                    target: slots.get("left_bottom").unwrap(),
-                    fingers: 1,
-                    max_ms: None,
-                },
-                behavior: Behavior::ModeToggle(Mode::NiriLocked),
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::NiriLocked,
-                layer: Layer::Niri,
-                trigger: Trigger::DoubleTap {
-                    target: slots.get("left_bottom").unwrap(),
-                    fingers: 1,
-                    max_ms: None,
-                },
-                behavior: Behavior::ModeSet(Mode::Base),
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Base,
-                layer: Layer::Base,
-                trigger: Trigger::DoubleTap {
-                    target: slots.get("bottom_edge").unwrap(),
-                    fingers: 1,
-                    max_ms: None,
-                },
-                behavior: Behavior::ModeToggle(Mode::Passthrough),
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Passthrough,
-                layer: Layer::Base,
-                trigger: Trigger::DoubleTap {
-                    target: slots.get("bottom_edge").unwrap(),
-                    fingers: 1,
-                    max_ms: None,
-                },
-                behavior: Behavior::ModeSet(Mode::Base),
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Base,
-                layer: Layer::Base,
-                trigger: Trigger::Tap {
-                    target: slots.get("top_left").unwrap(),
-                    fingers: 1,
-                    max_ms: None,
-                },
-                behavior: Behavior::Exit,
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::Passthrough,
-                layer: Layer::Base,
-                trigger: Trigger::Tap {
-                    target: slots.get("top_left").unwrap(),
-                    fingers: 1,
-                    max_ms: None,
-                },
-                behavior: Behavior::Exit,
-                priority: 0,
-                consume: true,
-            },
-            Binding {
-                mode: Mode::NiriLocked,
-                layer: Layer::Niri,
-                trigger: Trigger::Tap {
-                    target: slots.get("top_left").unwrap(),
-                    fingers: 1,
-                    max_ms: None,
-                },
-                behavior: Behavior::Exit,
-                priority: 0,
-                consume: true,
-            },
-        ];
-
-        bindings.extend(
-            expand_keyboard_maps(
-                default_keyboard_maps(),
-                &slots,
-                &MacroRegistry::default(),
-                &BehaviorRegistry::default(),
-            )
-            .expect("default keyboard map"),
-        );
-
-        Self { bindings }
+        Self {
+            bindings: Vec::new(),
+        }
     }
 }
 
@@ -1101,140 +927,11 @@ struct SlotRegistry {
 
 impl Default for SlotRegistry {
     fn default() -> Self {
-        let mut registry = Self {
+        Self {
             layout: Layout {
                 slots: HashMap::new(),
             },
-        };
-        registry.insert_slot(
-            "left_bottom",
-            left_bottom_rect(),
-            SlotRole::Zone,
-            true,
-            Some("NIRI"),
-        );
-        registry.insert_slot(
-            "bottom_edge",
-            bottom_edge_rect(),
-            SlotRole::GestureArea,
-            true,
-            Some("TEXT"),
-        );
-        registry.insert_slot(
-            "top_left",
-            top_left_rect(),
-            SlotRole::Zone,
-            true,
-            Some("EXIT"),
-        );
-        registry.insert_slot(
-            "center",
-            RectNorm {
-                x0: 0.18,
-                y0: 0.12,
-                x1: 0.82,
-                y1: 0.82,
-            },
-            SlotRole::GestureArea,
-            false,
-            None,
-        );
-        registry.insert_slot(
-            "full",
-            RectNorm {
-                x0: 0.0,
-                y0: 0.0,
-                x1: 1.0,
-                y1: 1.0,
-            },
-            SlotRole::GestureArea,
-            false,
-            Some("SCREEN"),
-        );
-        registry.insert_slot(
-            "fullscreen",
-            RectNorm {
-                x0: 0.0,
-                y0: 0.0,
-                x1: 1.0,
-                y1: 1.0,
-            },
-            SlotRole::GestureArea,
-            false,
-            Some("SCREEN"),
-        );
-        insert_default_key_slots(&mut registry);
-        registry
-    }
-}
-
-fn insert_default_key_slots(registry: &mut SlotRegistry) {
-    let rows = [
-        (
-            0.025,
-            0.642,
-            0.097,
-            &["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"][..],
-        ),
-        (
-            0.025,
-            0.708,
-            0.097,
-            &["a", "s", "d", "f", "g", "h", "j", "k", "l"][..],
-        ),
-        (
-            0.122,
-            0.775,
-            0.097,
-            &["z", "x", "c", "v", "b", "n", "m"][..],
-        ),
-    ];
-
-    for (x0, y0, step, keys) in rows {
-        for (index, key) in keys.iter().enumerate() {
-            let x0 = x0 + index as f64 * step;
-            registry.insert_slot(
-                &format!("key_{key}"),
-                RectNorm {
-                    x0,
-                    y0,
-                    x1: x0 + 0.080,
-                    y1: y0 + 0.059,
-                },
-                SlotRole::Key,
-                true,
-                Some(key),
-            );
         }
-    }
-
-    for (slot, label, x0, y0, w, h) in [
-        ("key_shift", "SFT", 0.025, 0.775, 0.080, 0.059),
-        ("key_ctrl", "CTL", 0.200, 0.450, 0.130, 0.060),
-        ("key_alt", "ALT", 0.670, 0.450, 0.130, 0.060),
-        ("key_super", "SUP", 0.830, 0.450, 0.130, 0.060),
-        ("key_esc", "ESC", 0.040, 0.450, 0.130, 0.060),
-        ("key_spc", "SPC", 0.898, 0.775, 0.080, 0.059),
-        ("key_del", "BSPC", 0.801, 0.775, 0.080, 0.059),
-        ("key_ret", "RET", 0.898, 0.708, 0.080, 0.059),
-        ("thumb_ctrl", "CTL", 0.200, 0.852, 0.120, 0.050),
-        ("thumb_shift", "SFT", 0.335, 0.852, 0.120, 0.050),
-        ("thumb_super", "SUP", 0.470, 0.852, 0.120, 0.050),
-        ("thumb_ret", "RET", 0.605, 0.852, 0.150, 0.050),
-        ("thumb_spc", "SPC", 0.770, 0.852, 0.190, 0.050),
-    ] {
-        registry.insert_slot(
-            slot,
-            RectNorm {
-                x0,
-                y0,
-                x1: x0 + w,
-                y1: y0 + h,
-            },
-            SlotRole::Key,
-            true,
-            Some(label),
-        );
     }
 }
 
@@ -1930,132 +1627,6 @@ impl BehaviorRegistry {
     fn get(&self, name: &str) -> Option<&BehaviorDefinitionFileConfig> {
         self.definitions.get(&normalize_name(name))
     }
-}
-
-fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
-    vec![keyboard_map_config(
-        &[
-            ("key_q", "&kp Q"),
-            ("key_w", "&kp W"),
-            ("key_e", "&kp E"),
-            ("key_r", "&kp R"),
-            ("key_t", "&kp T"),
-            ("key_y", "&kp Y"),
-            ("key_u", "&kp U"),
-            ("key_i", "&kp I"),
-            ("key_o", "&kp O"),
-            ("key_p", "&kp P"),
-            ("key_a", "&kp A"),
-            ("key_s", "&kp S"),
-            ("key_d", "&kp D"),
-            ("key_f", "&kp F"),
-            ("key_g", "&kp G"),
-            ("key_h", "&kp H"),
-            ("key_j", "&kp J"),
-            ("key_k", "&kp K"),
-            ("key_l", "&kp L"),
-            ("key_z", "&kp Z"),
-            ("key_x", "&kp X"),
-            ("key_c", "&kp C"),
-            ("key_v", "&kp V"),
-            ("key_b", "&kp B"),
-            ("key_n", "&kp N"),
-            ("key_m", "&kp M"),
-            ("key_esc", "&kp ESC"),
-            ("key_spc", "&kp SPC"),
-            ("key_del", "&kp BSPC"),
-            ("key_ret", "&kp RET"),
-            ("key_shift", "&kp LSHIFT"),
-        ],
-        &[
-            ("key_q", "&kp N1"),
-            ("key_w", "&kp N2"),
-            ("key_e", "&kp N3"),
-            ("key_r", "&kp N4"),
-            ("key_t", "&kp N5"),
-            ("key_y", "&kp N6"),
-            ("key_u", "&kp N7"),
-            ("key_i", "&kp N8"),
-            ("key_o", "&kp N9"),
-            ("key_p", "&kp N0"),
-            ("key_a", "&kp EXCLAMATION"),
-            ("key_s", "&kp AT_SIGN"),
-            ("key_d", "&kp HASH"),
-            ("key_f", "&kp DOLLAR"),
-            ("key_g", "&kp PERCENT"),
-            ("key_h", "&kp CARET"),
-            ("key_j", "&kp AMPERSAND"),
-            ("key_k", "&kp UP"),
-            ("key_l", "&kp UNDERSCORE"),
-            ("key_z", "&kp GRAVE"),
-            ("key_x", "&kp MINUS"),
-            ("key_c", "&kp EQUAL"),
-            ("key_v", "&kp LEFT_BRACKET"),
-            ("key_b", "&kp RIGHT_BRACKET"),
-            ("key_n", "&kp SLASH"),
-            ("key_m", "&kp QUESTION"),
-            ("key_spc", "&kp TAB"),
-            ("key_del", "&kp DELETE"),
-            ("key_ret", "&kp LC(RET)"),
-        ],
-        &[
-            ("key_j", "&kp DOWN"),
-            ("key_k", "&kp ASTERISK"),
-            ("key_spc", "&kp ESC"),
-        ],
-        &[
-            ("key_h", "&kp LEFT"),
-            ("key_spc", "&kp BSPC"),
-            ("key_del", "&kp LA(BSPC)"),
-            ("key_ret", "&kp LC(LEFT)"),
-        ],
-        &[
-            ("key_l", "&kp RIGHT"),
-            ("key_spc", "&kp RET"),
-            ("key_del", "&kp LC(RIGHT)"),
-            ("key_ret", "&kp LC(RIGHT)"),
-        ],
-    )]
-}
-
-fn keyboard_map_config(
-    tap: &[(&str, &str)],
-    swipe_up: &[(&str, &str)],
-    swipe_down: &[(&str, &str)],
-    swipe_left: &[(&str, &str)],
-    swipe_right: &[(&str, &str)],
-) -> KeyboardMapFileConfig {
-    KeyboardMapFileConfig {
-        mode: Some("text".to_string()),
-        layer: Some("base".to_string()),
-        tap: Some(key_pairs(tap)),
-        hold: Some(key_pairs(&[
-            ("key_shift", "&hold LSHIFT"),
-            ("key_ctrl", "&hold LCTRL"),
-            ("key_alt", "&hold LALT"),
-            ("key_super", "&hold LGUI"),
-        ])),
-        repeat: Some(key_pairs(&[("key_del", "&hold_repeat BSPC")])),
-        swipe_up: Some(key_pairs(swipe_up)),
-        swipe_down: Some(key_pairs(swipe_down)),
-        swipe_left: Some(key_pairs(swipe_left)),
-        swipe_right: Some(key_pairs(swipe_right)),
-        fingers: None,
-        max_ms: None,
-        hold_ms: None,
-        repeat_start_ms: None,
-        repeat_interval_ms: None,
-        min_px: None,
-        priority: None,
-        consume: None,
-    }
-}
-
-fn key_pairs(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-    pairs
-        .iter()
-        .map(|(slot, key)| ((*slot).to_string(), (*key).to_string()))
-        .collect()
 }
 
 fn expand_keyboard_maps(
@@ -4596,26 +4167,11 @@ fn niri_action_request_json(action: NiriAction) -> &'static str {
 }
 
 #[cfg(test)]
-fn named_target(name: &str) -> Option<SlotTarget> {
-    SlotRegistry::default().get(name).ok()
-}
-
-fn left_bottom_rect() -> RectNorm {
-    RectNorm {
-        x0: 0.00,
-        y0: 0.82,
-        x1: 0.18,
-        y1: 1.00,
-    }
-}
-
-fn bottom_edge_rect() -> RectNorm {
-    RectNorm {
-        x0: 0.18,
-        y0: 0.91,
-        x1: 0.94,
-        y1: 1.00,
-    }
+fn configured_target(name: &str) -> Option<SlotTarget> {
+    SlotRegistry::from_svg_file(Path::new("layouts/phone-portrait.svg"))
+        .ok()?
+        .get(name)
+        .ok()
 }
 
 fn parse_mode(value: &str) -> Result<Mode> {
@@ -5605,15 +5161,6 @@ fn parse_niri_action(value: &str) -> Result<NiriAction> {
         other => Err(anyhow!(
             "unsupported niri action {other}; supported actions: focus-column-left, focus-column-right, focus-workspace-up, focus-workspace-down, toggle-overview"
         )),
-    }
-}
-
-fn top_left_rect() -> RectNorm {
-    RectNorm {
-        x0: 0.00,
-        y0: 0.00,
-        x1: 0.12,
-        y1: 0.10,
     }
 }
 
@@ -6786,7 +6333,7 @@ behavior = { type = "key", key = "BSPC" }
         assert_eq!(
             binding.trigger,
             Trigger::Swipe {
-                target: named_target("left_bottom").unwrap(),
+                target: configured_target("left_bottom").unwrap(),
                 fingers: 1,
                 direction: SwipeDirection::Left,
                 min_px: None,
@@ -7136,8 +6683,9 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
     fn checked_in_example_layout_and_config_parse() {
         let slots =
             SlotRegistry::from_svg_str(include_str!("../layouts/phone-portrait.svg")).unwrap();
+        assert!(slots.get("key_n1").is_ok());
         assert!(slots.get("key_q").is_ok());
-        assert!(slots.get("key_spc").is_ok());
+        assert!(slots.get("thumb_spc").is_ok());
 
         let config: FileConfig = toml::from_str(include_str!("../touchdeck.example.toml")).unwrap();
         assert_eq!(
@@ -7151,18 +6699,18 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 .tap
                 .as_ref()
                 .unwrap()
-                .get("key_q")
+                .get("key_n2")
                 .map(String::as_str),
-            Some("&kp Q")
+            Some("&kp N2")
         );
         assert_eq!(
             maps[0]
                 .swipe_up
                 .as_ref()
                 .unwrap()
-                .get("key_w")
+                .get("key_n2")
                 .map(String::as_str),
-            Some("&kp N2")
+            Some("&kp AT_SIGN")
         );
         assert_eq!(
             maps[0]
@@ -7185,7 +6733,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 mode: Mode::Base,
                 layer: Layer::Base,
                 trigger: Trigger::Tap {
-                    target: named_target("left_bottom").unwrap(),
+                    target: configured_target("left_bottom").unwrap(),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -7199,7 +6747,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 mode: Mode::Base,
                 layer: Layer::Niri,
                 trigger: Trigger::Tap {
-                    target: named_target("left_bottom").unwrap(),
+                    target: configured_target("left_bottom").unwrap(),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -7242,7 +6790,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 mode: Mode::Base,
                 layer: Layer::Base,
                 trigger: Trigger::Tap {
-                    target: named_target("left_bottom").unwrap(),
+                    target: configured_target("left_bottom").unwrap(),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -7256,7 +6804,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 mode: Mode::Base,
                 layer: Layer::Niri,
                 trigger: Trigger::Tap {
-                    target: named_target("left_bottom").unwrap(),
+                    target: configured_target("left_bottom").unwrap(),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -7361,7 +6909,7 @@ behavior = { type = "macro", macro = "copy" }
             mode: Mode::Base,
             layer: Layer::Base,
             trigger: Trigger::Hold {
-                target: named_target("left_bottom").unwrap(),
+                target: configured_target("left_bottom").unwrap(),
                 fingers: 1,
                 min_ms: None,
             },
@@ -7442,10 +6990,10 @@ behavior = { type = "macro", macro = "copy" }
         let CapturePolicy::Zones(rects) = engine.capture_policy(&config) else {
             panic!("passthrough should use zoned capture");
         };
-        assert!(rects.contains(&named_target("left_bottom").unwrap().rect));
-        assert!(rects.contains(&named_target("bottom_edge").unwrap().rect));
-        assert!(rects.contains(&named_target("top_left").unwrap().rect));
-        assert!(!rects.contains(&named_target("center").unwrap().rect));
+        assert!(rects.contains(&configured_target("left_bottom").unwrap().rect));
+        assert!(rects.contains(&configured_target("bottom_edge").unwrap().rect));
+        assert!(rects.contains(&configured_target("top_left").unwrap().rect));
+        assert!(!rects.contains(&configured_target("center").unwrap().rect));
 
         engine.handle_down(380, 380, 1, 500.0, 1950.0, &config, size);
         engine.handle_up(430, 430, 1, &config, size);

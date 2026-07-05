@@ -1,5 +1,0 @@
-# Select the built-in/default 3x10 ortholinear phone geometry.
-# This profile inherits TouchDeck's default mode bindings and keymap.
-
-[layout]
-svg = "../../../layouts/phone-portrait.svg"

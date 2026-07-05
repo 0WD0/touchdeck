@@ -276,7 +276,7 @@ Supported trigger types:
 
 Trigger fields:
 
-- `target`: one of the configured/built-in slot IDs
+- `target`: one of the slot IDs declared by the configured layout
 - `fingers`: defaults to `1`
 - `direction`: required for `swipe`; one of `left`, `right`, `up`, `down`
 - `min_ms`: supported by `hold`

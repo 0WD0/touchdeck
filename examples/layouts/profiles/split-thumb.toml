@@ -1,5 +1,5 @@
-# Split-thumb geometry: separated left/right alpha halves plus large thumb keys.
-# Useful when two-thumb reach matters more than strict grid regularity.
+# Layout-only snippet: separated left/right alpha halves plus large thumb keys.
+# Copy this [layout] section into a full touchdeck config.
 
 [layout]
 svg = "../svg/split-thumb.svg"

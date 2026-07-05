@@ -1,5 +1,5 @@
-# One-hand-right geometry: large right-side keys for portrait use with the right thumb.
-# It keeps the same slot IDs, so the default keymap still applies.
+# Layout-only snippet: large right-side keys for portrait use with the right thumb.
+# Copy this [layout] section into a full touchdeck config.
 
 [layout]
 svg = "../svg/one-hand-right.svg"
