@@ -658,12 +658,18 @@ impl ImeApp {
             surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
             surface.commit();
         }
+        self.destroy_server_popup();
+    }
+
+    fn destroy_server_popup(&mut self) {
         self.pending_server_popup_status = None;
-        if self.server_popup_layer_configured {
-            if let Some(surface) = &self.server_popup_surface {
-                surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
-                surface.commit();
-            }
+        self.server_popup_layer_configured = false;
+
+        if let Some(layer_surface) = self.server_popup_layer_surface.take() {
+            layer_surface.destroy();
+        }
+        if let Some(surface) = self.server_popup_surface.take() {
+            surface.destroy();
         }
     }
 
@@ -681,10 +687,7 @@ impl ImeApp {
             || self.fcitx_focus.is_none()
             || self.fcitx_uses_client_side_input_panel()
         {
-            if let Some(surface) = &self.server_popup_surface {
-                surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
-                surface.commit();
-            }
+            self.destroy_server_popup();
             return;
         }
 
