@@ -3122,15 +3122,54 @@ impl App {
             cursor_rect.window_w,
             cursor_rect.window_h,
         ) else {
+            if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
+                eprintln!(
+                    "touchdeck: ime geometry x11-root missing window geometry raw=({}, {} {}x{}) root={:?}x{:?}",
+                    cursor_rect.x,
+                    cursor_rect.y,
+                    cursor_rect.w,
+                    cursor_rect.h,
+                    cursor_rect.root_w,
+                    cursor_rect.root_h
+                );
+            }
             return None;
         };
         if window_w <= 0 || window_h <= 0 {
+            if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
+                eprintln!(
+                    "touchdeck: ime geometry x11-root invalid window geometry window=({}, {} {}x{}) raw=({}, {} {}x{})",
+                    window_x,
+                    window_y,
+                    window_w,
+                    window_h,
+                    cursor_rect.x,
+                    cursor_rect.y,
+                    cursor_rect.w,
+                    cursor_rect.h
+                );
+            }
             return None;
         }
 
         let layout = match niri::focused_window_layout() {
             Ok(Some(layout)) => layout,
-            Ok(None) => return None,
+            Ok(None) => {
+                if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
+                    eprintln!(
+                        "touchdeck: ime geometry x11-root no focused niri window window=({}, {} {}x{}) raw=({}, {} {}x{})",
+                        window_x,
+                        window_y,
+                        window_w,
+                        window_h,
+                        cursor_rect.x,
+                        cursor_rect.y,
+                        cursor_rect.w,
+                        cursor_rect.h
+                    );
+                }
+                return None;
+            }
             Err(err) => {
                 eprintln!("touchdeck: failed to query niri focused window for xwayland IME popup: {err:?}");
                 return None;
@@ -3147,6 +3186,25 @@ impl App {
         let scale_x = window_w as f64 / window_size_w;
         let scale_y = window_h as f64 / window_size_h;
         if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
+            if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
+                eprintln!(
+                    "touchdeck: ime geometry x11-root invalid scale raw=({}, {} {}x{}) x11_window=({}, {} {}x{}) niri_window_rect=({:.2}, {:.2} {}x{}) scale=({:.4}, {:.4})",
+                    cursor_rect.x,
+                    cursor_rect.y,
+                    cursor_rect.w,
+                    cursor_rect.h,
+                    window_x,
+                    window_y,
+                    window_w,
+                    window_h,
+                    origin_x,
+                    origin_y,
+                    output_window_w,
+                    output_window_h,
+                    scale_x,
+                    scale_y
+                );
+            }
             return None;
         }
 
@@ -3159,6 +3217,35 @@ impl App {
             .round()
             .clamp(0.0, screen_h.saturating_sub(1) as f64) as i32;
         let cursor_h = ((cursor_rect.h.max(0) as f64) / scale_y).round() as i32;
+
+        if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
+            eprintln!(
+                "touchdeck: ime geometry x11-root raw=({}, {} {}x{}) root={:?}x{:?} x11_window=({}, {} {}x{}) niri_window_rect=({:.2}, {:.2} {}x{}) scale=({:.4}, {:.4}) local=({:.2}, {:.2}) anchor=({}, {} h={}) screen={}x{}",
+                cursor_rect.x,
+                cursor_rect.y,
+                cursor_rect.w,
+                cursor_rect.h,
+                cursor_rect.root_w,
+                cursor_rect.root_h,
+                window_x,
+                window_y,
+                window_w,
+                window_h,
+                origin_x,
+                origin_y,
+                output_window_w,
+                output_window_h,
+                scale_x,
+                scale_y,
+                local_x,
+                local_y,
+                cursor_x,
+                cursor_y,
+                cursor_h,
+                screen_w,
+                screen_h
+            );
+        }
 
         Some((cursor_x, cursor_y, cursor_h))
     }
