@@ -1281,12 +1281,7 @@ fn default_socket_path() -> PathBuf {
 }
 
 fn default_rime_shared_data_dir() -> PathBuf {
-    let system = PathBuf::from("/usr/share/rime-data");
-    if system.exists() {
-        return system;
-    }
-
-    PathBuf::from("/home/disk/Projects/librime/data/minimal")
+    PathBuf::from("/usr/share/rime-data")
 }
 
 fn default_rime_user_data_dir() -> PathBuf {
