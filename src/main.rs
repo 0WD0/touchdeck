@@ -185,6 +185,7 @@ struct Config {
     log_touch: bool,
     record_trace_path: Option<PathBuf>,
     xkb_keymap_path: Option<PathBuf>,
+    text_output: TextOutputConfig,
     slots: SlotRegistry,
     keymap: Keymap,
     macros: MacroRegistry,
@@ -216,6 +217,7 @@ impl Default for Config {
             log_touch: env_bool("TOUCHDECK_LOG_TOUCH", false),
             record_trace_path: env::var_os("TOUCHDECK_RECORD_TRACE").map(PathBuf::from),
             xkb_keymap_path: env::var_os("TOUCHDECK_XKB_KEYMAP").map(PathBuf::from),
+            text_output: TextOutputConfig::from_env(),
             slots: SlotRegistry::default(),
             keymap: Keymap::default(),
             macros: MacroRegistry::default(),
@@ -251,8 +253,23 @@ impl Config {
         let keyboard = file_config.keyboard;
 
         if let Some(keyboard) = &keyboard {
+            if let Some(output) = &keyboard.output {
+                self.text_output.backend = parse_text_output_backend(output)?;
+            }
+            if let Some(socket) = &keyboard.ime_socket {
+                self.text_output.ime_socket = resolve_config_relative(&path, socket);
+            }
             if let Some(path) = &keyboard.xkb_keymap {
                 self.xkb_keymap_path = Some(PathBuf::from(path));
+            }
+        }
+
+        if let Some(ime) = &file_config.ime {
+            if let Some(socket) = &ime.socket {
+                self.text_output.ime_socket = resolve_config_relative(&path, socket);
+            }
+            if let Some(output) = &ime.output {
+                self.text_output.backend = parse_text_output_backend(output)?;
             }
         }
 
@@ -289,6 +306,74 @@ impl Config {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TextOutputConfig {
+    backend: TextOutputBackend,
+    ime_socket: PathBuf,
+}
+
+impl TextOutputConfig {
+    fn from_env() -> Self {
+        let backend = env::var("TOUCHDECK_TEXT_OUTPUT")
+            .or_else(|_| env::var("TOUCHDECK_KEYBOARD_OUTPUT"))
+            .ok()
+            .and_then(|value| match parse_text_output_backend(&value) {
+                Ok(backend) => Some(backend),
+                Err(err) => {
+                    eprintln!("touchdeck: invalid text output backend {value:?}: {err}");
+                    None
+                }
+            })
+            .unwrap_or(TextOutputBackend::VirtualKeyboard);
+
+        let ime_socket = env::var_os("TOUCHDECK_IME_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(default_ime_socket_path);
+
+        Self {
+            backend,
+            ime_socket,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextOutputBackend {
+    VirtualKeyboard,
+    Ime,
+    Both,
+}
+
+impl TextOutputBackend {
+    fn uses_virtual_keyboard(self) -> bool {
+        matches!(self, Self::VirtualKeyboard | Self::Both)
+    }
+
+    fn uses_ime(self) -> bool {
+        matches!(self, Self::Ime | Self::Both)
+    }
+}
+
+fn default_ime_socket_path() -> PathBuf {
+    env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("touchdeck-ime.sock")
+}
+
+fn parse_text_output_backend(value: &str) -> Result<TextOutputBackend> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "virtual" | "virtual_keyboard" | "wayland_virtual_keyboard" => {
+            Ok(TextOutputBackend::VirtualKeyboard)
+        }
+        "ime" | "touchdeck_ime" | "ipc" => Ok(TextOutputBackend::Ime),
+        "both" | "dual" => Ok(TextOutputBackend::Both),
+        other => Err(anyhow!(
+            "unsupported text output backend {other}; supported: virtual-keyboard, ime, both"
+        )),
     }
 }
 
@@ -1351,6 +1436,7 @@ impl Behavior {
 struct FileConfig {
     layout: Option<LayoutFileConfig>,
     keyboard: Option<KeyboardFileConfig>,
+    ime: Option<ImeFileConfig>,
     macros: Option<HashMap<String, MacroFileConfig>>,
     bindings: Option<Vec<BindingFileConfig>>,
 }
@@ -1362,8 +1448,16 @@ struct LayoutFileConfig {
 
 #[derive(Deserialize)]
 struct KeyboardFileConfig {
+    output: Option<String>,
+    ime_socket: Option<String>,
     xkb_keymap: Option<String>,
     maps: Option<Vec<KeyboardMapFileConfig>>,
+}
+
+#[derive(Deserialize)]
+struct ImeFileConfig {
+    output: Option<String>,
+    socket: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2619,36 +2713,26 @@ impl App {
     }
 
     fn send_key(&mut self, key: u32) {
-        let Some(keyboard) = self.virtual_keyboard.clone() else {
-            eprintln!("touchdeck: virtual keyboard unavailable; ignored key {key}");
-            return;
-        };
-
         let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
         let release_time = time.saturating_add(self.key_tap_gap_ms(key));
         eprintln!("touchdeck: key {key}");
-        self.emit_key_state(&keyboard, time, key, true);
-        self.emit_key_state(&keyboard, release_time, key, false);
+        self.emit_key_output(time, key, true);
+        self.emit_key_output(release_time, key, false);
     }
 
     fn send_key_sequence(&mut self, sequence: &[KeyChord]) {
-        let Some(keyboard) = self.virtual_keyboard.clone() else {
-            eprintln!("touchdeck: virtual keyboard unavailable; ignored key sequence {sequence:?}");
-            return;
-        };
-
         let mut time = self.now_ms().min(u64::from(u32::MAX)) as u32;
         eprintln!("touchdeck: key sequence {sequence:?}");
         for chord in sequence {
             for key in &chord.keys {
-                self.emit_key_state(&keyboard, time, *key, true);
+                self.emit_key_output(time, *key, true);
                 time = time.saturating_add(1);
             }
             if chord.keys.len() == 1 {
                 time = time.saturating_add(self.key_tap_gap_ms(chord.keys[0]));
             }
             for key in chord.keys.iter().rev() {
-                self.emit_key_state(&keyboard, time, *key, false);
+                self.emit_key_output(time, *key, false);
                 time = time.saturating_add(1);
             }
         }
@@ -2668,25 +2752,27 @@ impl App {
     }
 
     fn send_key_state(&mut self, key: u32, pressed: bool) {
-        let Some(keyboard) = self.virtual_keyboard.clone() else {
-            eprintln!("touchdeck: virtual keyboard unavailable; ignored key state {key}");
-            return;
-        };
-
         let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
-        self.emit_key_state(&keyboard, time, key, pressed);
+        self.emit_key_output(time, key, pressed);
     }
 
-    fn emit_key_state(
-        &mut self,
-        keyboard: &zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
-        time: u32,
-        key: u32,
-        pressed: bool,
-    ) {
-        keyboard.key(time, key, if pressed { 1 } else { 0 });
+    fn emit_key_output(&mut self, time: u32, key: u32, pressed: bool) {
+        let keyboard = if self.config.text_output.backend.uses_virtual_keyboard() {
+            self.virtual_keyboard.clone()
+        } else {
+            None
+        };
+
+        if self.config.text_output.backend.uses_virtual_keyboard() && keyboard.is_none() {
+            eprintln!("touchdeck: virtual keyboard unavailable; ignored key state {key}");
+        }
+
+        if let Some(keyboard) = &keyboard {
+            keyboard.key(time, key, if pressed { 1 } else { 0 });
+        }
 
         let Some(mask) = modifier_mask_for_key(key) else {
+            self.emit_ime_key_state(time, key, pressed);
             return;
         };
 
@@ -2695,7 +2781,43 @@ impl App {
         } else {
             self.modifier_mask &= !mask;
         }
-        keyboard.modifiers(self.modifier_mask, 0, 0, 0);
+        if let Some(keyboard) = &keyboard {
+            keyboard.modifiers(self.modifier_mask, 0, 0, 0);
+        }
+        self.emit_ime_key_state(time, key, pressed);
+    }
+
+    fn emit_ime_key_state(&self, time: u32, key: u32, pressed: bool) {
+        if !self.config.text_output.backend.uses_ime() {
+            return;
+        }
+
+        let message = serde_json::json!({
+            "protocol": "touchdeck-ime-v1",
+            "type": "key",
+            "source": "touchdeck",
+            "time": time,
+            "key": key,
+            "state": if pressed { "pressed" } else { "released" },
+            "modifiers": self.modifier_mask,
+        });
+
+        let mut stream = match UnixStream::connect(&self.config.text_output.ime_socket) {
+            Ok(stream) => stream,
+            Err(err) => {
+                eprintln!(
+                    "touchdeck: failed to connect touchdeck-ime socket {}: {err}",
+                    self.config.text_output.ime_socket.display()
+                );
+                return;
+            }
+        };
+
+        if let Err(err) = serde_json::to_writer(&mut stream, &message)
+            .and_then(|()| stream.write_all(b"\n").map_err(serde_json::Error::io))
+        {
+            eprintln!("touchdeck: failed to write touchdeck-ime event: {err}");
+        }
     }
 
     fn key_tap_gap_ms(&self, key: u32) -> u32 {
