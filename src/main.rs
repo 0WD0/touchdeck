@@ -435,7 +435,7 @@ struct TextOutputConfig {
     ime_socket: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 struct ImeCursorRect {
     x: i32,
     y: i32,
@@ -443,10 +443,28 @@ struct ImeCursorRect {
     h: i32,
     #[serde(default = "default_cursor_scale")]
     scale: f64,
+    #[serde(default = "default_cursor_space")]
+    space: String,
+    #[serde(default)]
+    window_x: Option<i32>,
+    #[serde(default)]
+    window_y: Option<i32>,
+    #[serde(default)]
+    window_w: Option<i32>,
+    #[serde(default)]
+    window_h: Option<i32>,
+    #[serde(default)]
+    root_w: Option<i32>,
+    #[serde(default)]
+    root_h: Option<i32>,
 }
 
 fn default_cursor_scale() -> f64 {
     1.0
+}
+
+fn default_cursor_space() -> String {
+    "surface".to_string()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -2883,7 +2901,7 @@ impl App {
         }
 
         if self.should_render_fcitx_server_popup() {
-            if let Some(cursor_rect) = self.ime_status.cursor_rect {
+            if let Some(cursor_rect) = self.ime_status.cursor_rect.clone() {
                 self.render_physical_ime_status(mmap, width, height, cursor_rect);
                 return;
             }
@@ -3007,18 +3025,11 @@ impl App {
         let panel_h = if candidate_count == 0 { 48 } else { 88 }.min(screen_h - 16).max(44);
         let gap = 8;
 
-        let scale = if cursor_rect.scale.is_finite() && cursor_rect.scale > 0.0 {
-            cursor_rect.scale
-        } else {
-            1.0
+        let Some((cursor_x, cursor_y, cursor_h)) =
+            self.physical_ime_anchor(cursor_rect, screen_w, screen_h)
+        else {
+            return;
         };
-        let cursor_x = ((cursor_rect.x as f64) / scale)
-            .round()
-            .clamp(0.0, screen_w.saturating_sub(1) as f64) as i32;
-        let cursor_y = ((cursor_rect.y as f64) / scale)
-            .round()
-            .clamp(0.0, screen_h.saturating_sub(1) as f64) as i32;
-        let cursor_h = ((cursor_rect.h.max(0) as f64) / scale).round() as i32;
 
         let panel_x = cursor_x.clamp(8, (screen_w - panel_w - 8).max(8));
         let below_y = cursor_y + cursor_h + gap;
@@ -3131,6 +3142,89 @@ impl App {
 
             x += rect.w + gap;
         }
+    }
+
+    fn physical_ime_anchor(
+        &self,
+        cursor_rect: ImeCursorRect,
+        screen_w: i32,
+        screen_h: i32,
+    ) -> Option<(i32, i32, i32)> {
+        if cursor_rect.space == "x11-root" {
+            return self.x11_ime_anchor(cursor_rect, screen_w, screen_h);
+        }
+
+        let scale = if cursor_rect.scale.is_finite() && cursor_rect.scale > 0.0 {
+            cursor_rect.scale
+        } else {
+            1.0
+        };
+        Some((
+            ((cursor_rect.x as f64) / scale)
+                .round()
+                .clamp(0.0, screen_w.saturating_sub(1) as f64) as i32,
+            ((cursor_rect.y as f64) / scale)
+                .round()
+                .clamp(0.0, screen_h.saturating_sub(1) as f64) as i32,
+            ((cursor_rect.h.max(0) as f64) / scale).round() as i32,
+        ))
+    }
+
+    fn x11_ime_anchor(
+        &self,
+        cursor_rect: ImeCursorRect,
+        screen_w: i32,
+        screen_h: i32,
+    ) -> Option<(i32, i32, i32)> {
+        let (Some(window_x), Some(window_y), Some(window_w), Some(window_h)) = (
+            cursor_rect.window_x,
+            cursor_rect.window_y,
+            cursor_rect.window_w,
+            cursor_rect.window_h,
+        ) else {
+            return None;
+        };
+        if window_w <= 0 || window_h <= 0 {
+            return None;
+        }
+
+        let layout = match niri_focused_window_layout() {
+            Ok(Some(layout)) => layout,
+            Ok(None) => return None,
+            Err(err) => {
+                eprintln!("touchdeck: failed to query niri focused window for xwayland IME popup: {err:?}");
+                return None;
+            }
+        };
+
+        let Some((tile_x, tile_y)) = layout.tile_pos_in_workspace_view else {
+            return None;
+        };
+        let window_size_w = layout.window_size.0 as f64;
+        let window_size_h = layout.window_size.1 as f64;
+        if window_size_w <= 0.0 || window_size_h <= 0.0 {
+            return None;
+        }
+
+        let scale_x = window_w as f64 / window_size_w;
+        let scale_y = window_h as f64 / window_size_h;
+        if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
+            return None;
+        }
+
+        let local_x = (cursor_rect.x - window_x) as f64;
+        let local_y = (cursor_rect.y - window_y) as f64;
+        let origin_x = tile_x + layout.window_offset_in_tile.0;
+        let origin_y = tile_y + layout.window_offset_in_tile.1;
+        let cursor_x = (origin_x + local_x / scale_x)
+            .round()
+            .clamp(0.0, screen_w.saturating_sub(1) as f64) as i32;
+        let cursor_y = (origin_y + local_y / scale_y)
+            .round()
+            .clamp(0.0, screen_h.saturating_sub(1) as f64) as i32;
+        let cursor_h = ((cursor_rect.h.max(0) as f64) / scale_y).round() as i32;
+
+        Some((cursor_x, cursor_y, cursor_h))
     }
 
     fn ime_header_text(&self) -> String {
@@ -4580,6 +4674,72 @@ fn spawn_niri_action(action: NiriAction) {
 
 fn send_niri_action_socket(action: NiriAction) -> Result<()> {
     let request = niri_action_request_json(action);
+    let _ = send_niri_ipc_request_json(request)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NiriFocusedWindowLayout {
+    tile_pos_in_workspace_view: Option<(f64, f64)>,
+    window_offset_in_tile: (f64, f64),
+    window_size: (i32, i32),
+}
+
+fn niri_focused_window_layout() -> Result<Option<NiriFocusedWindowLayout>> {
+    let value = send_niri_ipc_request_json("\"FocusedWindow\"")?;
+    let focused = value
+        .get("Ok")
+        .and_then(|ok| ok.get("FocusedWindow"))
+        .or_else(|| value.get("FocusedWindow"));
+    let Some(focused) = focused else {
+        return Ok(None);
+    };
+    if focused.is_null() {
+        return Ok(None);
+    }
+
+    let Some(layout) = focused.get("layout") else {
+        return Ok(None);
+    };
+
+    let tile_pos_in_workspace_view = layout
+        .get("tile_pos_in_workspace_view")
+        .and_then(json_pair_f64);
+    let window_offset_in_tile = layout
+        .get("window_offset_in_tile")
+        .and_then(json_pair_f64)
+        .unwrap_or((0.0, 0.0));
+    let Some(window_size) = layout.get("window_size").and_then(json_pair_i32) else {
+        return Ok(None);
+    };
+
+    Ok(Some(NiriFocusedWindowLayout {
+        tile_pos_in_workspace_view,
+        window_offset_in_tile,
+        window_size,
+    }))
+}
+
+fn json_pair_f64(value: &serde_json::Value) -> Option<(f64, f64)> {
+    let values = value.as_array()?;
+    if values.len() != 2 {
+        return None;
+    }
+    Some((values[0].as_f64()?, values[1].as_f64()?))
+}
+
+fn json_pair_i32(value: &serde_json::Value) -> Option<(i32, i32)> {
+    let values = value.as_array()?;
+    if values.len() != 2 {
+        return None;
+    }
+    Some((
+        i32::try_from(values[0].as_i64()?).ok()?,
+        i32::try_from(values[1].as_i64()?).ok()?,
+    ))
+}
+
+fn send_niri_ipc_request_json(request: &str) -> Result<serde_json::Value> {
     let socket_path = env::var_os("NIRI_SOCKET")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("NIRI_SOCKET is not set"))?;
@@ -4608,7 +4768,7 @@ fn send_niri_action_socket(action: NiriAction) -> Result<()> {
         return Err(anyhow!("niri IPC error: {err}"));
     }
 
-    Ok(())
+    Ok(value)
 }
 
 fn niri_action_request_json(action: NiriAction) -> &'static str {

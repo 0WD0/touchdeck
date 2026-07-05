@@ -28,7 +28,10 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use x11rb::connection::Connection as X11Connection;
-use x11rb::protocol::xproto::{KeyPressEvent, KEY_PRESS_EVENT};
+use x11rb::protocol::xproto::{
+    self, AtomEnum, ConnectionExt as XprotoConnectionExt, KeyPressEvent, Window, KEY_PRESS_EVENT,
+};
+use x11rb::rust_connection::RustConnection;
 use xim::x11rb::HasConnection;
 use xim::{InputStyle, Server, ServerHandler, UserInputContext, XimConnections};
 use zbus::{interface, message::Header, object_server::SignalEmitter, ObjectServer};
@@ -111,6 +114,7 @@ struct ImeApp {
     fcitx_cursor_rect: Option<FcitxCursorRect>,
     fcitx_capability: u64,
     fcitx_supported_capability: u64,
+    x11_geometry: Option<X11GeometryProbe>,
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
     running: bool,
@@ -391,6 +395,7 @@ enum FcitxDbusRequest {
 struct FcitxDbusTarget {
     path: OwnedObjectPath,
     client: OwnedBusName,
+    display: String,
 }
 
 impl FcitxDbusTarget {
@@ -416,6 +421,95 @@ struct FcitxCursorRect {
     w: i32,
     h: i32,
     scale: f64,
+    space: String,
+    x11_window: Option<X11WindowGeometry>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct X11WindowGeometry {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    root_w: i32,
+    root_h: i32,
+}
+
+struct X11GeometryProbe {
+    conn: RustConnection,
+    root: Window,
+    active_window_atom: xproto::Atom,
+}
+
+impl X11GeometryProbe {
+    fn connect() -> Result<Self> {
+        let (conn, screen_num) =
+            RustConnection::connect(None).context("connect to X display for geometry")?;
+        let root = conn.setup().roots[screen_num].root;
+        let active_window_atom = conn
+            .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+            .context("intern _NET_ACTIVE_WINDOW")?
+            .reply()
+            .context("read _NET_ACTIVE_WINDOW atom")?
+            .atom;
+
+        Ok(Self {
+            conn,
+            root,
+            active_window_atom,
+        })
+    }
+
+    fn active_window_geometry(&self) -> Result<Option<X11WindowGeometry>> {
+        let active = self
+            .conn
+            .get_property(
+                false,
+                self.root,
+                self.active_window_atom,
+                AtomEnum::WINDOW,
+                0,
+                1,
+            )
+            .context("query _NET_ACTIVE_WINDOW")?
+            .reply()
+            .context("read _NET_ACTIVE_WINDOW")?
+            .value32()
+            .and_then(|mut values| values.next())
+            .unwrap_or(x11rb::NONE);
+
+        if active == x11rb::NONE {
+            return Ok(None);
+        }
+
+        let geometry = self
+            .conn
+            .get_geometry(active)
+            .context("query active X11 window geometry")?
+            .reply()
+            .context("read active X11 window geometry")?;
+        let root_geometry = self
+            .conn
+            .get_geometry(self.root)
+            .context("query X11 root geometry")?
+            .reply()
+            .context("read X11 root geometry")?;
+        let translated = self
+            .conn
+            .translate_coordinates(active, self.root, 0, 0)
+            .context("translate active X11 window to root")?
+            .reply()
+            .context("read active X11 window root position")?;
+
+        Ok(Some(X11WindowGeometry {
+            x: i32::from(translated.dst_x),
+            y: i32::from(translated.dst_y),
+            w: i32::from(geometry.width),
+            h: i32::from(geometry.height),
+            root_w: i32::from(root_geometry.width),
+            root_h: i32::from(root_geometry.height),
+        }))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -478,6 +572,13 @@ struct ImeCursorRect {
     w: i32,
     h: i32,
     scale: f64,
+    space: String,
+    window_x: Option<i32>,
+    window_y: Option<i32>,
+    window_w: Option<i32>,
+    window_h: Option<i32>,
+    root_w: Option<i32>,
+    root_h: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -547,6 +648,7 @@ fn main() -> Result<()> {
         config,
         rime: Some(RimeEngine::new(key_translation).context("initialize librime")?),
         fcitx_output_tx,
+        x11_geometry: X11GeometryProbe::connect().ok(),
         running: true,
         ..Default::default()
     };
@@ -930,9 +1032,10 @@ impl ImeApp {
                 self.status.active = true;
                 self.status.source = "fcitx-dbus".to_string();
                 eprintln!(
-                    "touchdeck-ime: fcitx dbus focus in path={} client={}",
+                    "touchdeck-ime: fcitx dbus focus in path={} client={} display={}",
                     target.path.as_str(),
-                    target.client.as_str()
+                    target.client.as_str(),
+                    target.display
                 );
                 self.fcitx_focus = Some(target);
                 if let Some(rime) = self.rime.as_mut() {
@@ -944,9 +1047,10 @@ impl ImeApp {
             FcitxDbusRequest::FocusOut { target, response } => {
                 self.active = false;
                 eprintln!(
-                    "touchdeck-ime: fcitx dbus focus out path={} client={}",
+                    "touchdeck-ime: fcitx dbus focus out path={} client={} display={}",
                     target.path.as_str(),
-                    target.client.as_str()
+                    target.client.as_str(),
+                    target.display
                 );
                 if self
                     .fcitx_focus
@@ -995,9 +1099,10 @@ impl ImeApp {
                 scale,
             } => {
                 eprintln!(
-                    "touchdeck-ime: fcitx dbus cursor rect path={} client={} x={x} y={y} w={w} h={h} scale={scale}",
+                    "touchdeck-ime: fcitx dbus cursor rect path={} client={} display={} x={x} y={y} w={w} h={h} scale={scale}",
                     target.path.as_str(),
                     target.client.as_str(),
+                    target.display,
                 );
                 if self
                     .fcitx_focus
@@ -1005,6 +1110,17 @@ impl ImeApp {
                     .map(|focus| focus.matches(&target))
                     .unwrap_or(false)
                 {
+                    let is_x11 = target.display.starts_with("x11:");
+                    let x11_window = if is_x11 {
+                        self.query_x11_active_window_geometry()
+                    } else {
+                        None
+                    };
+                    if is_x11 && x11_window.is_none() {
+                        eprintln!(
+                            "touchdeck-ime: x11 cursor rect has no active-window geometry; server popup will not guess"
+                        );
+                    }
                     self.fcitx_cursor_rect = Some(FcitxCursorRect {
                         target,
                         x,
@@ -1012,6 +1128,8 @@ impl ImeApp {
                         w,
                         h,
                         scale,
+                        space: if is_x11 { "x11-root" } else { "surface" }.to_string(),
+                        x11_window,
                     });
                     if self.active && !status_is_empty(&self.status) {
                         if let Err(err) = self.update_popup(qh, "physical") {
@@ -1464,8 +1582,40 @@ impl ImeApp {
                 w: rect.w,
                 h: rect.h,
                 scale: rect.scale,
+                space: rect.space.clone(),
+                window_x: rect.x11_window.map(|window| window.x),
+                window_y: rect.x11_window.map(|window| window.y),
+                window_w: rect.x11_window.map(|window| window.w),
+                window_h: rect.x11_window.map(|window| window.h),
+                root_w: rect.x11_window.map(|window| window.root_w),
+                root_h: rect.x11_window.map(|window| window.root_h),
             });
         status
+    }
+
+    fn query_x11_active_window_geometry(&mut self) -> Option<X11WindowGeometry> {
+        if self.x11_geometry.is_none() {
+            self.x11_geometry = match X11GeometryProbe::connect() {
+                Ok(probe) => Some(probe),
+                Err(err) => {
+                    eprintln!("touchdeck-ime: failed to initialize x11 geometry probe: {err:?}");
+                    None
+                }
+            };
+        }
+
+        let Some(probe) = self.x11_geometry.as_ref() else {
+            return None;
+        };
+
+        match probe.active_window_geometry() {
+            Ok(geometry) => geometry,
+            Err(err) => {
+                eprintln!("touchdeck-ime: failed to query x11 active window geometry: {err:?}");
+                self.x11_geometry = None;
+                None
+            }
+        }
     }
 
     fn add_status_subscriber(&mut self, response: Sender<ImeStatus>) {
@@ -2300,10 +2450,16 @@ impl FcitxInputMethod {
         let path_string = format!("/org/freedesktop/portal/inputcontext/{id}");
         let path = OwnedObjectPath::try_from(path_string.clone())
             .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+        let display = args
+            .iter()
+            .find(|(key, _)| key == "display")
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default();
         let ic = FcitxInputContext {
             tx: self.tx.clone(),
             path: path.clone(),
             client: sender.clone(),
+            display: display.clone(),
         };
 
         server
@@ -2312,8 +2468,8 @@ impl FcitxInputMethod {
             .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
 
         eprintln!(
-            "touchdeck-ime: fcitx dbus create input context id={id} sender={} args={args:?}",
-            sender.as_str()
+            "touchdeck-ime: fcitx dbus create input context id={id} sender={} display={display:?} args={args:?}",
+            sender.as_str(),
         );
 
         Ok((path, fcitx_uuid_bytes(id)))
@@ -2329,6 +2485,7 @@ struct FcitxInputContext {
     tx: Sender<FcitxDbusRequest>,
     path: OwnedObjectPath,
     client: OwnedBusName,
+    display: String,
 }
 
 impl FcitxInputContext {
@@ -2344,6 +2501,7 @@ impl FcitxInputContext {
         let target = FcitxDbusTarget {
             path: self.path.clone(),
             client: self.client.clone(),
+            display: self.display.clone(),
         };
         let request = match kind {
             FcitxDbusUnitKind::FocusIn => FcitxDbusRequest::FocusIn {
@@ -2395,6 +2553,7 @@ impl FcitxInputContext {
             target: FcitxDbusTarget {
                 path: self.path.clone(),
                 client: self.client.clone(),
+                display: self.display.clone(),
             },
             x,
             y,
@@ -2408,6 +2567,7 @@ impl FcitxInputContext {
         let target = FcitxDbusTarget {
             path: self.path.clone(),
             client: self.client.clone(),
+            display: self.display.clone(),
         };
         let request = if supported {
             FcitxDbusRequest::SetSupportedCapability { target, capability }
