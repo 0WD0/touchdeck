@@ -120,6 +120,7 @@ struct App {
     ime_status_rx: Option<Receiver<ImeStatus>>,
     text_renderer: TextRenderer,
     modifier_mask: u32,
+    last_key_sequence: Option<LastKeySequence>,
     running: bool,
 }
 
@@ -154,6 +155,7 @@ impl Default for App {
             ime_status_rx: None,
             text_renderer: TextRenderer::new(),
             modifier_mask: 0,
+            last_key_sequence: None,
             running: false,
         }
     }
@@ -1029,6 +1031,12 @@ struct KeyChord {
 }
 
 #[derive(Clone, Debug)]
+struct LastKeySequence {
+    sequence: Vec<KeyChord>,
+    translation: Option<KeyTranslationPolicy>,
+}
+
+#[derive(Clone, Debug)]
 struct Layout {
     slots: HashMap<String, Slot>,
 }
@@ -1599,7 +1607,8 @@ enum Behavior {
     Niri(NiriAction),
     KeySequence(Vec<KeyChord>),
     KeyHold(u32),
-    KeyRepeat {
+    KeyRepeat,
+    HoldRepeat {
         sequence: Vec<KeyChord>,
         interval_ms: Option<u32>,
         translation: Option<KeyTranslationPolicy>,
@@ -1626,7 +1635,7 @@ impl Behavior {
     }
 
     fn is_repeat(&self) -> bool {
-        matches!(self, Self::KeyRepeat { .. })
+        matches!(self, Self::HoldRepeat { .. })
     }
 
     fn into_action(self) -> GestureAction {
@@ -1634,11 +1643,12 @@ impl Behavior {
             Self::Niri(action) => GestureAction::Niri(action),
             Self::KeySequence(sequence) => GestureAction::KeySequence(sequence),
             Self::KeyHold(key) => GestureAction::KeyHold(key),
-            Self::KeyRepeat {
+            Self::KeyRepeat => GestureAction::KeyRepeat,
+            Self::HoldRepeat {
                 sequence,
                 interval_ms,
                 translation,
-            } => GestureAction::KeyRepeat {
+            } => GestureAction::HoldRepeat {
                 sequence,
                 interval_ms,
                 translation,
@@ -1926,7 +1936,7 @@ fn keyboard_map_config(
             ("key_alt", "&hold <leftalt>"),
             ("key_super", "&hold <leftmeta>"),
         ])),
-        repeat: Some(key_pairs(&[("key_del", "&repeat DEL")])),
+        repeat: Some(key_pairs(&[("key_del", "&hold_repeat DEL")])),
         swipe_up: Some(key_pairs(swipe_up)),
         swipe_down: Some(key_pairs(swipe_down)),
         swipe_left: Some(key_pairs(swipe_left)),
@@ -2168,7 +2178,7 @@ fn expand_keyboard_repeat_map(
         let mut behavior = parse_behavior_invocation(&invocation, macros, behavior_registry).with_context(|| {
             format!("parse keyboard map {map_index} repeat behavior for {slot_id} ({invocation})")
         })?;
-        if let Behavior::KeyRepeat {
+        if let Behavior::HoldRepeat {
             interval_ms,
             ..
         } = &mut behavior
@@ -2396,7 +2406,8 @@ enum GestureAction {
     },
     KeyHold(u32),
     KeyRelease(u32),
-    KeyRepeat {
+    KeyRepeat,
+    HoldRepeat {
         sequence: Vec<KeyChord>,
         interval_ms: Option<u32>,
         translation: Option<KeyTranslationPolicy>,
@@ -2607,6 +2618,7 @@ impl App {
         keyboard.keymap(1, file.as_fd(), keymap_bytes.len() as u32);
         keyboard.modifiers(0, 0, 0, 0);
         self.modifier_mask = 0;
+        self.last_key_sequence = None;
 
         self.virtual_keyboard = Some(keyboard);
         self.virtual_keyboard_keymap = Some(file);
@@ -3235,7 +3247,10 @@ impl App {
             } => {
                 self.send_key_sequence(&sequence, Some(translation));
             }
-            GestureAction::KeyRepeat {
+            GestureAction::KeyRepeat => {
+                self.repeat_last_key_sequence();
+            }
+            GestureAction::HoldRepeat {
                 sequence,
                 translation,
                 ..
@@ -3276,6 +3291,12 @@ impl App {
     fn send_key_sequence(&mut self, sequence: &[KeyChord], translation: Option<KeyTranslationPolicy>) {
         let mut time = self.now_ms().min(u64::from(u32::MAX)) as u32;
         eprintln!("touchdeck: key sequence {sequence:?}");
+        if !sequence.is_empty() {
+            self.last_key_sequence = Some(LastKeySequence {
+                sequence: sequence.to_vec(),
+                translation,
+            });
+        }
         for chord in sequence {
             for key in &chord.keys {
                 self.emit_key_output(time, *key, true, translation);
@@ -3289,6 +3310,15 @@ impl App {
                 time = time.saturating_add(1);
             }
         }
+    }
+
+    fn repeat_last_key_sequence(&mut self) {
+        let Some(last) = self.last_key_sequence.clone() else {
+            eprintln!("touchdeck: key_repeat ignored; no previous key sequence");
+            return;
+        };
+        eprintln!("touchdeck: repeat last key sequence {:?}", last.sequence);
+        self.send_key_sequence(&last.sequence, last.translation);
     }
 
     fn run_action_steps(&mut self, steps: &[ActionStep]) {
@@ -3555,7 +3585,7 @@ impl Engine {
                 self.last_tap = None;
 
                 match action {
-                    GestureAction::KeyRepeat {
+                    GestureAction::HoldRepeat {
                         sequence,
                         interval_ms,
                         translation,
@@ -3923,7 +3953,8 @@ impl Engine {
             GestureAction::Niri(_)
             | GestureAction::KeySequence(_)
             | GestureAction::KeySequenceWithPolicy { .. }
-            | GestureAction::KeyRepeat { .. }
+            | GestureAction::KeyRepeat
+            | GestureAction::HoldRepeat { .. }
             | GestureAction::KeyRelease(_)
             | GestureAction::Exit => {
                 effects.push(EngineEffect::Dispatch(action));
@@ -4437,12 +4468,20 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
                 .ok_or_else(|| anyhow!("key_hold behavior is missing key/keys"))?;
             Ok(Behavior::KeyHold(parse_single_emacs_key(&key)?))
         }
-        "key_repeat" | "repeat_key" | "repeat" => {
+        "key_repeat" => {
+            if value.key.is_some() || value.keys.is_some() {
+                return Err(anyhow!(
+                    "key_repeat repeats the previous key and takes no key/keys; use hold_repeat for fixed repeats"
+                ));
+            }
+            Ok(Behavior::KeyRepeat)
+        }
+        "hold_repeat" | "repeat_key" | "repeat" => {
             let keys = value
                 .key
                 .or(value.keys)
-                .ok_or_else(|| anyhow!("key_repeat behavior is missing key/keys"))?;
-            Ok(Behavior::KeyRepeat {
+                .ok_or_else(|| anyhow!("hold_repeat behavior is missing key/keys"))?;
+            Ok(Behavior::HoldRepeat {
                 sequence: parse_emacs_key_sequence(&keys)?,
                 interval_ms: value.interval_ms,
                 translation: value
@@ -4653,9 +4692,17 @@ fn parse_behavior_invocation_kind(
             let key = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key"))?;
             Ok(Behavior::KeyHold(parse_single_emacs_key(&key)?))
         }
-        "repeat" | "key_repeat" | "repeat_key" => {
+        "key_repeat" => {
+            if key_arg.is_some() {
+                return Err(anyhow!(
+                    "&key_repeat repeats the previous key and takes no arguments; use &hold_repeat KEY for fixed repeats"
+                ));
+            }
+            Ok(Behavior::KeyRepeat)
+        }
+        "hold_repeat" | "repeat_key" => {
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
-            Ok(Behavior::KeyRepeat {
+            Ok(Behavior::HoldRepeat {
                 sequence: parse_emacs_key_sequence(&keys)?,
                 interval_ms: fields.interval_ms,
                 translation,
@@ -5018,7 +5065,8 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
             translation,
         } => key_sequence_label(sequence).map(|label| format!("{label}/{}", translation.as_str())),
         Behavior::KeyHold(key) => key_code_label(*key).map(|label| format!("{}+", label)),
-        Behavior::KeyRepeat { sequence, .. } => {
+        Behavior::KeyRepeat => Some("repeat".to_string()),
+        Behavior::HoldRepeat { sequence, .. } => {
             key_sequence_label(sequence).map(|label| format!("{}...", label))
         }
         Behavior::Sequence(_) => Some("macro".to_string()),

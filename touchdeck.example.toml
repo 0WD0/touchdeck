@@ -21,7 +21,9 @@ output = "ime"
 #   &kpe KEY      tap a key sequence and force effective Rime keysym translation
 #   &kpr KEY      tap a key sequence and force raw Rime keysym translation
 #   &hold KEY     press on hold, release when the touch is released
-#   &repeat KEY   repeat while held
+#   &key_repeat   repeat the previous key, like ZMK &key_repeat
+#   &hold_repeat KEY
+#                 repeat a fixed key sequence while held
 #   &trans        fall through to a lower active layer
 #   &none         consume without action
 #
@@ -30,7 +32,7 @@ output = "ime"
 binding = "&kp <leftshift>"
 
 [behaviors.del_repeat]
-type = "key_repeat"
+type = "hold_repeat"
 keys = "DEL"
 
 [ime]
