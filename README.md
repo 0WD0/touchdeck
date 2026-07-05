@@ -99,8 +99,8 @@ Mode ownership controls are now represented as default bindings:
 - Top-left tap in base, text, passthrough, or niri locked: `exit`
 
 Text mode uses key slots defined by the active SVG layout. Config files map
-slot IDs to key behavior with `[[keyboard.maps]]`; geometry stays in SVG.
-`keyboard.maps` supports direct per-slot gestures: tap, hold, and four swipe
+slot IDs to key behavior with `[[keyboard.layers]]`; geometry stays in SVG.
+`keyboard.layers` supports direct per-slot gestures: tap, hold, repeat, and four swipe
 directions. Text mode draws keycaps even when debug draw is disabled, and labels
 are resolved from behavior bindings rather than from static SVG metadata.
 
@@ -115,13 +115,14 @@ Text keycap labels are laid out as gesture hints:
 
 The built-in text keyboard is phone-first:
 
-- tap: alphabetic QWERTY keys plus `ESC`, `SPC`, `DEL`, `RET`
+- tap: alphabetic QWERTY keys plus `ESC`, `SPC`, `BSPC`, `RET`
 - hold: upper modifier keys `SFT`, `CTL`, `ALT`, `SUP` stay pressed until touch release
 - swipe up: numbers and common symbols, optimized for quick thumb flicks
 - directional swipes on selected home/special keys: arrows, word movement, backspace, enter, escape, and tab
 
-The Charybdis/ZMK config is used as a reference for high-frequency actions and
-Emacs-style habits, not as the visual or ergonomic layout template.
+The Charybdis/ZMK config is used as a reference for behavior composition,
+high-frequency actions, and naming conventions, not as the visual or ergonomic
+layout template.
 
 Default niri gestures still exist when no configured binding matches in niri modes:
 
@@ -185,58 +186,59 @@ trigger = { type = "swipe", target = "bottom_edge", direction = "up" }
 behavior = { type = "mode", mode = "text" }
 ```
 
-Keyboard maps generate tap/hold/swipe bindings from existing SVG slots. They do
-not define geometry:
+Keyboard layers generate tap/hold/repeat/swipe bindings from existing SVG slots.
+They do not define geometry. Binding values use ZMK-style behavior invocation:
 
 ```toml
 [keyboard]
 
-[[keyboard.maps]]
+[[keyboard.layers]]
 mode = "text"
 layer = "base"
 
-[keyboard.maps.tap]
-key_q = "q"
-key_w = "w"
-key_spc = "SPC"
-key_del = "DEL"
+[keyboard.layers.tap]
+key_q = "&kp Q"
+key_w = "&kp W"
+key_spc = "&kp SPC"
+key_del = "&kp BSPC"
 
-[keyboard.maps.hold]
-key_shift = "<leftshift>"
-key_ctrl = "<leftctrl>"
-key_alt = "<leftalt>"
-key_super = "<leftmeta>"
+[keyboard.layers.hold]
+key_shift = "&hold LSHIFT"
+key_ctrl = "&hold LCTRL"
+key_alt = "&hold LALT"
+key_super = "&hold LGUI"
 
-[keyboard.maps.swipe_up]
-key_q = "1"
-key_w = "2"
-key_a = "!"
-key_s = "@"
-key_spc = "TAB"
+[keyboard.layers.swipe_up]
+key_q = "&kp N1"
+key_w = "&kp N2"
+key_a = "&kp EXCLAMATION"
+key_s = "&kp AT_SIGN"
+key_spc = "&kp TAB"
 
-[keyboard.maps.swipe_left]
-key_h = "<left>"
-key_spc = "DEL"
+[keyboard.layers.swipe_left]
+key_h = "&kp LEFT"
+key_spc = "&kp BSPC"
 
-[keyboard.maps.swipe_down]
-key_j = "<down>"
-key_spc = "ESC"
+[keyboard.layers.swipe_down]
+key_j = "&kp DOWN"
+key_spc = "&kp ESC"
 
-[keyboard.maps.swipe_right]
-key_l = "<right>"
-key_spc = "RET"
+[keyboard.layers.swipe_right]
+key_l = "&kp RIGHT"
+key_spc = "&kp RET"
 ```
 
 Map fields:
 
 - `mode`: defaults to `text`
 - `layer`: defaults to `base`
-- `tap`: optional table mapping slot IDs to Emacs-style key tokens or key sequences
-- `hold`: optional table mapping slot IDs to held keys; sends key down at hold threshold and key up on touch release; uses `hold_ms`
-- `swipe_up`: optional table mapping slot IDs to keys
-- `swipe_down`: optional table mapping slot IDs to keys
-- `swipe_left`: optional table mapping slot IDs to keys
-- `swipe_right`: optional table mapping slot IDs to keys
+- `tap`: optional table mapping slot IDs to behavior bindings
+- `hold`: optional table mapping slot IDs to behavior bindings evaluated at the hold threshold
+- `repeat`: optional table mapping slot IDs to fixed hold-repeat behavior bindings
+- `swipe_up`: optional table mapping slot IDs to behavior bindings
+- `swipe_down`: optional table mapping slot IDs to behavior bindings
+- `swipe_left`: optional table mapping slot IDs to behavior bindings
+- `swipe_right`: optional table mapping slot IDs to behavior bindings
 - `fingers`: defaults to `1`
 - `max_ms`: optional tap/swipe time limit
 - `hold_ms`: optional hold threshold
@@ -247,17 +249,17 @@ Map fields:
 For example, this gives vim-style arrows without a nav layer:
 
 ```toml
-[keyboard.maps.swipe_left]
-key_h = "<left>"
+[keyboard.layers.swipe_left]
+key_h = "&kp LEFT"
 
-[keyboard.maps.swipe_down]
-key_j = "<down>"
+[keyboard.layers.swipe_down]
+key_j = "&kp DOWN"
 
-[keyboard.maps.swipe_up]
-key_k = "<up>"
+[keyboard.layers.swipe_up]
+key_k = "&kp UP"
 
-[keyboard.maps.swipe_right]
-key_l = "<right>"
+[keyboard.layers.swipe_right]
+key_l = "&kp RIGHT"
 ```
 
 Upper modifier slots are intended to be held with one thumb/finger while another key is tapped or flicked.
@@ -283,8 +285,8 @@ Trigger fields:
 
 Supported behavior types:
 
-- `key` with `key = "C-c"` or `key = "SPC"`
-- `key_sequence` with `keys = "C-x C-s"`
+- `key` with `key = "LC(C)"` or `key = "SPC"`
+- `key_sequence` with `keys = "LC(X) LC(S)"`
 - `niri` with `action = "focus-column-left"`
 - `mode` / `mode_set` with `mode = "base"`
 - `mode_toggle` with `mode = "passthrough"`
@@ -298,12 +300,11 @@ Supported behavior types:
 - `noop`
 - `exit`
 
-Key syntax for `key`, `key_sequence`, and `key_sequence` macro steps follows the Emacs `kbd` / `read-kbd-macro` style subset:
+Key syntax for `key`, `key_sequence`, and `key_sequence` macro steps follows a ZMK-style subset:
 
-- Examples: `f`, `C-c`, `C-x C-s`, `M-RET`, `C-M-<return>`, `s-<left>`
-- Shorthands: `RET`, `SPC`, `TAB`, `ESC`, `DEL`
-- Angle keys: `<return>`, `<space>`, `<tab>`, `<escape>`, `<backspace>`, `<delete>`, `<left>`, `<right>`, `<up>`, `<down>`
-- US punctuation: common unshifted punctuation keys, plus shifted forms like `!`, `@`, `#`, `$`, `%`, `^`, `&`, `*`, `(`, `)`, `_`, `+`, `{`, `}`, and `?`
-- Modifiers are parsed in Emacs order: `A-C-H-M-S-s`
-- Current backend maps `C` to left Ctrl, `M`/`A` to left Alt, and `s`/`H` to left Super
-
+- Examples: `A`, `N1`, `RET`, `LEFT`, `LC(C)`, `LC(X) LC(S)`, `LA(RET)`, `LG(LEFT)`
+- Common key tokens: `RET`, `SPC`, `TAB`, `ESC`, `BSPC`, `DEL`, `DELETE`, `LEFT`, `RIGHT`, `UP`, `DOWN`
+- Letter and number tokens: `A` through `Z`, `N1` through `N0`
+- US punctuation tokens: `MINUS`, `EQUAL`, `LEFT_BRACKET`, `RIGHT_BRACKET`, `SEMICOLON`, `SINGLE_QUOTE`, `GRAVE`, `BACKSLASH`, `COMMA`, `PERIOD`, `SLASH`
+- Shifted punctuation tokens: `EXCLAMATION`, `AT_SIGN`, `HASH`, `DOLLAR`, `PERCENT`, `CARET`, `AMPERSAND`, `ASTERISK`, `UNDERSCORE`, `QUESTION`
+- Modifier wrappers: `LC(...)`, `LS(...)`, `LA(...)`, `LG(...)`, `RC(...)`, `RS(...)`, `RA(...)`, `RG(...)`

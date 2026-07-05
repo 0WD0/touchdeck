@@ -451,7 +451,7 @@
       data-td-slot="key_del"
       data-td-role="key"
       data-td-capture="true"
-      data-td-label="DEL"
+      data-td-label="BSPC"
       x="590"
       y="1956"
       width="160"

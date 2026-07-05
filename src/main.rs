@@ -71,6 +71,7 @@ const KEY_GRAVE: u32 = 41;
 const KEY_Z: u32 = 44;
 const KEY_BACKSLASH: u32 = 43;
 const KEY_LEFTSHIFT: u32 = 42;
+const KEY_RIGHTSHIFT: u32 = 54;
 const KEY_X: u32 = 45;
 const KEY_C: u32 = 46;
 const KEY_V: u32 = 47;
@@ -82,12 +83,20 @@ const KEY_DOT: u32 = 52;
 const KEY_SLASH: u32 = 53;
 const KEY_SPACE: u32 = 57;
 const KEY_LEFTALT: u32 = 56;
+const KEY_RIGHTCTRL: u32 = 97;
+const KEY_RIGHTALT: u32 = 100;
 const KEY_LEFT: u32 = 105;
 const KEY_RIGHT: u32 = 106;
 const KEY_UP: u32 = 103;
 const KEY_DOWN: u32 = 108;
+const KEY_HOME: u32 = 102;
+const KEY_PAGEUP: u32 = 104;
+const KEY_END: u32 = 107;
+const KEY_PAGEDOWN: u32 = 109;
+const KEY_INSERT: u32 = 110;
 const KEY_DELETE: u32 = 111;
 const KEY_LEFTMETA: u32 = 125;
+const KEY_RIGHTMETA: u32 = 126;
 
 const XKB_MOD_SHIFT: u32 = 1 << 0;
 const XKB_MOD_CONTROL: u32 = 1 << 2;
@@ -1159,7 +1168,7 @@ fn insert_default_key_slots(registry: &mut SlotRegistry) {
         ("key_super", "SUP", 0.830, 0.450, 0.130, 0.060),
         ("key_esc", "ESC", 0.040, 0.815, 0.130, 0.075),
         ("key_spc", "SPC", 0.200, 0.815, 0.360, 0.075),
-        ("key_del", "DEL", 0.590, 0.815, 0.160, 0.075),
+        ("key_del", "BSPC", 0.590, 0.815, 0.160, 0.075),
         ("key_ret", "RET", 0.780, 0.815, 0.180, 0.075),
     ] {
         registry.insert_slot(
@@ -1865,81 +1874,81 @@ impl BehaviorRegistry {
 fn default_keyboard_maps() -> Vec<KeyboardMapFileConfig> {
     vec![keyboard_map_config(
         &[
-            ("key_q", "&kp q"),
-            ("key_w", "&kp w"),
-            ("key_e", "&kp e"),
-            ("key_r", "&kp r"),
-            ("key_t", "&kp t"),
-            ("key_y", "&kp y"),
-            ("key_u", "&kp u"),
-            ("key_i", "&kp i"),
-            ("key_o", "&kp o"),
-            ("key_p", "&kp p"),
-            ("key_a", "&kp a"),
-            ("key_s", "&kp s"),
-            ("key_d", "&kp d"),
-            ("key_f", "&kp f"),
-            ("key_g", "&kp g"),
-            ("key_h", "&kp h"),
-            ("key_j", "&kp j"),
-            ("key_k", "&kp k"),
-            ("key_l", "&kp l"),
-            ("key_z", "&kp z"),
-            ("key_x", "&kp x"),
-            ("key_c", "&kp c"),
-            ("key_v", "&kp v"),
-            ("key_b", "&kp b"),
-            ("key_n", "&kp n"),
-            ("key_m", "&kp m"),
+            ("key_q", "&kp Q"),
+            ("key_w", "&kp W"),
+            ("key_e", "&kp E"),
+            ("key_r", "&kp R"),
+            ("key_t", "&kp T"),
+            ("key_y", "&kp Y"),
+            ("key_u", "&kp U"),
+            ("key_i", "&kp I"),
+            ("key_o", "&kp O"),
+            ("key_p", "&kp P"),
+            ("key_a", "&kp A"),
+            ("key_s", "&kp S"),
+            ("key_d", "&kp D"),
+            ("key_f", "&kp F"),
+            ("key_g", "&kp G"),
+            ("key_h", "&kp H"),
+            ("key_j", "&kp J"),
+            ("key_k", "&kp K"),
+            ("key_l", "&kp L"),
+            ("key_z", "&kp Z"),
+            ("key_x", "&kp X"),
+            ("key_c", "&kp C"),
+            ("key_v", "&kp V"),
+            ("key_b", "&kp B"),
+            ("key_n", "&kp N"),
+            ("key_m", "&kp M"),
             ("key_esc", "&kp ESC"),
             ("key_spc", "&kp SPC"),
-            ("key_del", "&kp DEL"),
+            ("key_del", "&kp BSPC"),
             ("key_ret", "&kp RET"),
-            ("key_shift", "&kp <leftshift>"),
+            ("key_shift", "&kp LSHIFT"),
         ],
         &[
-            ("key_q", "&kp 1"),
-            ("key_w", "&kp 2"),
-            ("key_e", "&kp 3"),
-            ("key_r", "&kp 4"),
-            ("key_t", "&kp 5"),
-            ("key_y", "&kp 6"),
-            ("key_u", "&kp 7"),
-            ("key_i", "&kp 8"),
-            ("key_o", "&kp 9"),
-            ("key_p", "&kp 0"),
-            ("key_a", "&kp !"),
-            ("key_s", "&kp @"),
-            ("key_d", "&kp #"),
-            ("key_f", "&kp $"),
-            ("key_g", "&kp %"),
-            ("key_h", "&kp ^"),
-            ("key_j", "&kp &"),
-            ("key_k", "&kp <up>"),
-            ("key_l", "&kp _"),
-            ("key_z", "&kp `"),
-            ("key_x", "&kp -"),
-            ("key_c", "&kp ="),
-            ("key_v", "&kp ["),
-            ("key_b", "&kp ]"),
-            ("key_n", "&kp /"),
-            ("key_m", "&kp ?"),
+            ("key_q", "&kp N1"),
+            ("key_w", "&kp N2"),
+            ("key_e", "&kp N3"),
+            ("key_r", "&kp N4"),
+            ("key_t", "&kp N5"),
+            ("key_y", "&kp N6"),
+            ("key_u", "&kp N7"),
+            ("key_i", "&kp N8"),
+            ("key_o", "&kp N9"),
+            ("key_p", "&kp N0"),
+            ("key_a", "&kp EXCLAMATION"),
+            ("key_s", "&kp AT_SIGN"),
+            ("key_d", "&kp HASH"),
+            ("key_f", "&kp DOLLAR"),
+            ("key_g", "&kp PERCENT"),
+            ("key_h", "&kp CARET"),
+            ("key_j", "&kp AMPERSAND"),
+            ("key_k", "&kp UP"),
+            ("key_l", "&kp UNDERSCORE"),
+            ("key_z", "&kp GRAVE"),
+            ("key_x", "&kp MINUS"),
+            ("key_c", "&kp EQUAL"),
+            ("key_v", "&kp LEFT_BRACKET"),
+            ("key_b", "&kp RIGHT_BRACKET"),
+            ("key_n", "&kp SLASH"),
+            ("key_m", "&kp QUESTION"),
             ("key_spc", "&kp TAB"),
             ("key_del", "&kp DELETE"),
-            ("key_ret", "&kp C-RET"),
+            ("key_ret", "&kp LC(RET)"),
         ],
-        &[("key_j", "&kp <down>"), ("key_k", "&kp *"), ("key_spc", "&kp ESC")],
+        &[("key_j", "&kp DOWN"), ("key_k", "&kp ASTERISK"), ("key_spc", "&kp ESC")],
         &[
-            ("key_h", "&kp <left>"),
-            ("key_spc", "&kp DEL"),
-            ("key_del", "&kp M-DEL"),
-            ("key_ret", "&kp C-<left>"),
+            ("key_h", "&kp LEFT"),
+            ("key_spc", "&kp BSPC"),
+            ("key_del", "&kp LA(BSPC)"),
+            ("key_ret", "&kp LC(LEFT)"),
         ],
         &[
-            ("key_l", "&kp <right>"),
+            ("key_l", "&kp RIGHT"),
             ("key_spc", "&kp RET"),
-            ("key_del", "&kp C-<right>"),
-            ("key_ret", "&kp C-<right>"),
+            ("key_del", "&kp LC(RIGHT)"),
+            ("key_ret", "&kp LC(RIGHT)"),
         ],
     )]
 }
@@ -1956,12 +1965,12 @@ fn keyboard_map_config(
         layer: Some("base".to_string()),
         tap: Some(key_pairs(tap)),
         hold: Some(key_pairs(&[
-            ("key_shift", "&hold <leftshift>"),
-            ("key_ctrl", "&hold <leftctrl>"),
-            ("key_alt", "&hold <leftalt>"),
-            ("key_super", "&hold <leftmeta>"),
+            ("key_shift", "&hold LSHIFT"),
+            ("key_ctrl", "&hold LCTRL"),
+            ("key_alt", "&hold LALT"),
+            ("key_super", "&hold LGUI"),
         ])),
-        repeat: Some(key_pairs(&[("key_del", "&hold_repeat DEL")])),
+        repeat: Some(key_pairs(&[("key_del", "&hold_repeat BSPC")])),
         swipe_up: Some(key_pairs(swipe_up)),
         swipe_down: Some(key_pairs(swipe_down)),
         swipe_left: Some(key_pairs(swipe_left)),
@@ -4498,7 +4507,7 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
                 .key
                 .or(value.keys)
                 .ok_or_else(|| anyhow!("key behavior is missing key/keys"))?;
-            let sequence = parse_emacs_key_sequence(&keys)?;
+            let sequence = parse_key_sequence(&keys)?;
             if let Some(translation) = value.translation {
                 Ok(Behavior::KeySequenceWithPolicy {
                     sequence,
@@ -4513,7 +4522,7 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
                 .key
                 .or(value.keys)
                 .ok_or_else(|| anyhow!("key_hold behavior is missing key/keys"))?;
-            Ok(Behavior::KeyHold(parse_single_emacs_key(&key)?))
+            Ok(Behavior::KeyHold(parse_single_key(&key)?))
         }
         "key_repeat" => {
             if value.key.is_some() || value.keys.is_some() {
@@ -4529,7 +4538,7 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
                 .or(value.keys)
                 .ok_or_else(|| anyhow!("hold_repeat behavior is missing key/keys"))?;
             Ok(Behavior::HoldRepeat {
-                sequence: parse_emacs_key_sequence(&keys)?,
+                sequence: parse_key_sequence(&keys)?,
                 interval_ms: value.interval_ms,
                 translation: value
                     .translation
@@ -4748,7 +4757,7 @@ fn parse_behavior_invocation_kind(
     match normalize_name(kind).as_str() {
         "kp" | "key" | "key_sequence" | "keys" => {
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
-            let sequence = parse_emacs_key_sequence(&keys)?;
+            let sequence = parse_key_sequence(&keys)?;
             if let Some(translation) = translation {
                 Ok(Behavior::KeySequenceWithPolicy {
                     sequence,
@@ -4761,20 +4770,20 @@ fn parse_behavior_invocation_kind(
         "kpe" | "key_effective" | "effective_key" => {
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
             Ok(Behavior::KeySequenceWithPolicy {
-                sequence: parse_emacs_key_sequence(&keys)?,
+                sequence: parse_key_sequence(&keys)?,
                 translation: KeyTranslationPolicy::Effective,
             })
         }
         "kpr" | "key_raw" | "raw_key" => {
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
             Ok(Behavior::KeySequenceWithPolicy {
-                sequence: parse_emacs_key_sequence(&keys)?,
+                sequence: parse_key_sequence(&keys)?,
                 translation: KeyTranslationPolicy::Raw,
             })
         }
         "hold" | "kh" | "key_hold" | "hold_key" | "modifier" => {
             let key = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key"))?;
-            Ok(Behavior::KeyHold(parse_single_emacs_key(&key)?))
+            Ok(Behavior::KeyHold(parse_single_key(&key)?))
         }
         "key_repeat" => {
             if key_arg.is_some() {
@@ -4787,7 +4796,7 @@ fn parse_behavior_invocation_kind(
         "hold_repeat" | "repeat_key" => {
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
             Ok(Behavior::HoldRepeat {
-                sequence: parse_emacs_key_sequence(&keys)?,
+                sequence: parse_key_sequence(&keys)?,
                 interval_ms: fields.interval_ms,
                 translation,
             })
@@ -4888,16 +4897,12 @@ fn parse_key_translation_policy(value: &str) -> Result<KeyTranslationPolicy> {
 fn parse_modifier_flags(values: &[String]) -> Result<u32> {
     let mut flags = 0;
     for value in values {
-        flags |= match normalize_name(value).as_str() {
-            "shift" | "lshift" | "leftshift" | "left_shift" | "rshift" | "rightshift"
-            | "right_shift" => XKB_MOD_SHIFT,
-            "ctrl" | "control" | "lctrl" | "leftctrl" | "left_control" | "rctrl"
-            | "rightctrl" | "right_control" => XKB_MOD_CONTROL,
-            "alt" | "lalt" | "leftalt" | "left_alt" | "ralt" | "rightalt"
-            | "right_alt" => XKB_MOD_ALT,
-            "super" | "meta" | "win" | "gui" | "lgui" | "leftgui" | "left_gui"
-            | "leftmeta" | "left_meta" | "rgui" | "rightgui" | "right_gui"
-            | "rightmeta" | "right_meta" => XKB_MOD_SUPER,
+        flags |= match value.trim() {
+            "LSHIFT" | "LEFT_SHIFT" | "RSHIFT" | "RIGHT_SHIFT" => XKB_MOD_SHIFT,
+            "LCTRL" | "LEFT_CONTROL" | "RCTRL" | "RIGHT_CONTROL" => XKB_MOD_CONTROL,
+            "LALT" | "LEFT_ALT" | "RALT" | "RIGHT_ALT" => XKB_MOD_ALT,
+            "LGUI" | "LEFT_GUI" | "LEFT_WIN" | "LEFT_META" | "RGUI" | "RIGHT_GUI"
+            | "RIGHT_WIN" | "RIGHT_META" => XKB_MOD_SUPER,
             other => return Err(anyhow!("unknown modifier {other:?}")),
         };
     }
@@ -4910,25 +4915,25 @@ fn parse_action_steps(steps: Vec<ActionStepFileConfig>) -> Result<Vec<ActionStep
 
 fn parse_action_step(value: ActionStepFileConfig) -> Result<ActionStep> {
     match normalize_name(&value.kind).as_str() {
-        "key_down" => Ok(ActionStep::KeyDown(parse_single_emacs_key(
+        "key_down" => Ok(ActionStep::KeyDown(parse_single_key(
             value
                 .key
                 .as_deref()
                 .ok_or_else(|| anyhow!("key_down step is missing key"))?,
         )?)),
-        "key_up" => Ok(ActionStep::KeyUp(parse_single_emacs_key(
+        "key_up" => Ok(ActionStep::KeyUp(parse_single_key(
             value
                 .key
                 .as_deref()
                 .ok_or_else(|| anyhow!("key_up step is missing key"))?,
         )?)),
-        "tap_key" => Ok(ActionStep::TapKey(parse_single_emacs_key(
+        "tap_key" => Ok(ActionStep::TapKey(parse_single_key(
             value
                 .key
                 .as_deref()
                 .ok_or_else(|| anyhow!("tap_key step is missing key"))?,
         )?)),
-        "key_sequence" | "keys" => Ok(ActionStep::KeySequence(parse_emacs_key_sequence(
+        "key_sequence" | "keys" => Ok(ActionStep::KeySequence(parse_key_sequence(
             value
                 .keys
                 .or(value.key)
@@ -4952,18 +4957,18 @@ fn parse_action_step(value: ActionStepFileConfig) -> Result<ActionStep> {
     }
 }
 
-fn parse_single_emacs_key(value: &str) -> Result<u32> {
-    let sequence = parse_emacs_key_sequence(value)?;
+fn parse_single_key(value: &str) -> Result<u32> {
+    let sequence = parse_key_sequence(value)?;
     if sequence.len() != 1 || sequence[0].keys.len() != 1 {
         return Err(anyhow!("expected a single key, got {value}"));
     }
     Ok(sequence[0].keys[0])
 }
 
-fn parse_emacs_key_sequence(value: &str) -> Result<Vec<KeyChord>> {
+fn parse_key_sequence(value: &str) -> Result<Vec<KeyChord>> {
     let sequence = value
         .split_whitespace()
-        .map(parse_emacs_key_chord)
+        .map(parse_key_chord)
         .collect::<Result<Vec<_>>>()?;
 
     if sequence.is_empty() {
@@ -4973,188 +4978,157 @@ fn parse_emacs_key_sequence(value: &str) -> Result<Vec<KeyChord>> {
     }
 }
 
-fn parse_emacs_key_chord(token: &str) -> Result<KeyChord> {
-    let mut rest = token;
-    let mut last_modifier_index = None;
-    let mut keys = Vec::new();
-
-    loop {
-        let Some((index, modifier_key, prefix_len)) = parse_emacs_modifier_prefix(rest) else {
-            break;
-        };
-
-        if last_modifier_index.is_some_and(|last| index < last) {
-            return Err(anyhow!(
-                "invalid Emacs modifier order in {token}; expected A-C-H-M-S-s"
-            ));
-        }
-
-        if !keys.contains(&modifier_key) {
-            keys.push(modifier_key);
-        }
-        last_modifier_index = Some(index);
-        rest = &rest[prefix_len..];
-    }
-
-    let (base_key, implicit_modifiers) = parse_emacs_base_key(rest)
-        .ok_or_else(|| anyhow!("unknown Emacs key token {token}"))?;
-    for modifier in implicit_modifiers {
-        if !keys.contains(&modifier) {
-            keys.push(modifier);
-        }
-    }
-    keys.push(base_key);
-
+fn parse_key_chord(token: &str) -> Result<KeyChord> {
+    let keys = parse_zmk_key_expr(token)?;
     Ok(KeyChord { keys })
 }
 
-fn parse_emacs_modifier_prefix(value: &str) -> Option<(usize, u32, usize)> {
-    let prefixes = [
-        ("A-", KEY_LEFTALT),
-        ("C-", KEY_LEFTCTRL),
-        ("H-", KEY_LEFTMETA),
-        ("M-", KEY_LEFTALT),
-        ("S-", KEY_LEFTSHIFT),
-        ("s-", KEY_LEFTMETA),
-    ];
-
-    prefixes
-        .iter()
-        .enumerate()
-        .find_map(|(index, (prefix, key))| value.starts_with(prefix).then_some((index, *key, prefix.len())))
-}
-
-fn parse_emacs_base_key(value: &str) -> Option<(u32, Vec<u32>)> {
+fn parse_zmk_key_expr(value: &str) -> Result<Vec<u32>> {
+    let value = value.trim();
     if value.is_empty() {
-        return None;
+        return Err(anyhow!("empty ZMK key token"));
     }
 
-    let key_name = if value.starts_with('<') && value.ends_with('>') && value.len() > 2 {
-        &value[1..value.len() - 1]
-    } else {
-        value
-    };
-
-    if key_name.len() == 1 {
-        let ch = key_name.chars().next()?;
-        if ch.is_ascii_uppercase() {
-            return parse_key_name(&ch.to_ascii_lowercase().to_string())
-                .map(|key| (key, vec![KEY_LEFTSHIFT]));
+    if let Some((modifier, inner)) = parse_zmk_modifier_call(value)? {
+        let mut keys = parse_zmk_key_expr(inner)?;
+        if !keys.contains(&modifier) {
+            keys.insert(0, modifier);
         }
+        return Ok(keys);
     }
 
-    parse_key_name(key_name)
-        .map(|key| (key, Vec::new()))
-        .or_else(|| parse_shifted_symbol_key(key_name).map(|key| (key, vec![KEY_LEFTSHIFT])))
+    let (key, implicit_modifiers) =
+        parse_zmk_key_name(value).ok_or_else(|| anyhow!("unknown ZMK key token {value}"))?;
+    let mut keys = implicit_modifiers;
+    if !keys.contains(&key) {
+        keys.push(key);
+    }
+    Ok(keys)
 }
 
-fn parse_key_name(value: &str) -> Option<u32> {
+fn parse_zmk_modifier_call(value: &str) -> Result<Option<(u32, &str)>> {
+    let Some(open) = value.find('(') else {
+        return Ok(None);
+    };
+    if !value.ends_with(')') {
+        return Err(anyhow!("invalid ZMK modifier expression {value}; expected MOD(KEY)"));
+    }
+    let name = &value[..open];
+    let inner = &value[open + 1..value.len() - 1];
+    let modifier = match name {
+        "LC" => KEY_LEFTCTRL,
+        "LS" => KEY_LEFTSHIFT,
+        "LA" => KEY_LEFTALT,
+        "LG" => KEY_LEFTMETA,
+        "RC" => KEY_RIGHTCTRL,
+        "RS" => KEY_RIGHTSHIFT,
+        "RA" => KEY_RIGHTALT,
+        "RG" => KEY_RIGHTMETA,
+        _ => {
+            return Err(anyhow!(
+                "unknown ZMK modifier wrapper {name}; expected LC/LS/LA/LG/RC/RS/RA/RG"
+            ))
+        }
+    };
+    Ok(Some((modifier, inner)))
+}
+
+fn parse_zmk_key_name(value: &str) -> Option<(u32, Vec<u32>)> {
+    let shifted = |key| Some((key, vec![KEY_LEFTSHIFT]));
+    let plain = |key| Some((key, Vec::new()));
+
     match value.trim() {
-        "-" => return Some(KEY_MINUS),
-        "=" => return Some(KEY_EQUAL),
-        "[" => return Some(KEY_LEFTBRACE),
-        "]" => return Some(KEY_RIGHTBRACE),
-        ";" => return Some(KEY_SEMICOLON),
-        "'" => return Some(KEY_APOSTROPHE),
-        "`" => return Some(KEY_GRAVE),
-        "\\" => return Some(KEY_BACKSLASH),
-        "," => return Some(KEY_COMMA),
-        "." => return Some(KEY_DOT),
-        "/" => return Some(KEY_SLASH),
-        _ => {}
-    }
-
-    match normalize_name(value).as_str() {
-        "ctrl" | "control" | "leftctrl" | "left_control" => Some(KEY_LEFTCTRL),
-        "shift" | "leftshift" | "left_shift" => Some(KEY_LEFTSHIFT),
-        "alt" | "leftalt" | "left_alt" => Some(KEY_LEFTALT),
-        "super" | "meta" | "win" | "leftmeta" | "left_meta" => Some(KEY_LEFTMETA),
-        "esc" | "escape" => Some(KEY_ESC),
-        "ret" | "return" => Some(KEY_ENTER),
-        "1" => Some(KEY_1),
-        "2" => Some(KEY_2),
-        "3" => Some(KEY_3),
-        "4" => Some(KEY_4),
-        "5" => Some(KEY_5),
-        "6" => Some(KEY_6),
-        "7" => Some(KEY_7),
-        "8" => Some(KEY_8),
-        "9" => Some(KEY_9),
-        "0" => Some(KEY_0),
-        "-" | "minus" => Some(KEY_MINUS),
-        "=" | "equal" | "equals" => Some(KEY_EQUAL),
-        "[" | "leftbrace" | "left_brace" | "leftbracket" | "left_bracket" => Some(KEY_LEFTBRACE),
-        "]" | "rightbrace" | "right_brace" | "rightbracket" | "right_bracket" => Some(KEY_RIGHTBRACE),
-        ";" | "semicolon" | "semi" => Some(KEY_SEMICOLON),
-        "'" | "apostrophe" | "quote" => Some(KEY_APOSTROPHE),
-        "`" | "grave" | "backtick" => Some(KEY_GRAVE),
-        "\\" | "backslash" => Some(KEY_BACKSLASH),
-        "," | "comma" => Some(KEY_COMMA),
-        "." | "dot" | "period" => Some(KEY_DOT),
-        "/" | "slash" => Some(KEY_SLASH),
-        "backspace" | "bs" => Some(KEY_BACKSPACE),
-        "del" => Some(KEY_BACKSPACE),
-        "delete" => Some(KEY_DELETE),
-        "tab" => Some(KEY_TAB),
-        "enter" => Some(KEY_ENTER),
-        "spc" | "space" => Some(KEY_SPACE),
-        "left" | "arrow_left" => Some(KEY_LEFT),
-        "right" | "arrow_right" => Some(KEY_RIGHT),
-        "up" | "arrow_up" => Some(KEY_UP),
-        "down" | "arrow_down" => Some(KEY_DOWN),
-        "a" => Some(KEY_A),
-        "b" => Some(KEY_B),
-        "c" => Some(KEY_C),
-        "d" => Some(KEY_D),
-        "e" => Some(KEY_E),
-        "f" => Some(KEY_F),
-        "g" => Some(KEY_G),
-        "h" => Some(KEY_H),
-        "i" => Some(KEY_I),
-        "j" => Some(KEY_J),
-        "k" => Some(KEY_K),
-        "l" => Some(KEY_L),
-        "m" => Some(KEY_M),
-        "n" => Some(KEY_N),
-        "o" => Some(KEY_O),
-        "p" => Some(KEY_P),
-        "q" => Some(KEY_Q),
-        "r" => Some(KEY_R),
-        "s" => Some(KEY_S),
-        "t" => Some(KEY_T),
-        "u" => Some(KEY_U),
-        "v" => Some(KEY_V),
-        "w" => Some(KEY_W),
-        "x" => Some(KEY_X),
-        "y" => Some(KEY_Y),
-        "z" => Some(KEY_Z),
-        _ => None,
-    }
-}
-
-fn parse_shifted_symbol_key(value: &str) -> Option<u32> {
-    match value {
-        "!" => Some(KEY_1),
-        "@" => Some(KEY_2),
-        "#" => Some(KEY_3),
-        "$" => Some(KEY_4),
-        "%" => Some(KEY_5),
-        "^" => Some(KEY_6),
-        "&" => Some(KEY_7),
-        "*" => Some(KEY_8),
-        "(" => Some(KEY_9),
-        ")" => Some(KEY_0),
-        "_" => Some(KEY_MINUS),
-        "+" => Some(KEY_EQUAL),
-        "{" => Some(KEY_LEFTBRACE),
-        "}" => Some(KEY_RIGHTBRACE),
-        ":" => Some(KEY_SEMICOLON),
-        "\"" => Some(KEY_APOSTROPHE),
-        "~" => Some(KEY_GRAVE),
-        "|" => Some(KEY_BACKSLASH),
-        "<" => Some(KEY_COMMA),
-        ">" => Some(KEY_DOT),
-        "?" => Some(KEY_SLASH),
+        "A" => plain(KEY_A),
+        "B" => plain(KEY_B),
+        "C" => plain(KEY_C),
+        "D" => plain(KEY_D),
+        "E" => plain(KEY_E),
+        "F" => plain(KEY_F),
+        "G" => plain(KEY_G),
+        "H" => plain(KEY_H),
+        "I" => plain(KEY_I),
+        "J" => plain(KEY_J),
+        "K" => plain(KEY_K),
+        "L" => plain(KEY_L),
+        "M" => plain(KEY_M),
+        "N" => plain(KEY_N),
+        "O" => plain(KEY_O),
+        "P" => plain(KEY_P),
+        "Q" => plain(KEY_Q),
+        "R" => plain(KEY_R),
+        "S" => plain(KEY_S),
+        "T" => plain(KEY_T),
+        "U" => plain(KEY_U),
+        "V" => plain(KEY_V),
+        "W" => plain(KEY_W),
+        "X" => plain(KEY_X),
+        "Y" => plain(KEY_Y),
+        "Z" => plain(KEY_Z),
+        "N1" | "NUMBER_1" => plain(KEY_1),
+        "N2" | "NUMBER_2" => plain(KEY_2),
+        "N3" | "NUMBER_3" => plain(KEY_3),
+        "N4" | "NUMBER_4" => plain(KEY_4),
+        "N5" | "NUMBER_5" => plain(KEY_5),
+        "N6" | "NUMBER_6" => plain(KEY_6),
+        "N7" | "NUMBER_7" => plain(KEY_7),
+        "N8" | "NUMBER_8" => plain(KEY_8),
+        "N9" | "NUMBER_9" => plain(KEY_9),
+        "N0" | "NUMBER_0" => plain(KEY_0),
+        "EXCLAMATION" | "EXCL" | "BANG" => shifted(KEY_1),
+        "AT_SIGN" | "AT" => shifted(KEY_2),
+        "HASH" | "POUND" => shifted(KEY_3),
+        "DOLLAR" => shifted(KEY_4),
+        "PERCENT" => shifted(KEY_5),
+        "CARET" => shifted(KEY_6),
+        "AMPERSAND" | "AMPS" => shifted(KEY_7),
+        "ASTERISK" | "STAR" => shifted(KEY_8),
+        "LEFT_PARENTHESIS" | "LPAR" => shifted(KEY_9),
+        "RIGHT_PARENTHESIS" | "RPAR" => shifted(KEY_0),
+        "RET" | "RETURN" | "ENTER" => plain(KEY_ENTER),
+        "ESC" | "ESCAPE" => plain(KEY_ESC),
+        "BACKSPACE" | "BSPC" | "BKSP" => plain(KEY_BACKSPACE),
+        "TAB" => plain(KEY_TAB),
+        "SPACE" | "SPC" => plain(KEY_SPACE),
+        "MINUS" => plain(KEY_MINUS),
+        "UNDERSCORE" | "UNDER" => shifted(KEY_MINUS),
+        "EQUAL" | "EQL" => plain(KEY_EQUAL),
+        "PLUS" => shifted(KEY_EQUAL),
+        "LEFT_BRACKET" | "LBKT" => plain(KEY_LEFTBRACE),
+        "LEFT_BRACE" | "LBRC" => shifted(KEY_LEFTBRACE),
+        "RIGHT_BRACKET" | "RBKT" => plain(KEY_RIGHTBRACE),
+        "RIGHT_BRACE" | "RBRC" => shifted(KEY_RIGHTBRACE),
+        "BACKSLASH" | "BSLH" => plain(KEY_BACKSLASH),
+        "PIPE" => shifted(KEY_BACKSLASH),
+        "SEMICOLON" | "SEMI" => plain(KEY_SEMICOLON),
+        "COLON" => shifted(KEY_SEMICOLON),
+        "SINGLE_QUOTE" | "SQT" | "APOSTROPHE" => plain(KEY_APOSTROPHE),
+        "DOUBLE_QUOTES" | "DQT" => shifted(KEY_APOSTROPHE),
+        "GRAVE" => plain(KEY_GRAVE),
+        "TILDE" => shifted(KEY_GRAVE),
+        "COMMA" => plain(KEY_COMMA),
+        "LESS_THAN" | "LT" => shifted(KEY_COMMA),
+        "PERIOD" | "DOT" => plain(KEY_DOT),
+        "GREATER_THAN" | "GT" => shifted(KEY_DOT),
+        "SLASH" | "FSLH" => plain(KEY_SLASH),
+        "QUESTION" | "QMARK" => shifted(KEY_SLASH),
+        "DELETE" | "DEL" => plain(KEY_DELETE),
+        "INSERT" | "INS" => plain(KEY_INSERT),
+        "HOME" => plain(KEY_HOME),
+        "END" => plain(KEY_END),
+        "PAGE_UP" | "PG_UP" | "PGUP" => plain(KEY_PAGEUP),
+        "PAGE_DOWN" | "PG_DN" | "PGDN" => plain(KEY_PAGEDOWN),
+        "LEFT" | "LEFT_ARROW" => plain(KEY_LEFT),
+        "RIGHT" | "RIGHT_ARROW" => plain(KEY_RIGHT),
+        "UP" | "UP_ARROW" => plain(KEY_UP),
+        "DOWN" | "DOWN_ARROW" => plain(KEY_DOWN),
+        "LCTRL" | "LEFT_CONTROL" => plain(KEY_LEFTCTRL),
+        "LSHIFT" | "LEFT_SHIFT" => plain(KEY_LEFTSHIFT),
+        "LALT" | "LEFT_ALT" => plain(KEY_LEFTALT),
+        "LGUI" | "LEFT_GUI" | "LEFT_WIN" | "LEFT_META" => plain(KEY_LEFTMETA),
+        "RCTRL" | "RIGHT_CONTROL" => plain(KEY_RIGHTCTRL),
+        "RSHIFT" | "RIGHT_SHIFT" => plain(KEY_RIGHTSHIFT),
+        "RALT" | "RIGHT_ALT" => plain(KEY_RIGHTALT),
+        "RGUI" | "RIGHT_GUI" | "RIGHT_WIN" | "RIGHT_META" => plain(KEY_RIGHTMETA),
         _ => None,
     }
 }
@@ -5197,32 +5171,21 @@ fn key_chord_label(chord: &KeyChord) -> Option<String> {
     let base = *chord.keys.last()?;
     let mut modifiers = chord.keys[..chord.keys.len().saturating_sub(1)].to_vec();
 
-    let base_label = if remove_modifier(&mut modifiers, KEY_LEFTSHIFT) {
-        shifted_key_label(base)
-            .or_else(|| uppercase_letter_label(base))
+    let mut label = if remove_modifier(&mut modifiers, KEY_LEFTSHIFT) {
+        shifted_zmk_key_label(base)
             .map(str::to_string)
-            .unwrap_or_else(|| {
-                modifiers.push(KEY_LEFTSHIFT);
-                key_code_label(base).unwrap_or("?").to_string()
-            })
+            .unwrap_or_else(|| format!("LS({})", key_code_label(base).unwrap_or("?")))
     } else {
         key_code_label(base)?.to_string()
     };
 
-    let mut label = String::new();
-    if remove_modifier(&mut modifiers, KEY_LEFTCTRL) {
-        label.push_str("C-");
+    for modifier in modifiers.into_iter().rev() {
+        let Some(wrapper) = zmk_modifier_wrapper_label(modifier) else {
+            return None;
+        };
+        label = format!("{wrapper}({label})");
     }
-    if remove_modifier(&mut modifiers, KEY_LEFTALT) {
-        label.push_str("M-");
-    }
-    if remove_modifier(&mut modifiers, KEY_LEFTMETA) {
-        label.push_str("s-");
-    }
-    if remove_modifier(&mut modifiers, KEY_LEFTSHIFT) {
-        label.push_str("S-");
-    }
-    label.push_str(&base_label);
+
     Some(label)
 }
 
@@ -5235,35 +5198,103 @@ fn remove_modifier(modifiers: &mut Vec<u32>, key: u32) -> bool {
     }
 }
 
-fn shifted_key_label(key: u32) -> Option<&'static str> {
+fn shifted_zmk_key_label(key: u32) -> Option<&'static str> {
     match key {
-        KEY_1 => Some("!"),
-        KEY_2 => Some("@"),
-        KEY_3 => Some("#"),
-        KEY_4 => Some("$"),
-        KEY_5 => Some("%"),
-        KEY_6 => Some("^"),
-        KEY_7 => Some("&"),
-        KEY_8 => Some("*"),
-        KEY_9 => Some("("),
-        KEY_0 => Some(")"),
-        KEY_MINUS => Some("_"),
-        KEY_EQUAL => Some("+"),
-        KEY_LEFTBRACE => Some("{"),
-        KEY_RIGHTBRACE => Some("}"),
-        KEY_SEMICOLON => Some(":"),
-        KEY_APOSTROPHE => Some("\""),
-        KEY_GRAVE => Some("~"),
-        KEY_BACKSLASH => Some("|"),
-        KEY_COMMA => Some("<"),
-        KEY_DOT => Some(">"),
-        KEY_SLASH => Some("?"),
+        KEY_1 => Some("EXCLAMATION"),
+        KEY_2 => Some("AT_SIGN"),
+        KEY_3 => Some("HASH"),
+        KEY_4 => Some("DOLLAR"),
+        KEY_5 => Some("PERCENT"),
+        KEY_6 => Some("CARET"),
+        KEY_7 => Some("AMPERSAND"),
+        KEY_8 => Some("ASTERISK"),
+        KEY_9 => Some("LEFT_PARENTHESIS"),
+        KEY_0 => Some("RIGHT_PARENTHESIS"),
+        KEY_MINUS => Some("UNDERSCORE"),
+        KEY_EQUAL => Some("PLUS"),
+        KEY_LEFTBRACE => Some("LEFT_BRACE"),
+        KEY_RIGHTBRACE => Some("RIGHT_BRACE"),
+        KEY_SEMICOLON => Some("COLON"),
+        KEY_APOSTROPHE => Some("DOUBLE_QUOTES"),
+        KEY_GRAVE => Some("TILDE"),
+        KEY_BACKSLASH => Some("PIPE"),
+        KEY_COMMA => Some("LESS_THAN"),
+        KEY_DOT => Some("GREATER_THAN"),
+        KEY_SLASH => Some("QUESTION"),
         _ => None,
     }
 }
 
-fn uppercase_letter_label(key: u32) -> Option<&'static str> {
+fn zmk_modifier_wrapper_label(key: u32) -> Option<&'static str> {
     match key {
+        KEY_LEFTCTRL => Some("LC"),
+        KEY_LEFTSHIFT => Some("LS"),
+        KEY_LEFTALT => Some("LA"),
+        KEY_LEFTMETA => Some("LG"),
+        KEY_RIGHTCTRL => Some("RC"),
+        KEY_RIGHTSHIFT => Some("RS"),
+        KEY_RIGHTALT => Some("RA"),
+        KEY_RIGHTMETA => Some("RG"),
+        _ => None,
+    }
+}
+
+fn modifier_mask_for_key(key: u32) -> Option<u32> {
+    match key {
+        KEY_LEFTSHIFT | KEY_RIGHTSHIFT => Some(XKB_MOD_SHIFT),
+        KEY_LEFTCTRL | KEY_RIGHTCTRL => Some(XKB_MOD_CONTROL),
+        KEY_LEFTALT | KEY_RIGHTALT => Some(XKB_MOD_ALT),
+        KEY_LEFTMETA | KEY_RIGHTMETA => Some(XKB_MOD_SUPER),
+        _ => None,
+    }
+}
+
+fn key_code_label(key: u32) -> Option<&'static str> {
+    match key {
+        KEY_LEFTCTRL => Some("LCTRL"),
+        KEY_RIGHTCTRL => Some("RCTRL"),
+        KEY_LEFTSHIFT => Some("LSHIFT"),
+        KEY_RIGHTSHIFT => Some("RSHIFT"),
+        KEY_LEFTALT => Some("LALT"),
+        KEY_RIGHTALT => Some("RALT"),
+        KEY_LEFTMETA => Some("LGUI"),
+        KEY_RIGHTMETA => Some("RGUI"),
+        KEY_ESC => Some("ESC"),
+        KEY_ENTER => Some("RET"),
+        KEY_BACKSPACE => Some("BSPC"),
+        KEY_DELETE => Some("DELETE"),
+        KEY_TAB => Some("TAB"),
+        KEY_SPACE => Some("SPC"),
+        KEY_HOME => Some("HOME"),
+        KEY_END => Some("END"),
+        KEY_PAGEUP => Some("PAGE_UP"),
+        KEY_PAGEDOWN => Some("PAGE_DOWN"),
+        KEY_INSERT => Some("INSERT"),
+        KEY_LEFT => Some("LEFT"),
+        KEY_RIGHT => Some("RIGHT"),
+        KEY_UP => Some("UP"),
+        KEY_DOWN => Some("DOWN"),
+        KEY_1 => Some("N1"),
+        KEY_2 => Some("N2"),
+        KEY_3 => Some("N3"),
+        KEY_4 => Some("N4"),
+        KEY_5 => Some("N5"),
+        KEY_6 => Some("N6"),
+        KEY_7 => Some("N7"),
+        KEY_8 => Some("N8"),
+        KEY_9 => Some("N9"),
+        KEY_0 => Some("N0"),
+        KEY_MINUS => Some("MINUS"),
+        KEY_EQUAL => Some("EQUAL"),
+        KEY_LEFTBRACE => Some("LEFT_BRACKET"),
+        KEY_RIGHTBRACE => Some("RIGHT_BRACKET"),
+        KEY_SEMICOLON => Some("SEMICOLON"),
+        KEY_APOSTROPHE => Some("SINGLE_QUOTE"),
+        KEY_GRAVE => Some("GRAVE"),
+        KEY_BACKSLASH => Some("BACKSLASH"),
+        KEY_COMMA => Some("COMMA"),
+        KEY_DOT => Some("PERIOD"),
+        KEY_SLASH => Some("SLASH"),
         KEY_A => Some("A"),
         KEY_B => Some("B"),
         KEY_C => Some("C"),
@@ -5290,83 +5321,6 @@ fn uppercase_letter_label(key: u32) -> Option<&'static str> {
         KEY_X => Some("X"),
         KEY_Y => Some("Y"),
         KEY_Z => Some("Z"),
-        _ => None,
-    }
-}
-
-fn modifier_mask_for_key(key: u32) -> Option<u32> {
-    match key {
-        KEY_LEFTSHIFT => Some(XKB_MOD_SHIFT),
-        KEY_LEFTCTRL => Some(XKB_MOD_CONTROL),
-        KEY_LEFTALT => Some(XKB_MOD_ALT),
-        KEY_LEFTMETA => Some(XKB_MOD_SUPER),
-        _ => None,
-    }
-}
-
-fn key_code_label(key: u32) -> Option<&'static str> {
-    match key {
-        KEY_LEFTCTRL => Some("CTRL"),
-        KEY_LEFTSHIFT => Some("SHIFT"),
-        KEY_LEFTALT => Some("ALT"),
-        KEY_LEFTMETA => Some("SUPER"),
-        KEY_ESC => Some("ESC"),
-        KEY_ENTER => Some("RET"),
-        KEY_BACKSPACE => Some("DEL"),
-        KEY_DELETE => Some("DELETE"),
-        KEY_TAB => Some("TAB"),
-        KEY_SPACE => Some("SPC"),
-        KEY_LEFT => Some("LEFT"),
-        KEY_RIGHT => Some("RIGHT"),
-        KEY_UP => Some("UP"),
-        KEY_DOWN => Some("DOWN"),
-        KEY_1 => Some("1"),
-        KEY_2 => Some("2"),
-        KEY_3 => Some("3"),
-        KEY_4 => Some("4"),
-        KEY_5 => Some("5"),
-        KEY_6 => Some("6"),
-        KEY_7 => Some("7"),
-        KEY_8 => Some("8"),
-        KEY_9 => Some("9"),
-        KEY_0 => Some("0"),
-        KEY_MINUS => Some("-"),
-        KEY_EQUAL => Some("="),
-        KEY_LEFTBRACE => Some("["),
-        KEY_RIGHTBRACE => Some("]"),
-        KEY_SEMICOLON => Some(";"),
-        KEY_APOSTROPHE => Some("'"),
-        KEY_GRAVE => Some("`"),
-        KEY_BACKSLASH => Some("\\"),
-        KEY_COMMA => Some(","),
-        KEY_DOT => Some("."),
-        KEY_SLASH => Some("/"),
-        KEY_A => Some("a"),
-        KEY_B => Some("b"),
-        KEY_C => Some("c"),
-        KEY_D => Some("d"),
-        KEY_E => Some("e"),
-        KEY_F => Some("f"),
-        KEY_G => Some("g"),
-        KEY_H => Some("h"),
-        KEY_I => Some("i"),
-        KEY_J => Some("j"),
-        KEY_K => Some("k"),
-        KEY_L => Some("l"),
-        KEY_M => Some("m"),
-        KEY_N => Some("n"),
-        KEY_O => Some("o"),
-        KEY_P => Some("p"),
-        KEY_Q => Some("q"),
-        KEY_R => Some("r"),
-        KEY_S => Some("s"),
-        KEY_T => Some("t"),
-        KEY_U => Some("u"),
-        KEY_V => Some("v"),
-        KEY_W => Some("w"),
-        KEY_X => Some("x"),
-        KEY_Y => Some("y"),
-        KEY_Z => Some("z"),
         _ => None,
     }
 }
@@ -6547,7 +6501,7 @@ mod tests {
 mode = "base"
 layer = "base"
 trigger = { type = "swipe", target = "left_bottom", direction = "left" }
-behavior = { type = "key", key = "DEL" }
+behavior = { type = "key", key = "BSPC" }
 "#;
         let file_config: FileConfig = toml::from_str(source).unwrap();
         let binding = Binding::from_file_config(
@@ -6582,23 +6536,29 @@ behavior = { type = "key", key = "DEL" }
         let source = r#"
 [keyboard]
 
-[[keyboard.maps]]
+[[keyboard.layers]]
 mode = "text"
 layer = "base"
 
-[keyboard.maps.tap]
-key_a = "a"
-key_c = "C-c"
+[keyboard.layers.tap]
+key_a = "&kp A"
+key_c = "&kp LC(C)"
 
-[keyboard.maps.swipe_up]
-key_a = "!"
+[keyboard.layers.swipe_up]
+key_a = "&kp EXCLAMATION"
 
-[keyboard.maps.swipe_left]
-key_c = "<left>"
+[keyboard.layers.swipe_left]
+key_c = "&kp LEFT"
 "#;
         let file_config: FileConfig = toml::from_str(source).unwrap();
-        let maps = file_config.keyboard.unwrap().maps.unwrap();
-        let bindings = expand_keyboard_maps(maps, &SlotRegistry::default()).unwrap();
+        let maps = file_config.keyboard.unwrap().layers.unwrap();
+        let bindings = expand_keyboard_maps(
+            maps,
+            &SlotRegistry::default(),
+            &MacroRegistry::default(),
+            &BehaviorRegistry::default(),
+        )
+        .unwrap();
 
         assert_eq!(bindings.len(), 4);
         let key_a = bindings
@@ -6662,11 +6622,11 @@ key_c = "<left>"
 
         assert_eq!(
             keymap.slot_label(Mode::Text, &[Layer::Base], "key_q"),
-            Some("q".to_string())
+            Some("Q".to_string())
         );
         assert_eq!(
             keymap.slot_label(Mode::Text, &[Layer::Base], "key_h"),
-            Some("h".to_string())
+            Some("H".to_string())
         );
         assert_eq!(
             keymap.slot_gesture_label(
@@ -6675,7 +6635,7 @@ key_c = "<left>"
                 "key_q",
                 SlotGestureKind::SwipeUp
             ),
-            Some("1".to_string())
+            Some("N1".to_string())
         );
         assert_eq!(
             keymap.slot_gesture_label(
@@ -6723,13 +6683,13 @@ key_c = "<left>"
     }
 
     #[test]
-    fn toml_binding_parses_emacs_key_sequence() {
+    fn toml_binding_parses_zmk_key_sequence() {
         let source = r#"
 [[bindings]]
 mode = "base"
 layer = "base"
 trigger = { type = "tap", target = "left_bottom" }
-behavior = { type = "key", key = "C-x C-s" }
+behavior = { type = "key", key = "LC(X) LC(S)" }
 "#;
         let file_config: FileConfig = toml::from_str(source).unwrap();
         let binding = Binding::from_file_config(
@@ -6753,15 +6713,15 @@ behavior = { type = "key", key = "C-x C-s" }
     }
 
     #[test]
-    fn emacs_key_parser_supports_punctuation_symbols() {
+    fn zmk_key_parser_supports_named_symbols() {
         assert_eq!(
-            parse_emacs_key_sequence("-").unwrap(),
+            parse_key_sequence("MINUS").unwrap(),
             vec![KeyChord {
                 keys: vec![KEY_MINUS],
             }]
         );
         assert_eq!(
-            parse_emacs_key_sequence("!").unwrap(),
+            parse_key_sequence("EXCLAMATION").unwrap(),
             vec![KeyChord {
                 keys: vec![KEY_LEFTSHIFT, KEY_1],
             }]
@@ -6804,19 +6764,19 @@ behavior = { type = "key", key = "C-x C-s" }
             config.layout.unwrap().svg.as_deref(),
             Some("layouts/phone-portrait.svg")
         );
-        let maps = config.keyboard.unwrap().maps.unwrap();
+        let maps = config.keyboard.unwrap().layers.unwrap();
         assert_eq!(maps.len(), 1);
         assert_eq!(
             maps[0].tap.as_ref().unwrap().get("key_q").map(String::as_str),
-            Some("q")
+            Some("&kp Q")
         );
         assert_eq!(
             maps[0].swipe_up.as_ref().unwrap().get("key_w").map(String::as_str),
-            Some("2")
+            Some("&kp N2")
         );
         assert_eq!(
             maps[0].swipe_left.as_ref().unwrap().get("key_h").map(String::as_str),
-            Some("<left>")
+            Some("&kp LEFT")
         );
     }
 
@@ -6904,9 +6864,9 @@ behavior = { type = "key", key = "C-x C-s" }
         let source = r#"
 [macros.copy]
 steps = [
-  { type = "key_down", key = "<leftctrl>" },
-  { type = "tap_key", key = "c" },
-  { type = "key_up", key = "<leftctrl>" },
+  { type = "key_down", key = "LCTRL" },
+  { type = "tap_key", key = "C" },
+  { type = "key_up", key = "LCTRL" },
 ]
 
 [[bindings]]
