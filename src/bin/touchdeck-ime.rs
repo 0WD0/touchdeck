@@ -1046,21 +1046,49 @@ struct RimeEngine {
     session: RimeSessionId,
     _shared_data_dir: CString,
     _user_data_dir: CString,
+    _prebuilt_data_dir: CString,
+    _staging_dir: CString,
     _app_name: CString,
     _log_dir: CString,
 }
 
 impl RimeEngine {
     fn new() -> Result<Self> {
-        let shared_data_dir = env_path("TOUCHDECK_RIME_SHARED_DATA_DIR")
+        let shared_data_dir_path = env_path("TOUCHDECK_RIME_SHARED_DATA_DIR")
             .unwrap_or_else(default_rime_shared_data_dir);
-        let user_data_dir = env_path("TOUCHDECK_RIME_USER_DATA_DIR")
+        let user_data_dir_path = env_path("TOUCHDECK_RIME_USER_DATA_DIR")
             .unwrap_or_else(default_rime_user_data_dir);
-        fs::create_dir_all(&user_data_dir)
-            .with_context(|| format!("create Rime user data dir {}", user_data_dir.display()))?;
+        let prebuilt_data_dir_path = env_path("TOUCHDECK_RIME_PREBUILT_DATA_DIR")
+            .unwrap_or_else(|| shared_data_dir_path.join("build"));
+        let staging_dir_path = env_path("TOUCHDECK_RIME_STAGING_DIR")
+            .unwrap_or_else(|| user_data_dir_path.join("build"));
 
-        let shared_data_dir = path_to_cstring(&shared_data_dir)?;
-        let user_data_dir = path_to_cstring(&user_data_dir)?;
+        if !shared_data_dir_path.join("default.yaml").exists() {
+            return Err(anyhow!(
+                "Rime shared data dir {} does not contain default.yaml",
+                shared_data_dir_path.display()
+            ));
+        }
+
+        fs::create_dir_all(&user_data_dir_path).with_context(|| {
+            format!(
+                "create Rime user data dir {}",
+                user_data_dir_path.display()
+            )
+        })?;
+
+        eprintln!(
+            "touchdeck-ime: rime dirs shared={} user={} prebuilt={} staging={}",
+            shared_data_dir_path.display(),
+            user_data_dir_path.display(),
+            prebuilt_data_dir_path.display(),
+            staging_dir_path.display()
+        );
+
+        let shared_data_dir = path_to_cstring(&shared_data_dir_path)?;
+        let user_data_dir = path_to_cstring(&user_data_dir_path)?;
+        let prebuilt_data_dir = path_to_cstring(&prebuilt_data_dir_path)?;
+        let staging_dir = path_to_cstring(&staging_dir_path)?;
         let app_name = CString::new("rime.touchdeck").expect("static string has no NUL");
         let log_dir = CString::new(env::var("TOUCHDECK_RIME_LOG_DIR").unwrap_or_default())
             .context("TOUCHDECK_RIME_LOG_DIR contains NUL")?;
@@ -1081,8 +1109,8 @@ impl RimeEngine {
                 .and_then(|value| value.parse::<c_int>().ok())
                 .unwrap_or(1),
             log_dir: log_dir.as_ptr(),
-            prebuilt_data_dir: ptr::null(),
-            staging_dir: ptr::null(),
+            prebuilt_data_dir: prebuilt_data_dir.as_ptr(),
+            staging_dir: staging_dir.as_ptr(),
         };
 
         unsafe {
@@ -1112,6 +1140,8 @@ impl RimeEngine {
             session,
             _shared_data_dir: shared_data_dir,
             _user_data_dir: user_data_dir,
+            _prebuilt_data_dir: prebuilt_data_dir,
+            _staging_dir: staging_dir,
             _app_name: app_name,
             _log_dir: log_dir,
         };
