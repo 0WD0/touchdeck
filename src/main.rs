@@ -1217,6 +1217,11 @@ fn insert_default_key_slots(registry: &mut SlotRegistry) {
         ("key_spc", "SPC", 0.898, 0.775, 0.080, 0.059),
         ("key_del", "BSPC", 0.801, 0.775, 0.080, 0.059),
         ("key_ret", "RET", 0.898, 0.708, 0.080, 0.059),
+        ("thumb_ctrl", "CTL", 0.200, 0.852, 0.120, 0.050),
+        ("thumb_shift", "SFT", 0.335, 0.852, 0.120, 0.050),
+        ("thumb_super", "SUP", 0.470, 0.852, 0.120, 0.050),
+        ("thumb_ret", "RET", 0.605, 0.852, 0.150, 0.050),
+        ("thumb_spc", "SPC", 0.770, 0.852, 0.190, 0.050),
     ] {
         registry.insert_slot(
             slot,

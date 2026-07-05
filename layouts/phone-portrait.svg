@@ -39,5 +39,10 @@
     <rect id="key_m" data-td-slot="key_m" data-td-role="key" data-td-capture="true" data-td-label="m" x="704" y="1860" width="80" height="142" rx="22" />
     <rect id="key_del" data-td-slot="key_del" data-td-role="key" data-td-capture="true" data-td-label="BSPC" x="801" y="1860" width="80" height="142" rx="22" />
     <rect id="key_spc" data-td-slot="key_spc" data-td-role="key" data-td-capture="true" data-td-label="SPC" x="898" y="1860" width="80" height="142" rx="22" />
+    <rect id="thumb_ctrl" data-td-slot="thumb_ctrl" data-td-role="key" data-td-capture="true" data-td-label="CTL" x="200" y="2044" width="120" height="120" rx="30" />
+    <rect id="thumb_shift" data-td-slot="thumb_shift" data-td-role="key" data-td-capture="true" data-td-label="SFT" x="335" y="2044" width="120" height="120" rx="30" />
+    <rect id="thumb_super" data-td-slot="thumb_super" data-td-role="key" data-td-capture="true" data-td-label="SUP" x="470" y="2044" width="120" height="120" rx="30" />
+    <rect id="thumb_ret" data-td-slot="thumb_ret" data-td-role="key" data-td-capture="true" data-td-label="RET" x="605" y="2044" width="150" height="120" rx="32" />
+    <rect id="thumb_spc" data-td-slot="thumb_spc" data-td-role="key" data-td-capture="true" data-td-label="SPC" x="770" y="2044" width="190" height="120" rx="34" />
   </g>
 </svg>

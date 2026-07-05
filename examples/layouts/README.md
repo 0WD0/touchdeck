@@ -6,7 +6,9 @@ This directory is intentionally split by responsibility:
 - `svg/`: visual/touch geometry examples. These define slot positions with `data-td-slot`, but do not bind actions.
 - `profiles/`: tiny config snippets that select one SVG geometry while inheriting the default bindings.
 
-The default project layout is 3x10 ortholinear because it is predictable on a phone screen. The examples here are not limited to that shape: they include split-thumb, staggered QWERTY, and one-hand-right geometries.
+The default project layout is 3x10 ortholinear because it is predictable on a phone screen. It also has a lower thumb/action row inspired by the user's Charybdis ZMK keymap: Ctrl, Shift, Super, Enter, and Space are available as larger thumb keys below the main grid.
+
+The examples here are not limited to that shape: they include split-thumb, staggered QWERTY, and one-hand-right geometries.
 
 Use a profile directly while experimenting:
 
