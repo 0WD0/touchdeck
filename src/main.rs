@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
+use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache};
 use memmap2::MmapMut;
 use serde::{Deserialize, Serialize};
 use tempfile::tempfile;
@@ -115,6 +116,7 @@ struct App {
     last_presented_mode: Mode,
     ime_status: ImeStatus,
     ime_status_dirty: bool,
+    text_renderer: TextRenderer,
     modifier_mask: u32,
     running: bool,
 }
@@ -147,6 +149,7 @@ impl Default for App {
             last_presented_mode: Mode::Base,
             ime_status: ImeStatus::default(),
             ime_status_dirty: false,
+            text_renderer: TextRenderer::new(),
             modifier_mask: 0,
             running: false,
         }
@@ -165,6 +168,62 @@ struct BufferBacking {
 struct ModeHint {
     mode: Mode,
     until_ms: u64,
+}
+
+struct TextRenderer {
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+}
+
+impl TextRenderer {
+    fn new() -> Self {
+        Self {
+            font_system: FontSystem::new(),
+            swash_cache: SwashCache::new(),
+        }
+    }
+
+    fn draw_text(
+        &mut self,
+        buf: &mut [u8],
+        width: u32,
+        height: u32,
+        rect: RectPx,
+        text: &str,
+        font_size: f32,
+        color: [u8; 4],
+    ) {
+        if text.trim().is_empty() || rect.w <= 0 || rect.h <= 0 {
+            return;
+        }
+
+        let metrics = Metrics::new(font_size.max(1.0), (font_size * 1.25).max(1.0));
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(Some(rect.w.max(1) as f32), Some(rect.h.max(1) as f32));
+        let attrs = Attrs::new().family(Family::Name("Noto Sans CJK SC"));
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+
+        let text_color = Color::rgba(color[0], color[1], color[2], color[3]);
+        buffer.draw(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            text_color,
+            |x, y, w, h, color| {
+                blend_text_rect(
+                    buf,
+                    width,
+                    height,
+                    RectPx {
+                        x: rect.x + x,
+                        y: rect.y + y,
+                        w: w as i32,
+                        h: h as i32,
+                    },
+                    color,
+                );
+            },
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -2289,15 +2348,6 @@ impl App {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        let shm = self
-            .shm
-            .as_ref()
-            .ok_or_else(|| anyhow!("wl_shm global is unavailable"))?;
-        let surface = self
-            .surface
-            .as_ref()
-            .ok_or_else(|| anyhow!("overlay surface is not initialized"))?;
-
         let width = width.max(1);
         let height = height.max(1);
         let stride = width
@@ -2313,6 +2363,15 @@ impl App {
 
         let mut mmap = unsafe { MmapMut::map_mut(&file).context("map shm backing file")? };
         self.render_overlay(&mut mmap, width, height);
+
+        let shm = self
+            .shm
+            .as_ref()
+            .ok_or_else(|| anyhow!("wl_shm global is unavailable"))?;
+        let surface = self
+            .surface
+            .as_ref()
+            .ok_or_else(|| anyhow!("overlay surface is not initialized"))?;
 
         let pool = shm.create_pool(file.as_fd(), size as i32, qh, ());
         let buffer = pool.create_buffer(
@@ -2341,7 +2400,7 @@ impl App {
         Ok(())
     }
 
-    fn render_overlay(&self, mmap: &mut [u8], width: u32, height: u32) {
+    fn render_overlay(&mut self, mmap: &mut [u8], width: u32, height: u32) {
         mmap.fill(0);
 
         let size = SurfaceSize { width, height };
@@ -2625,7 +2684,7 @@ impl App {
         }
     }
 
-    fn render_ime_status(&self, mmap: &mut [u8], width: u32, height: u32) {
+    fn render_ime_status(&mut self, mmap: &mut [u8], width: u32, height: u32) {
         if self.ime_status.preedit.is_empty()
             && self.ime_status.commit_preview.is_empty()
             && self.ime_status.candidates.is_empty()
@@ -2652,18 +2711,18 @@ impl App {
         let header_h = (panel.h * 42 / 100).max(22);
         let mut header = String::new();
         if !self.ime_status.preedit.is_empty() {
-            header.push_str(&ascii_compact(&self.ime_status.preedit));
+            header.push_str(&self.ime_status.preedit);
         }
         if !self.ime_status.commit_preview.is_empty() {
             if !header.is_empty() {
                 header.push_str(" > ");
             }
-            header.push_str(&ascii_compact(&self.ime_status.commit_preview));
+            header.push_str(&self.ime_status.commit_preview);
         }
         if header.is_empty() {
             header.push_str("IME");
         }
-        draw_label_in_rect_limited(
+        self.text_renderer.draw_text(
             mmap,
             width,
             height,
@@ -2674,8 +2733,8 @@ impl App {
                 h: header_h - 6,
             },
             &header,
+            (header_h as f32 * 0.55).clamp(14.0, 34.0),
             [0xff, 0xff, 0xff, 0xe8],
-            5,
         );
 
         let row_y = panel.y + header_h;
@@ -2705,22 +2764,21 @@ impl App {
             draw_rect_frame(mmap, width, height, rect, [0xb0, 0xff, 0xe0, 0xb0]);
 
             let mut label = candidate.label.clone();
-            let text = ascii_compact(&candidate.text);
-            if !text.is_empty() {
+            if !candidate.text.is_empty() {
                 label.push(' ');
-                label.push_str(&text);
+                label.push_str(&candidate.text);
             }
             if label.trim().is_empty() {
-                label = format!("{} CJK", index + 1);
+                label = format!("{}", index + 1);
             }
-            draw_label_in_rect_limited(
+            self.text_renderer.draw_text(
                 mmap,
                 width,
                 height,
                 rect,
                 &label,
+                (rect.h as f32 * 0.45).clamp(13.0, 28.0),
                 [0xff, 0xff, 0xff, 0xf0],
-                3,
             );
         }
     }
@@ -4844,24 +4902,6 @@ fn draw_label_in_rect(
     draw_label_in_rect_limited(buf, width, height, rect, label, color, 8);
 }
 
-fn ascii_compact(value: &str) -> String {
-    let ascii = value
-        .chars()
-        .filter(|ch| ch.is_ascii_graphic() || *ch == ' ')
-        .take(12)
-        .collect::<String>();
-    if !ascii.trim().is_empty() {
-        return ascii;
-    }
-
-    let count = value.chars().count();
-    if count == 0 {
-        String::new()
-    } else {
-        format!("{count}CJK")
-    }
-}
-
 fn draw_label_in_rect_limited(
     buf: &mut [u8],
     width: u32,
@@ -4897,6 +4937,44 @@ fn draw_label_in_rect_limited(
         draw_glyph(buf, width, height, x, y, scale, ch, color);
         x += (glyph_w + spacing) * scale;
     }
+}
+
+fn blend_text_rect(buf: &mut [u8], width: u32, height: u32, rect: RectPx, color: Color) {
+    let x0 = rect.x.max(0).min(width as i32) as u32;
+    let y0 = rect.y.max(0).min(height as i32) as u32;
+    let x1 = (rect.x + rect.w).max(0).min(width as i32) as u32;
+    let y1 = (rect.y + rect.h).max(0).min(height as i32) as u32;
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+
+    let [src_r, src_g, src_b, src_a] = color.as_rgba();
+    if src_a == 0 {
+        return;
+    }
+
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = ((y * width + x) * 4) as usize;
+            let dst_b = buf[index];
+            let dst_g = buf[index + 1];
+            let dst_r = buf[index + 2];
+            let dst_a = buf[index + 3];
+            let out_a = src_a as u16 + ((dst_a as u16 * (255 - src_a as u16)) / 255);
+
+            buf[index] = alpha_over(src_b, src_a, dst_b);
+            buf[index + 1] = alpha_over(src_g, src_a, dst_g);
+            buf[index + 2] = alpha_over(src_r, src_a, dst_r);
+            buf[index + 3] = out_a.min(255) as u8;
+        }
+    }
+}
+
+fn alpha_over(src: u8, src_a: u8, dst: u8) -> u8 {
+    let src = src as u16;
+    let src_a = src_a as u16;
+    let dst = dst as u16;
+    ((src * src_a + dst * (255 - src_a)) / 255).min(255) as u8
 }
 
 fn draw_glyph(

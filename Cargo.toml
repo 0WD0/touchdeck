@@ -6,6 +6,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1"
+cosmic-text = "0.19"
 libc = "0.2"
 memmap2 = "0.9"
 roxmltree = "0.20"
