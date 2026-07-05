@@ -10,7 +10,7 @@ svg = "layouts/phone-portrait.svg"
 #   virtual-keyboard  Send Wayland zwp_virtual_keyboard_v1 events to the focused app.
 #   ime               Send key events to touchdeck-ime over a Unix socket.
 #   both              Send to both while developing the IME path.
-output = "virtual-keyboard"
+output = "ime"
 # ime_socket = "/run/user/1000/touchdeck-ime.sock"
 
 # Optional raw XKB keymap file. If omitted, touchdeck uses a built-in us/pc105 keymap.

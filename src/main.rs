@@ -292,12 +292,22 @@ impl Default for Config {
         if let Err(err) = config.load_file_overrides() {
             eprintln!("touchdeck: failed to load config file: {err:?}");
         }
+        config.apply_env_overrides();
 
         config
     }
 }
 
 impl Config {
+    fn apply_env_overrides(&mut self) {
+        if let Some(backend) = env_text_output_backend() {
+            self.text_output.backend = backend;
+        }
+        if let Some(socket) = env::var_os("TOUCHDECK_IME_SOCKET") {
+            self.text_output.ime_socket = PathBuf::from(socket);
+        }
+    }
+
     fn load_file_overrides(&mut self) -> Result<()> {
         let path = if let Some(path) = env::var_os("TOUCHDECK_CONFIG") {
             PathBuf::from(path)
@@ -401,17 +411,7 @@ struct ImeCandidate {
 
 impl TextOutputConfig {
     fn from_env() -> Self {
-        let backend = env::var("TOUCHDECK_TEXT_OUTPUT")
-            .or_else(|_| env::var("TOUCHDECK_KEYBOARD_OUTPUT"))
-            .ok()
-            .and_then(|value| match parse_text_output_backend(&value) {
-                Ok(backend) => Some(backend),
-                Err(err) => {
-                    eprintln!("touchdeck: invalid text output backend {value:?}: {err}");
-                    None
-                }
-            })
-            .unwrap_or(TextOutputBackend::VirtualKeyboard);
+        let backend = env_text_output_backend().unwrap_or(TextOutputBackend::VirtualKeyboard);
 
         let ime_socket = env::var_os("TOUCHDECK_IME_SOCKET")
             .map(PathBuf::from)
@@ -422,6 +422,19 @@ impl TextOutputConfig {
             ime_socket,
         }
     }
+}
+
+fn env_text_output_backend() -> Option<TextOutputBackend> {
+    env::var("TOUCHDECK_TEXT_OUTPUT")
+        .or_else(|_| env::var("TOUCHDECK_KEYBOARD_OUTPUT"))
+        .ok()
+        .and_then(|value| match parse_text_output_backend(&value) {
+            Ok(backend) => Some(backend),
+            Err(err) => {
+                eprintln!("touchdeck: invalid text output backend {value:?}: {err}");
+                None
+            }
+        })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
