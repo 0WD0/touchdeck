@@ -1268,6 +1268,7 @@ struct RimeApi {
     free_context: Option<unsafe extern "C" fn(*mut RimeContext) -> Bool>,
 }
 
+#[link(name = "rime")]
 unsafe extern "C" {
     fn rime_get_api() -> *mut RimeApi;
 }

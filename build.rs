@@ -8,7 +8,6 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=LIBRIME_LIB_DIR");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    println!("cargo:rustc-link-lib=dylib=rime");
     println!(
         "cargo:rustc-link-arg-bin=touchdeck-ime=-Wl,-rpath,{}",
         lib_dir.display()
