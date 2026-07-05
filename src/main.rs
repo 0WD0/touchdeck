@@ -394,7 +394,12 @@ impl Config {
             for binding in bindings {
                 self.keymap
                     .bindings
-                    .push(Binding::from_file_config(binding, &self.slots, &self.macros)?);
+                    .push(Binding::from_file_config(
+                        binding,
+                        &self.slots,
+                        &self.macros,
+                        &behavior_registry,
+                    )?);
             }
         }
 
@@ -1135,12 +1140,9 @@ impl Default for SlotRegistry {
 
 fn insert_default_key_slots(registry: &mut SlotRegistry) {
     let rows = [
-        (0.030, 0.520, 0.088, &["q", "w", "e", "r", "t"][..]),
-        (0.540, 0.520, 0.088, &["y", "u", "i", "o", "p"][..]),
-        (0.052, 0.625, 0.088, &["a", "s", "d", "f", "g"][..]),
-        (0.562, 0.625, 0.088, &["h", "j", "k", "l"][..]),
-        (0.074, 0.730, 0.088, &["z", "x", "c", "v", "b"][..]),
-        (0.606, 0.730, 0.088, &["n", "m"][..]),
+        (0.025, 0.642, 0.097, &["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"][..]),
+        (0.025, 0.708, 0.097, &["a", "s", "d", "f", "g", "h", "j", "k", "l"][..]),
+        (0.122, 0.775, 0.097, &["z", "x", "c", "v", "b", "n", "m"][..]),
     ];
 
     for (x0, y0, step, keys) in rows {
@@ -1151,8 +1153,8 @@ fn insert_default_key_slots(registry: &mut SlotRegistry) {
                 RectNorm {
                     x0,
                     y0,
-                    x1: x0 + 0.078,
-                    y1: y0 + 0.083,
+                    x1: x0 + 0.080,
+                    y1: y0 + 0.059,
                 },
                 SlotRole::Key,
                 true,
@@ -1162,14 +1164,14 @@ fn insert_default_key_slots(registry: &mut SlotRegistry) {
     }
 
     for (slot, label, x0, y0, w, h) in [
-        ("key_shift", "SFT", 0.040, 0.450, 0.130, 0.060),
+        ("key_shift", "SFT", 0.025, 0.775, 0.080, 0.059),
         ("key_ctrl", "CTL", 0.200, 0.450, 0.130, 0.060),
         ("key_alt", "ALT", 0.670, 0.450, 0.130, 0.060),
         ("key_super", "SUP", 0.830, 0.450, 0.130, 0.060),
-        ("key_esc", "ESC", 0.040, 0.815, 0.130, 0.075),
-        ("key_spc", "SPC", 0.200, 0.815, 0.360, 0.075),
-        ("key_del", "BSPC", 0.590, 0.815, 0.160, 0.075),
-        ("key_ret", "RET", 0.780, 0.815, 0.180, 0.075),
+        ("key_esc", "ESC", 0.040, 0.450, 0.130, 0.060),
+        ("key_spc", "SPC", 0.898, 0.775, 0.080, 0.059),
+        ("key_del", "BSPC", 0.801, 0.775, 0.080, 0.059),
+        ("key_ret", "RET", 0.898, 0.708, 0.080, 0.059),
     ] {
         registry.insert_slot(
             slot,
@@ -1835,11 +1837,12 @@ impl Binding {
         value: BindingFileConfig,
         slots: &SlotRegistry,
         macros: &MacroRegistry,
+        behavior_registry: &BehaviorRegistry,
     ) -> Result<Self> {
         let mode = parse_mode(value.mode.as_deref().unwrap_or("base"))?;
         let layer = parse_layer(value.layer.as_deref().unwrap_or("base"))?;
         let trigger = parse_trigger(value.trigger, slots)?;
-        let behavior = parse_behavior(value.behavior, macros)?;
+        let behavior = parse_behavior(value.behavior, macros, behavior_registry)?;
 
         Ok(Self {
             mode,
@@ -4500,7 +4503,11 @@ fn parse_swipe_direction(value: &str) -> Result<SwipeDirection> {
     }
 }
 
-fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<Behavior> {
+fn parse_behavior(
+    value: BehaviorFileConfig,
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
+) -> Result<Behavior> {
     match normalize_name(&value.kind).as_str() {
         "key" | "key_sequence" | "keys" => {
             let keys = value
@@ -4524,6 +4531,16 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
                 .ok_or_else(|| anyhow!("key_hold behavior is missing key/keys"))?;
             Ok(Behavior::KeyHold(parse_single_key(&key)?))
         }
+        "mod_morph" => parse_mod_morph_behavior(
+            "inline",
+            value.mods.as_deref(),
+            value.keep_mods.as_deref(),
+            value.normal.as_deref(),
+            value.morph.as_deref(),
+            &[],
+            macros,
+            behavior_registry,
+        ),
         "key_repeat" => {
             if value.key.is_some() || value.keys.is_some() {
                 return Err(anyhow!(
@@ -4653,41 +4670,16 @@ fn parse_defined_behavior_invocation(
         .as_deref()
         .unwrap_or(name);
     if normalize_name(kind) == "mod_morph" {
-        let mods = parse_modifier_flags(
-            definition
-                .mods
-                .as_deref()
-                .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing mods"))?,
-        )?;
-        let keep_mods = definition
-            .keep_mods
-            .as_deref()
-            .map(parse_modifier_flags)
-            .transpose()?
-            .unwrap_or(0);
-        let normal = definition
-            .normal
-            .as_deref()
-            .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing normal binding"))?;
-        let morph = definition
-            .morph
-            .as_deref()
-            .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing morph binding"))?;
-
-        return Ok(Behavior::ModMorph {
-            mods,
-            keep_mods,
-            normal: Box::new(parse_behavior_invocation(
-                &expand_behavior_template(normal, args),
-                macros,
-                behavior_registry,
-            )?),
-            morph: Box::new(parse_behavior_invocation(
-                &expand_behavior_template(morph, args),
-                macros,
-                behavior_registry,
-            )?),
-        });
+        return parse_mod_morph_behavior(
+            name,
+            definition.mods.as_deref(),
+            definition.keep_mods.as_deref(),
+            definition.normal.as_deref(),
+            definition.morph.as_deref(),
+            args,
+            macros,
+            behavior_registry,
+        );
     }
     parse_behavior_invocation_kind(
         kind,
@@ -4722,6 +4714,44 @@ fn parse_builtin_behavior_invocation(
         BehaviorFields::default(),
         macros,
     )
+}
+
+fn parse_mod_morph_behavior(
+    name: &str,
+    mods: Option<&[String]>,
+    keep_mods: Option<&[String]>,
+    normal: Option<&str>,
+    morph: Option<&str>,
+    args: &[&str],
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
+) -> Result<Behavior> {
+    let mods = parse_modifier_flags(
+        mods.ok_or_else(|| anyhow!("mod_morph behavior {name} is missing mods"))?,
+    )?;
+    let keep_mods = keep_mods
+        .map(parse_modifier_flags)
+        .transpose()?
+        .unwrap_or(0);
+    let normal = normal
+        .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing normal binding"))?;
+    let morph = morph
+        .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing morph binding"))?;
+
+    Ok(Behavior::ModMorph {
+        mods,
+        keep_mods,
+        normal: Box::new(parse_behavior_invocation(
+            &expand_behavior_template(normal, args),
+            macros,
+            behavior_registry,
+        )?),
+        morph: Box::new(parse_behavior_invocation(
+            &expand_behavior_template(morph, args),
+            macros,
+            behavior_registry,
+        )?),
+    })
 }
 
 #[derive(Default)]
@@ -6321,6 +6351,10 @@ mod tests {
             log_touch: false,
             record_trace_path: None,
             xkb_keymap_path: None,
+            text_output: TextOutputConfig {
+                backend: TextOutputBackend::VirtualKeyboard,
+                ime_socket: default_ime_socket_path(),
+            },
             slots: SlotRegistry::default(),
             keymap: Keymap::default(),
             macros: MacroRegistry::default(),
@@ -6486,7 +6520,7 @@ mod tests {
         let mut effects = Vec::new();
         engine.set_mode(Mode::Text, &mut effects, &config);
 
-        engine.handle_down(0, 0, 1, 84.0, 1180.0, &config, size);
+        engine.handle_down(0, 0, 1, 65.0, 1340.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![
@@ -6508,6 +6542,7 @@ behavior = { type = "key", key = "BSPC" }
             file_config.bindings.unwrap().remove(0),
             &SlotRegistry::default(),
             &MacroRegistry::default(),
+            &BehaviorRegistry::default(),
         )
         .unwrap();
 
@@ -6528,6 +6563,42 @@ behavior = { type = "key", key = "BSPC" }
             Behavior::KeySequence(vec![KeyChord {
                 keys: vec![KEY_BACKSPACE],
             }])
+        );
+    }
+
+    #[test]
+    fn toml_binding_parses_inline_mod_morph_behavior() {
+        let source = r#"
+[[bindings]]
+mode = "base"
+layer = "base"
+trigger = { type = "tap", target = "left_bottom" }
+behavior = { type = "mod_morph", mods = ["LSHIFT"], keep_mods = [], normal = "&kp SLASH", morph = "&kpe QUESTION" }
+"#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let binding = Binding::from_file_config(
+            file_config.bindings.unwrap().remove(0),
+            &SlotRegistry::default(),
+            &MacroRegistry::default(),
+            &BehaviorRegistry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            binding.behavior,
+            Behavior::ModMorph {
+                mods: XKB_MOD_SHIFT,
+                keep_mods: 0,
+                normal: Box::new(Behavior::KeySequence(vec![KeyChord {
+                    keys: vec![KEY_SLASH],
+                }])),
+                morph: Box::new(Behavior::KeySequenceWithPolicy {
+                    sequence: vec![KeyChord {
+                        keys: vec![KEY_LEFTSHIFT, KEY_SLASH],
+                    }],
+                    translation: KeyTranslationPolicy::Effective,
+                }),
+            }
         );
     }
 
@@ -6656,8 +6727,8 @@ key_c = "&kp LEFT"
         let mut effects = Vec::new();
         engine.set_mode(Mode::Text, &mut effects, &config);
 
-        engine.handle_down(0, 0, 1, 84.0, 1180.0, &config, size);
-        engine.handle_motion(1, 60, 84.0, 980.0, &config);
+        engine.handle_down(0, 0, 1, 65.0, 1340.0, &config, size);
+        engine.handle_motion(1, 60, 65.0, 1140.0, &config);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![
@@ -6673,8 +6744,8 @@ key_c = "&kp LEFT"
         let mut effects = Vec::new();
         engine.set_mode(Mode::Text, &mut effects, &config);
 
-        engine.handle_down(0, 0, 1, 580.0, 1400.0, &config, size);
-        engine.handle_motion(1, 60, 380.0, 1400.0, &config);
+        engine.handle_down(0, 0, 1, 550.0, 1470.0, &config, size);
+        engine.handle_motion(1, 60, 350.0, 1470.0, &config);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![
@@ -6696,6 +6767,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
             file_config.bindings.unwrap().remove(0),
             &SlotRegistry::default(),
             &MacroRegistry::default(),
+            &BehaviorRegistry::default(),
         )
         .unwrap();
 
@@ -6884,6 +6956,7 @@ behavior = { type = "macro", macro = "copy" }
             file_config.bindings.unwrap().remove(0),
             &SlotRegistry::default(),
             &macros,
+            &BehaviorRegistry::default(),
         )
         .unwrap();
 

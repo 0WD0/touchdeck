@@ -1,0 +1,4 @@
+# Staggered QWERTY geometry: closer to phone keyboards and desktop QWERTY muscle memory.
+
+[layout]
+svg = "../svg/staggered-qwerty.svg"

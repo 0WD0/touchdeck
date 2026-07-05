@@ -1,0 +1,43 @@
+<svg viewBox="0 0 1000 2400" xmlns="http://www.w3.org/2000/svg">
+  <g id="touchdeck-layout" data-td-layout="split-thumb">
+    <rect id="left_bottom" data-td-slot="left_bottom" data-td-role="zone" data-td-capture="true" data-td-label="NIRI" x="0" y="1968" width="180" height="432" rx="36" />
+    <rect id="bottom_edge" data-td-slot="bottom_edge" data-td-role="gesture-area" data-td-capture="true" data-td-label="TEXT" x="180" y="2184" width="760" height="216" rx="28" />
+    <rect id="top_left" data-td-slot="top_left" data-td-role="zone" data-td-capture="true" data-td-label="EXIT" x="0" y="0" width="120" height="240" rx="24" />
+    <rect id="center" data-td-slot="center" data-td-role="gesture-area" data-td-capture="false" data-td-label="CENTER" x="180" y="288" width="640" height="1680" rx="24" />
+    <rect id="full" data-td-slot="full" data-td-role="gesture-area" data-td-capture="false" data-td-label="SCREEN" x="0" y="0" width="1000" height="2400" rx="0" />
+    <rect id="key_esc" data-td-slot="key_esc" data-td-role="key" data-td-capture="true" data-td-label="ESC" x="40" y="1080" width="130" height="144" rx="28" />
+    <rect id="key_ctrl" data-td-slot="key_ctrl" data-td-role="key" data-td-capture="true" data-td-label="CTL" x="200" y="1080" width="130" height="144" rx="28" />
+    <rect id="key_alt" data-td-slot="key_alt" data-td-role="key" data-td-capture="true" data-td-label="ALT" x="670" y="1080" width="130" height="144" rx="28" />
+    <rect id="key_super" data-td-slot="key_super" data-td-role="key" data-td-capture="true" data-td-label="SUP" x="830" y="1080" width="130" height="144" rx="28" />
+    <rect id="key_q" data-td-slot="key_q" data-td-role="key" data-td-capture="true" data-td-label="q" x="30" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_w" data-td-slot="key_w" data-td-role="key" data-td-capture="true" data-td-label="w" x="118" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_e" data-td-slot="key_e" data-td-role="key" data-td-capture="true" data-td-label="e" x="206" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_r" data-td-slot="key_r" data-td-role="key" data-td-capture="true" data-td-label="r" x="294" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_t" data-td-slot="key_t" data-td-role="key" data-td-capture="true" data-td-label="t" x="382" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_y" data-td-slot="key_y" data-td-role="key" data-td-capture="true" data-td-label="y" x="540" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_u" data-td-slot="key_u" data-td-role="key" data-td-capture="true" data-td-label="u" x="628" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_i" data-td-slot="key_i" data-td-role="key" data-td-capture="true" data-td-label="i" x="716" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_o" data-td-slot="key_o" data-td-role="key" data-td-capture="true" data-td-label="o" x="804" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_p" data-td-slot="key_p" data-td-role="key" data-td-capture="true" data-td-label="p" x="892" y="1248" width="78" height="200" rx="28" />
+    <rect id="key_a" data-td-slot="key_a" data-td-role="key" data-td-capture="true" data-td-label="a" x="52" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_s" data-td-slot="key_s" data-td-role="key" data-td-capture="true" data-td-label="s" x="140" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_d" data-td-slot="key_d" data-td-role="key" data-td-capture="true" data-td-label="d" x="228" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_f" data-td-slot="key_f" data-td-role="key" data-td-capture="true" data-td-label="f" x="316" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_g" data-td-slot="key_g" data-td-role="key" data-td-capture="true" data-td-label="g" x="404" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_h" data-td-slot="key_h" data-td-role="key" data-td-capture="true" data-td-label="h" x="562" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_j" data-td-slot="key_j" data-td-role="key" data-td-capture="true" data-td-label="j" x="650" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_k" data-td-slot="key_k" data-td-role="key" data-td-capture="true" data-td-label="k" x="738" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_l" data-td-slot="key_l" data-td-role="key" data-td-capture="true" data-td-label="l" x="826" y="1500" width="78" height="200" rx="28" />
+    <rect id="key_z" data-td-slot="key_z" data-td-role="key" data-td-capture="true" data-td-label="z" x="74" y="1752" width="78" height="200" rx="28" />
+    <rect id="key_x" data-td-slot="key_x" data-td-role="key" data-td-capture="true" data-td-label="x" x="162" y="1752" width="78" height="200" rx="28" />
+    <rect id="key_c" data-td-slot="key_c" data-td-role="key" data-td-capture="true" data-td-label="c" x="250" y="1752" width="78" height="200" rx="28" />
+    <rect id="key_v" data-td-slot="key_v" data-td-role="key" data-td-capture="true" data-td-label="v" x="338" y="1752" width="78" height="200" rx="28" />
+    <rect id="key_b" data-td-slot="key_b" data-td-role="key" data-td-capture="true" data-td-label="b" x="426" y="1752" width="78" height="200" rx="28" />
+    <rect id="key_n" data-td-slot="key_n" data-td-role="key" data-td-capture="true" data-td-label="n" x="606" y="1752" width="78" height="200" rx="28" />
+    <rect id="key_m" data-td-slot="key_m" data-td-role="key" data-td-capture="true" data-td-label="m" x="694" y="1752" width="78" height="200" rx="28" />
+    <rect id="key_shift" data-td-slot="key_shift" data-td-role="key" data-td-capture="true" data-td-label="SFT" x="40" y="1960" width="130" height="160" rx="28" />
+    <rect id="key_spc" data-td-slot="key_spc" data-td-role="key" data-td-capture="true" data-td-label="SPC" x="200" y="1960" width="360" height="160" rx="28" />
+    <rect id="key_del" data-td-slot="key_del" data-td-role="key" data-td-capture="true" data-td-label="BSPC" x="590" y="1960" width="160" height="160" rx="28" />
+    <rect id="key_ret" data-td-slot="key_ret" data-td-role="key" data-td-capture="true" data-td-label="RET" x="780" y="1960" width="180" height="160" rx="28" />
+  </g>
+</svg>

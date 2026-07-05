@@ -1,0 +1,78 @@
+# Terminal-oriented 3x10 layer snippet.
+# Biases swipes toward shell/editor control keys.
+
+[behaviors.del_repeat]
+type = "hold_repeat"
+keys = "BSPC"
+
+[[keyboard.layers]]
+mode = "text"
+layer = "base"
+repeat_start_ms = 320
+repeat_interval_ms = 38
+
+[keyboard.layers.tap]
+key_q = "&kp Q"
+key_w = "&kp W"
+key_e = "&kp E"
+key_r = "&kp R"
+key_t = "&kp T"
+key_y = "&kp Y"
+key_u = "&kp U"
+key_i = "&kp I"
+key_o = "&kp O"
+key_p = "&kp P"
+key_a = "&kp A"
+key_s = "&kp S"
+key_d = "&kp D"
+key_f = "&kp F"
+key_g = "&kp G"
+key_h = "&kp H"
+key_j = "&kp J"
+key_k = "&kp K"
+key_l = "&kp L"
+key_ret = "&kp RET"
+key_shift = "&kp LSHIFT"
+key_z = "&kp Z"
+key_x = "&kp X"
+key_c = "&kp C"
+key_v = "&kp V"
+key_b = "&kp B"
+key_n = "&kp N"
+key_m = "&kp M"
+key_del = "&kp BSPC"
+key_spc = "&kp SPC"
+
+[keyboard.layers.hold]
+key_shift = "&hold LSHIFT"
+key_ctrl = "&hold LCTRL"
+key_alt = "&hold LALT"
+key_super = "&hold LGUI"
+
+[keyboard.layers.repeat]
+key_del = "&del_repeat"
+
+[keyboard.layers.swipe_up]
+key_c = "&kp LC(C)"
+key_d = "&kp LC(D)"
+key_l = "&kp LC(L)"
+key_r = "&kp LC(R)"
+key_z = "&kp LC(Z)"
+key_spc = "&kp TAB"
+key_ret = "&kp LC(RET)"
+
+[keyboard.layers.swipe_down]
+key_c = "&kp LC(V)"
+key_j = "&kp DOWN"
+key_k = "&kp UP"
+key_spc = "&kp ESC"
+
+[keyboard.layers.swipe_left]
+key_h = "&kp LEFT"
+key_del = "&kp LA(BSPC)"
+key_ret = "&kp LC(LEFT)"
+
+[keyboard.layers.swipe_right]
+key_l = "&kp RIGHT"
+key_del = "&kp LC(RIGHT)"
+key_ret = "&kp LC(RIGHT)"
