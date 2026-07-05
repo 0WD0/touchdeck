@@ -21,6 +21,10 @@ output = "ime"
 # output can also be set here and overrides [keyboard].output.
 # output = "ime"
 # socket = "/run/user/1000/touchdeck-ime.sock"
+# Rime key translation:
+#   effective  Shift+/ is sent to Rime as "?"
+#   raw        Shift+/ is sent to Rime as "/" with Shift modifier
+key_translation = "effective"
 
 [ime.popup]
 # Physical-keyboard candidate popup. Colors are #RRGGBB or #RRGGBBAA.

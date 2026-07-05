@@ -119,15 +119,23 @@ struct TextRenderer {
 
 #[derive(Clone, Debug)]
 struct ImeRuntimeConfig {
+    key_translation: KeyTranslationPolicy,
     popup: PopupConfig,
 }
 
 impl Default for ImeRuntimeConfig {
     fn default() -> Self {
         Self {
+            key_translation: KeyTranslationPolicy::Effective,
             popup: PopupConfig::default(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyTranslationPolicy {
+    Effective,
+    Raw,
 }
 
 #[derive(Clone, Debug)]
@@ -348,9 +356,10 @@ fn main() -> Result<()> {
     let mut event_queue = conn.new_event_queue();
     let qh = event_queue.handle();
 
+    let key_translation = config.key_translation;
     let mut app = ImeApp {
         config,
-        rime: Some(RimeEngine::new().context("initialize librime")?),
+        rime: Some(RimeEngine::new(key_translation).context("initialize librime")?),
         running: true,
         ..Default::default()
     };
@@ -1175,6 +1184,7 @@ impl Dispatch<ZwpVirtualKeyboardV1, ()> for ImeApp {
 struct RimeEngine {
     api: NonNull<RimeApi>,
     session: RimeSessionId,
+    key_translation: KeyTranslationPolicy,
     _shared_data_dir: CString,
     _user_data_dir: CString,
     _prebuilt_data_dir: CString,
@@ -1184,7 +1194,7 @@ struct RimeEngine {
 }
 
 impl RimeEngine {
-    fn new() -> Result<Self> {
+    fn new(key_translation: KeyTranslationPolicy) -> Result<Self> {
         let shared_data_dir_path = default_rime_shared_data_dir();
         let user_data_dir_path = env_path("TOUCHDECK_RIME_USER_DATA_DIR")
             .unwrap_or_else(default_rime_user_data_dir);
@@ -1271,6 +1281,7 @@ impl RimeEngine {
         let engine = Self {
             api,
             session,
+            key_translation,
             _shared_data_dir: shared_data_dir,
             _user_data_dir: user_data_dir,
             _prebuilt_data_dir: prebuilt_data_dir,
@@ -1293,6 +1304,10 @@ impl RimeEngine {
         if state == KeyState::Released {
             mask |= RIME_RELEASE_MASK;
         }
+        let keysym = match self.key_translation {
+            KeyTranslationPolicy::Effective => rime_effective_keysym(keysym, mask),
+            KeyTranslationPolicy::Raw => keysym,
+        };
 
         let handled = unsafe {
             let process_key = call_ret(self.api().process_key, "RimeApi.process_key")?;
@@ -1453,6 +1468,9 @@ fn load_ime_config() -> Result<ImeRuntimeConfig> {
         .with_context(|| format!("parse touchdeck config {}", path.display()))?;
     let mut config = ImeRuntimeConfig::default();
     if let Some(ime) = file_config.ime {
+        if let Some(policy) = ime.key_translation {
+            config.key_translation = parse_key_translation_policy(&policy)?;
+        }
         if let Some(popup) = ime.popup {
             config.popup.apply(popup)?;
         }
@@ -1475,6 +1493,7 @@ struct TouchDeckImeConfigFile {
 
 #[derive(Debug, Default, Deserialize)]
 struct ImeConfigFile {
+    key_translation: Option<String>,
     popup: Option<PopupConfigFile>,
 }
 
@@ -1501,6 +1520,14 @@ struct PopupConfigFile {
     candidate_text_color: Option<String>,
     highlight_background_color: Option<String>,
     first_candidate_background_color: Option<String>,
+}
+
+fn parse_key_translation_policy(value: &str) -> Result<KeyTranslationPolicy> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "effective" | "effective_keysym" | "translated" => Ok(KeyTranslationPolicy::Effective),
+        "raw" | "raw_keysym" | "base" => Ok(KeyTranslationPolicy::Raw),
+        other => Err(anyhow!("unknown ime.key_translation {other:?}")),
+    }
 }
 
 impl PopupConfig {
@@ -1833,6 +1860,16 @@ fn rime_modifier_mask(xkb_modifiers: u32) -> u32 {
         mask |= RIME_SUPER_MASK;
     }
     mask
+}
+
+fn rime_effective_keysym(keysym: u32, rime_mask: u32) -> u32 {
+    keysym_to_text(keysym, rime_mask)
+        .and_then(|text| {
+            let mut chars = text.chars();
+            let ch = chars.next()?;
+            chars.next().is_none().then_some(ch as u32)
+        })
+        .unwrap_or(keysym)
 }
 
 fn keysym_to_text(keysym: u32, rime_mask: u32) -> Option<String> {
