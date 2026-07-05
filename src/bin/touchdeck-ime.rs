@@ -31,7 +31,7 @@ use x11rb::connection::Connection as X11Connection;
 use x11rb::protocol::xproto::{KeyPressEvent, KEY_PRESS_EVENT};
 use xim::x11rb::HasConnection;
 use xim::{InputStyle, Server, ServerHandler, UserInputContext, XimConnections};
-use zbus::{interface, message::Header, ObjectServer};
+use zbus::{interface, message::Header, object_server::SignalEmitter, ObjectServer};
 use zbus::names::OwnedBusName;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Structure, Value};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
@@ -2399,6 +2399,7 @@ impl FcitxInputContext {
         status: &ImeStatus,
     ) -> zbus::fdo::Result<()> {
         let body = fcitx_client_side_ui_body(status);
+        log_fcitx_client_side_ui("signal", status, &body);
         conn.emit_signal(
             Some(&self.client),
             &self.path,
@@ -2502,6 +2503,22 @@ fn fcitx_client_side_ui_body(status: &ImeStatus) -> FcitxClientSideUiBody {
         has_prev,
         has_next,
     )
+}
+
+fn fcitx_client_side_ui_visible(body: &FcitxClientSideUiBody) -> bool {
+    !body.0.is_empty() || !body.2.is_empty() || !body.3.is_empty() || !body.4.is_empty()
+}
+
+fn log_fcitx_client_side_ui(what: &str, status: &ImeStatus, body: &FcitxClientSideUiBody) {
+    eprintln!(
+        "touchdeck-ime: fcitx dbus {what} UpdateClientSideUI visible={} preedit={:?} candidates={} candidate_index={} has_prev={} has_next={}",
+        fcitx_client_side_ui_visible(body),
+        status.preedit,
+        body.4.len(),
+        body.5,
+        body.7,
+        body.8
+    );
 }
 
 fn owned_value(value: Value<'static>) -> zbus::fdo::Result<OwnedValue> {
@@ -2683,6 +2700,65 @@ impl FcitxInputContext {
 
     #[zbus(name = "HideVirtualKeyboard")]
     fn hide_virtual_keyboard(&self, #[zbus(header)] _header: Header<'_>) {}
+
+    #[zbus(signal, name = "CommitString")]
+    async fn commit_string_signal(
+        emitter: &SignalEmitter<'_>,
+        str: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal, name = "CurrentIM")]
+    async fn current_im_signal(
+        emitter: &SignalEmitter<'_>,
+        name: &str,
+        unique_name: &str,
+        lang_code: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal, name = "UpdateFormattedPreedit")]
+    async fn update_formatted_preedit_signal(
+        emitter: &SignalEmitter<'_>,
+        str: FcitxFormattedText,
+        cursorpos: i32,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal, name = "UpdateClientSideUI")]
+    async fn update_client_side_ui_signal(
+        emitter: &SignalEmitter<'_>,
+        preedit: FcitxFormattedText,
+        cursorpos: i32,
+        aux_up: FcitxFormattedText,
+        aux_down: FcitxFormattedText,
+        candidates: FcitxCandidateList,
+        candidate_index: i32,
+        layout_hint: i32,
+        has_prev: bool,
+        has_next: bool,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal, name = "DeleteSurroundingText")]
+    async fn delete_surrounding_text_signal(
+        emitter: &SignalEmitter<'_>,
+        offset: i32,
+        nchar: u32,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal, name = "ForwardKey")]
+    async fn forward_key_signal(
+        emitter: &SignalEmitter<'_>,
+        keyval: u32,
+        state: u32,
+        type_: bool,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal, name = "NotifyFocusOut")]
+    async fn notify_focus_out_signal(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal, name = "VirtualKeyboardVisibilityChanged")]
+    async fn virtual_keyboard_visibility_changed_signal(
+        emitter: &SignalEmitter<'_>,
+        visible: bool,
+    ) -> zbus::Result<()>;
 }
 
 fn dbus_sender(header: &Header<'_>) -> zbus::fdo::Result<OwnedBusName> {
@@ -2793,6 +2869,7 @@ async fn emit_fcitx_dbus_output(
     }
 
     let client_side_ui = fcitx_client_side_ui_body(&output.status);
+    log_fcitx_client_side_ui("output", &output.status, &client_side_ui);
     conn.emit_signal(
         Some(&output.target.client),
         &output.target.path,
