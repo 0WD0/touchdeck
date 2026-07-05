@@ -458,6 +458,8 @@ struct ImeStatus {
     source: String,
     #[serde(default)]
     display_kind: String,
+    #[serde(default)]
+    ui_owner: String,
     active: bool,
     #[serde(default)]
     client_side_input_panel: bool,
@@ -2729,14 +2731,12 @@ impl App {
             return false;
         }
 
-        (self.engine.mode == Mode::Text && self.ime_status.source == "touchdeck")
+        (self.engine.mode == Mode::Text && self.ime_status.ui_owner == "touchdeck-overlay")
             || self.should_render_fcitx_server_popup()
     }
 
     fn should_render_fcitx_server_popup(&self) -> bool {
-        self.ime_status.source == "physical"
-            && self.ime_status.display_kind == "fcitx-dbus"
-            && !self.ime_status.client_side_input_panel
+        self.ime_status.ui_owner == "touchdeck-server-popup"
             && self.ime_status.cursor_rect.is_some()
     }
 
@@ -2889,7 +2889,7 @@ impl App {
             }
         }
 
-        if self.ime_status.source != "touchdeck" {
+        if self.ime_status.ui_owner != "touchdeck-overlay" {
             return;
         }
 

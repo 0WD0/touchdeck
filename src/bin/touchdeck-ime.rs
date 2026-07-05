@@ -487,6 +487,7 @@ struct ImeStatus {
     kind: String,
     source: String,
     display_kind: String,
+    ui_owner: String,
     active: bool,
     client_side_input_panel: bool,
     cursor_rect: Option<ImeCursorRect>,
@@ -505,6 +506,7 @@ impl Default for ImeStatus {
             kind: "status".to_string(),
             source: "unknown".to_string(),
             display_kind: "unknown".to_string(),
+            ui_owner: "none".to_string(),
             active: false,
             client_side_input_panel: false,
             cursor_rect: None,
@@ -1432,12 +1434,21 @@ impl ImeApp {
         status.source = source.to_string();
         status.display_kind = if source == "touchdeck" {
             "touchdeck".to_string()
-        } else if self.fcitx_focus.is_some() {
+        } else if source == "fcitx-dbus" || self.fcitx_focus.is_some() {
             "fcitx-dbus".to_string()
+        } else if source == "xim" {
+            "xim".to_string()
         } else {
             "wayland-im".to_string()
         };
         status.client_side_input_panel = self.fcitx_uses_client_side_input_panel();
+        status.ui_owner = match status.display_kind.as_str() {
+            "touchdeck" => "touchdeck-overlay".to_string(),
+            "fcitx-dbus" if status.client_side_input_panel => "client".to_string(),
+            "fcitx-dbus" => "touchdeck-server-popup".to_string(),
+            "wayland-im" if source == "physical" => "native-popup".to_string(),
+            _ => "none".to_string(),
+        };
         status.cursor_rect = self
             .fcitx_cursor_rect
             .as_ref()
