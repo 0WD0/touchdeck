@@ -736,6 +736,39 @@ impl Keymap {
         .unwrap_or(GestureAction::None)
     }
 
+    fn resolve_active_swipe(
+        &self,
+        mode: Mode,
+        layers: &[Layer],
+        contact: &Contact,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> GestureAction {
+        let gesture = Gesture {
+            max_active: 1,
+            finished: vec![contact.clone()],
+        };
+        let Some(kind) = recognize_gesture_kind(&gesture, config, size) else {
+            return GestureAction::None;
+        };
+        if !matches!(
+            kind,
+            GestureKind::SwipeLeft
+                | GestureKind::SwipeRight
+                | GestureKind::SwipeUp
+                | GestureKind::SwipeDown
+        ) {
+            return GestureAction::None;
+        }
+
+        self.find_release_binding(mode, layers, |binding| {
+            binding.trigger.matches_release(kind, &gesture, config, size)
+        })
+        .map(|binding| binding.behavior.clone().into_action())
+        .filter(GestureAction::is_active_swipe_action)
+        .unwrap_or(GestureAction::None)
+    }
+
     fn find_release_binding<F>(
         &self,
         mode: Mode,
@@ -2101,6 +2134,12 @@ enum GestureAction {
     None,
 }
 
+impl GestureAction {
+    fn is_active_swipe_action(&self) -> bool {
+        matches!(self, Self::KeyHold(_) | Self::HoldRepeat { .. })
+    }
+}
+
 #[derive(Debug)]
 enum PressedAction {
     None,
@@ -3309,7 +3348,10 @@ impl App {
         }
 
         let config = self.config.clone();
-        let effects = self.engine.handle_motion(id, time, x, y, &config);
+        let size = self.surface_size();
+        let effects = self
+            .engine
+            .handle_motion(now_ms, id, time, x, y, &config, size);
         self.apply_effects_or_stop(qh, effects);
     }
 
@@ -3402,26 +3444,15 @@ impl Engine {
                         interval_ms,
                         translation,
                     } => {
-                        let interval_ms = interval_ms.unwrap_or(config.repeat_interval_ms).max(1);
-                        if let Some(translation) = translation {
-                            effects.push(EngineEffect::Dispatch(
-                                GestureAction::KeySequenceWithPolicy {
-                                    sequence: sequence.clone(),
-                                    translation,
-                                },
-                            ));
-                        } else {
-                            effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
-                                sequence.clone(),
-                            )));
-                        }
-                        self.repeaters.push(RepeatState {
-                            hold_id: candidate.id,
-                            next_ms: now_ms + u64::from(interval_ms),
-                            interval_ms,
+                        self.start_hold_repeat(
+                            candidate.id,
+                            now_ms,
                             sequence,
+                            interval_ms,
                             translation,
-                        });
+                            config,
+                            &mut effects,
+                        );
                     }
                     action => {
                         self.perform_action(action, &mut effects, config, Some(candidate.id));
@@ -3500,12 +3531,17 @@ impl Engine {
 
     fn handle_motion(
         &mut self,
+        now_ms: u64,
         id: i32,
         time: u32,
         x: f64,
         y: f64,
         config: &Config,
+        size: SurfaceSize,
     ) -> Vec<EngineEffect> {
+        let mut action = GestureAction::None;
+        let mut moved_contact = None;
+
         if let Some(contact) = self.active.get_mut(&id) {
             contact.last_x = x;
             contact.last_y = y;
@@ -3516,9 +3552,37 @@ impl Engine {
                     self.hold_candidate = None;
                 }
             }
+
+            moved_contact = Some(contact.clone());
         }
 
-        redraw_if_debug(config)
+        if let Some(contact) = moved_contact {
+            if !self.hold_contact_ids().contains(&id) && self.active_non_hold_count() == 1 {
+                action = config.keymap.resolve_active_swipe(
+                    self.mode,
+                    &self.layer_stack,
+                    &contact,
+                    config,
+                    size,
+                );
+            }
+        }
+
+        let mut effects = Vec::new();
+        if action != GestureAction::None {
+            if self
+                .hold_candidate
+                .as_ref()
+                .is_some_and(|candidate| candidate.id == id)
+            {
+                self.hold_candidate = None;
+            }
+            self.last_tap = None;
+            self.start_active_action(id, now_ms, action, config, &mut effects);
+        }
+
+        effects.extend(redraw_if_debug(config));
+        effects
     }
 
     fn handle_up(
@@ -3658,8 +3722,12 @@ impl Engine {
                 y,
             } => self.handle_down(t, wl_time, id, x, y, config, size),
             TraceEvent::Motion {
-                wl_time, id, x, y, ..
-            } => self.handle_motion(id, wl_time, x, y, config),
+                t,
+                wl_time,
+                id,
+                x,
+                y,
+            } => self.handle_motion(t, id, wl_time, x, y, config, size),
             TraceEvent::Up { t, wl_time, id } => self.handle_up(t, wl_time, id, config, size),
             TraceEvent::Cancel { .. } => self.handle_cancel(config),
         }
@@ -3822,6 +3890,67 @@ impl Engine {
             }
             GestureAction::None => {}
         }
+    }
+
+    fn start_active_action(
+        &mut self,
+        hold_id: i32,
+        now_ms: u64,
+        action: GestureAction,
+        config: &Config,
+        effects: &mut Vec<EngineEffect>,
+    ) {
+        match action {
+            GestureAction::HoldRepeat {
+                sequence,
+                interval_ms,
+                translation,
+            } => self.start_hold_repeat(
+                hold_id,
+                now_ms,
+                sequence,
+                interval_ms,
+                translation,
+                config,
+                effects,
+            ),
+            action => self.perform_action(action, effects, config, Some(hold_id)),
+        }
+    }
+
+    fn start_hold_repeat(
+        &mut self,
+        hold_id: i32,
+        now_ms: u64,
+        sequence: Vec<KeyChord>,
+        interval_ms: Option<u32>,
+        translation: Option<KeyTranslationPolicy>,
+        config: &Config,
+        effects: &mut Vec<EngineEffect>,
+    ) {
+        let interval_ms = interval_ms.unwrap_or(config.repeat_interval_ms).max(1);
+        if let Some(translation) = translation {
+            effects.push(EngineEffect::Dispatch(
+                GestureAction::KeySequenceWithPolicy {
+                    sequence: sequence.clone(),
+                    translation,
+                },
+            ));
+        } else {
+            effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
+                sequence.clone(),
+            )));
+        }
+
+        self.repeaters
+            .retain(|repeater| repeater.hold_id != hold_id);
+        self.repeaters.push(RepeatState {
+            hold_id,
+            next_ms: now_ms + u64::from(interval_ms),
+            interval_ms,
+            sequence,
+            translation,
+        });
     }
 
     fn perform_dispatch_action(
@@ -6285,7 +6414,7 @@ mod tests {
         let mut engine = Engine::default();
 
         engine.handle_down(0, 0, 1, 500.0, 1950.0, &config, size);
-        engine.handle_motion(1, 80, 500.0, 1700.0, &config);
+        engine.handle_motion(80, 1, 80, 500.0, 1700.0, &config, size);
         let effects = engine.handle_up(100, 100, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Text);
@@ -6578,7 +6707,7 @@ key_c = "&kp LEFT"
         engine.set_mode(Mode::Text, &mut effects, &config);
 
         engine.handle_down(0, 0, 1, 65.0, 1340.0, &config, size);
-        engine.handle_motion(1, 60, 65.0, 1140.0, &config);
+        engine.handle_motion(60, 1, 60, 65.0, 1140.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
@@ -6597,7 +6726,7 @@ key_c = "&kp LEFT"
         engine.set_mode(Mode::Text, &mut effects, &config);
 
         engine.handle_down(0, 0, 1, 550.0, 1470.0, &config, size);
-        engine.handle_motion(1, 60, 350.0, 1470.0, &config);
+        engine.handle_motion(60, 1, 60, 350.0, 1470.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(

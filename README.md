@@ -216,15 +216,15 @@ key_s = "&kp AT_SIGN"
 key_spc = "&kp TAB"
 
 [keyboard.layers.swipe_left]
-key_h = "&kp LEFT"
-key_spc = "&kp BSPC"
+key_h = "&hold_repeat LEFT"
+key_spc = "&hold_repeat BSPC"
 
 [keyboard.layers.swipe_down]
-key_j = "&kp DOWN"
+key_j = "&hold_repeat DOWN"
 key_spc = "&kp ESC"
 
 [keyboard.layers.swipe_right]
-key_l = "&kp RIGHT"
+key_l = "&hold_repeat RIGHT"
 key_spc = "&kp RET"
 ```
 
@@ -266,6 +266,9 @@ Upper modifier slots are intended to be held with one thumb/finger while another
 
 The same slot can be bound to multiple gestures. The main keycap label remains
 the active tap binding; directional gesture bindings are rendered as edge hints.
+Swipe bindings that use `&hold KEY` or `&hold_repeat KEY` activate as soon as the
+finger crosses the swipe threshold and stay active until release. Plain `&kp KEY`
+swipes still resolve once on release.
 
 Supported trigger types:
 
