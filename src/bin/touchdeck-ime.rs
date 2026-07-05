@@ -486,6 +486,7 @@ struct ImeStatus {
     #[serde(rename = "type")]
     kind: String,
     source: String,
+    display_kind: String,
     active: bool,
     client_side_input_panel: bool,
     cursor_rect: Option<ImeCursorRect>,
@@ -503,6 +504,7 @@ impl Default for ImeStatus {
             protocol: "touchdeck-ime-v1".to_string(),
             kind: "status".to_string(),
             source: "unknown".to_string(),
+            display_kind: "unknown".to_string(),
             active: false,
             client_side_input_panel: false,
             cursor_rect: None,
@@ -1428,6 +1430,13 @@ impl ImeApp {
         let mut status = self.status.clone();
         status.active = self.active;
         status.source = source.to_string();
+        status.display_kind = if source == "touchdeck" {
+            "touchdeck".to_string()
+        } else if self.fcitx_focus.is_some() {
+            "fcitx-dbus".to_string()
+        } else {
+            "wayland-im".to_string()
+        };
         status.client_side_input_panel = self.fcitx_uses_client_side_input_panel();
         status.cursor_rect = self
             .fcitx_cursor_rect

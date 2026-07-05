@@ -456,6 +456,8 @@ struct ImeStatus {
     kind: String,
     #[serde(default)]
     source: String,
+    #[serde(default)]
+    display_kind: String,
     active: bool,
     #[serde(default)]
     client_side_input_panel: bool,
@@ -2727,7 +2729,15 @@ impl App {
             return false;
         }
 
-        self.engine.mode == Mode::Text || self.ime_status.source == "physical"
+        (self.engine.mode == Mode::Text && self.ime_status.source == "touchdeck")
+            || self.should_render_fcitx_server_popup()
+    }
+
+    fn should_render_fcitx_server_popup(&self) -> bool {
+        self.ime_status.source == "physical"
+            && self.ime_status.display_kind == "fcitx-dbus"
+            && !self.ime_status.client_side_input_panel
+            && self.ime_status.cursor_rect.is_some()
     }
 
     fn render_mode_hint(&self, mmap: &mut [u8], width: u32, height: u32) {
@@ -2872,11 +2882,15 @@ impl App {
             return;
         }
 
-        if self.ime_status.source == "physical" && !self.ime_status.client_side_input_panel {
+        if self.should_render_fcitx_server_popup() {
             if let Some(cursor_rect) = self.ime_status.cursor_rect {
                 self.render_physical_ime_status(mmap, width, height, cursor_rect);
                 return;
             }
+        }
+
+        if self.ime_status.source != "touchdeck" {
+            return;
         }
 
         let panel_x = ((width as i32 * 3) / 100).max(4);
@@ -2989,8 +3003,8 @@ impl App {
         }
 
         let candidate_count = self.ime_status.candidates.iter().take(6).count();
-        let panel_w = 560.min(screen_w - 16).max(160);
-        let panel_h = if candidate_count == 0 { 52 } else { 92 }.min(screen_h - 16).max(44);
+        let panel_w = 560.min(screen_w - 16).max(220);
+        let panel_h = if candidate_count == 0 { 48 } else { 88 }.min(screen_h - 16).max(44);
         let gap = 8;
 
         let scale = if cursor_rect.scale.is_finite() && cursor_rect.scale > 0.0 {
@@ -3022,8 +3036,8 @@ impl App {
             h: panel_h,
         };
 
-        fill_rect(mmap, width, height, panel, [0x10, 0x16, 0x19, 0xee]);
-        draw_rect_frame(mmap, width, height, panel, [0xc8, 0xff, 0x8a, 0xd8]);
+        fill_rect(mmap, width, height, panel, [0x1a, 0x22, 0x26, 0xe6]);
+        draw_rect_frame(mmap, width, height, panel, [0x79, 0x8b, 0x86, 0x96]);
 
         let header_h = if candidate_count == 0 {
             panel.h
@@ -3043,7 +3057,7 @@ impl App {
             },
             &header,
             (header_h as f32 * 0.52).clamp(15.0, 30.0),
-            [0xff, 0xff, 0xff, 0xf2],
+            [0xd8, 0xde, 0xe8, 0xee],
         );
 
         let visible = self
@@ -3066,7 +3080,7 @@ impl App {
                 w: panel.w - 20,
                 h: 1,
             },
-            [0x78, 0x88, 0x82, 0x90],
+            [0x6c, 0x78, 0x72, 0x70],
         );
 
         let row_y = panel.y + header_h + 7;
@@ -3080,7 +3094,7 @@ impl App {
                 .chars()
                 .map(|ch| if ch.is_ascii() { 1 } else { 2 })
                 .sum::<i32>();
-            let rect_w = (text_units * 9 + 28).clamp(54, 168);
+            let rect_w = (text_units * 8 + 26).clamp(48, 154);
             if x + rect_w > right {
                 break;
             }
@@ -3093,14 +3107,13 @@ impl App {
             };
             let highlighted = self.ime_status.highlighted_candidate_index == Some(index);
             let fill = if highlighted {
-                [0x2f, 0xa8, 0xff, 0xe8]
+                [0x3b, 0x86, 0xf2, 0xdc]
             } else if index == 0 {
-                [0x2a, 0x36, 0x38, 0xcc]
+                [0x2e, 0x3d, 0x44, 0x70]
             } else {
-                [0x20, 0x29, 0x2a, 0xb8]
+                [0x00, 0x00, 0x00, 0x00]
             };
             fill_rect(mmap, width, height, rect, fill);
-            draw_rect_frame(mmap, width, height, rect, [0xd0, 0xff, 0xe0, 0xa0]);
             self.text_renderer.draw_text(
                 mmap,
                 width,
