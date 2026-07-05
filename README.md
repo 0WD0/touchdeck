@@ -317,8 +317,10 @@ It handles two input sources:
 - Physical keyboard events from input-method keyboard grab.
 - TouchDeck key events sent over `touchdeck-ime-v1` IPC.
 
-It shows preedit/candidates in a layer-shell popup near the text input rectangle
-when available. TouchDeck can also render the same IME status in its own overlay.
+For native Wayland input-method usage, it can show preedit/candidates through
+`input_popup_surface_v2`. For fcitx-compatible Xwayland clients, it publishes
+cursor/candidate status and lets the main TouchDeck overlay render the
+server-side candidate popup.
 
 Run it before `touchdeck` when using `output = "ime"`:
 

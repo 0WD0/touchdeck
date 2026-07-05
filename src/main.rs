@@ -435,7 +435,21 @@ struct TextOutputConfig {
     ime_socket: PathBuf,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+struct ImeCursorRect {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    #[serde(default = "default_cursor_scale")]
+    scale: f64,
+}
+
+fn default_cursor_scale() -> f64 {
+    1.0
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 struct ImeStatus {
     protocol: String,
     #[serde(rename = "type")]
@@ -443,6 +457,10 @@ struct ImeStatus {
     #[serde(default)]
     source: String,
     active: bool,
+    #[serde(default)]
+    client_side_input_panel: bool,
+    #[serde(default)]
+    cursor_rect: Option<ImeCursorRect>,
     preedit: String,
     commit_preview: String,
     candidates: Vec<ImeCandidate>,
@@ -2479,10 +2497,7 @@ impl App {
         let mut latest = None;
         if let Some(rx) = &self.ime_status_rx {
             while let Ok(status) = rx.try_recv() {
-                if status.protocol == "touchdeck-ime-v1"
-                    && status.kind == "status"
-                    && status.source == "touchdeck"
-                {
+                if status.protocol == "touchdeck-ime-v1" && status.kind == "status" {
                     latest = Some(status);
                 }
             }
@@ -2585,6 +2600,8 @@ impl App {
         if !self.config.debug_draw {
             if self.engine.mode == Mode::Text {
                 self.render_text_keyboard(mmap, width, height, size);
+            }
+            if self.should_render_ime_status() {
                 self.render_ime_status(mmap, width, height);
             }
             self.render_mode_hint(mmap, width, height);
@@ -2695,11 +2712,22 @@ impl App {
             );
         }
 
-        if self.engine.mode == Mode::Text {
+        if self.should_render_ime_status() {
             self.render_ime_status(mmap, width, height);
         }
 
         self.render_mode_hint(mmap, width, height);
+    }
+
+    fn should_render_ime_status(&self) -> bool {
+        if self.ime_status.preedit.is_empty()
+            && self.ime_status.commit_preview.is_empty()
+            && self.ime_status.candidates.is_empty()
+        {
+            return false;
+        }
+
+        self.engine.mode == Mode::Text || self.ime_status.source == "physical"
     }
 
     fn render_mode_hint(&self, mmap: &mut [u8], width: u32, height: u32) {
@@ -2844,6 +2872,13 @@ impl App {
             return;
         }
 
+        if self.ime_status.source == "physical" && !self.ime_status.client_side_input_panel {
+            if let Some(cursor_rect) = self.ime_status.cursor_rect {
+                self.render_physical_ime_status(mmap, width, height, cursor_rect);
+                return;
+            }
+        }
+
         let panel_x = ((width as i32 * 3) / 100).max(4);
         let panel_w = (width as i32 - panel_x * 2).max(80);
         let panel_h = ((height as i32 * 78) / 1000).clamp(54, 118);
@@ -2939,6 +2974,181 @@ impl App {
             );
         }
     }
+
+    fn render_physical_ime_status(
+        &mut self,
+        mmap: &mut [u8],
+        width: u32,
+        height: u32,
+        cursor_rect: ImeCursorRect,
+    ) {
+        let screen_w = width as i32;
+        let screen_h = height as i32;
+        if screen_w <= 0 || screen_h <= 0 {
+            return;
+        }
+
+        let candidate_count = self.ime_status.candidates.iter().take(6).count();
+        let panel_w = 560.min(screen_w - 16).max(160);
+        let panel_h = if candidate_count == 0 { 52 } else { 92 }.min(screen_h - 16).max(44);
+        let gap = 8;
+
+        let scale = if cursor_rect.scale.is_finite() && cursor_rect.scale > 0.0 {
+            cursor_rect.scale
+        } else {
+            1.0
+        };
+        let cursor_x = ((cursor_rect.x as f64) / scale)
+            .round()
+            .clamp(0.0, screen_w.saturating_sub(1) as f64) as i32;
+        let cursor_y = ((cursor_rect.y as f64) / scale)
+            .round()
+            .clamp(0.0, screen_h.saturating_sub(1) as f64) as i32;
+        let cursor_h = ((cursor_rect.h.max(0) as f64) / scale).round() as i32;
+
+        let panel_x = cursor_x.clamp(8, (screen_w - panel_w - 8).max(8));
+        let below_y = cursor_y + cursor_h + gap;
+        let above_y = cursor_y - panel_h - gap;
+        let panel_y = if below_y + panel_h <= screen_h - 8 {
+            below_y
+        } else {
+            above_y.max(8)
+        };
+
+        let panel = RectPx {
+            x: panel_x,
+            y: panel_y,
+            w: panel_w,
+            h: panel_h,
+        };
+
+        fill_rect(mmap, width, height, panel, [0x10, 0x16, 0x19, 0xee]);
+        draw_rect_frame(mmap, width, height, panel, [0xc8, 0xff, 0x8a, 0xd8]);
+
+        let header_h = if candidate_count == 0 {
+            panel.h
+        } else {
+            (panel.h * 40 / 100).max(30)
+        };
+        let header = self.ime_header_text();
+        self.text_renderer.draw_text(
+            mmap,
+            width,
+            height,
+            RectPx {
+                x: panel.x + 12,
+                y: panel.y + 4,
+                w: panel.w - 24,
+                h: header_h - 6,
+            },
+            &header,
+            (header_h as f32 * 0.52).clamp(15.0, 30.0),
+            [0xff, 0xff, 0xff, 0xf2],
+        );
+
+        let visible = self
+            .ime_status
+            .candidates
+            .iter()
+            .take(6)
+            .collect::<Vec<_>>();
+        if visible.is_empty() {
+            return;
+        }
+
+        fill_rect(
+            mmap,
+            width,
+            height,
+            RectPx {
+                x: panel.x + 10,
+                y: panel.y + header_h,
+                w: panel.w - 20,
+                h: 1,
+            },
+            [0x78, 0x88, 0x82, 0x90],
+        );
+
+        let row_y = panel.y + header_h + 7;
+        let row_h = panel.h - header_h - 14;
+        let gap = 6;
+        let mut x = panel.x + 10;
+        let right = panel.x + panel.w - 10;
+        for (index, candidate) in visible.into_iter().enumerate() {
+            let label = Self::ime_candidate_label(index, candidate);
+            let text_units = label
+                .chars()
+                .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+                .sum::<i32>();
+            let rect_w = (text_units * 9 + 28).clamp(54, 168);
+            if x + rect_w > right {
+                break;
+            }
+
+            let rect = RectPx {
+                x,
+                y: row_y,
+                w: rect_w,
+                h: row_h,
+            };
+            let highlighted = self.ime_status.highlighted_candidate_index == Some(index);
+            let fill = if highlighted {
+                [0x2f, 0xa8, 0xff, 0xe8]
+            } else if index == 0 {
+                [0x2a, 0x36, 0x38, 0xcc]
+            } else {
+                [0x20, 0x29, 0x2a, 0xb8]
+            };
+            fill_rect(mmap, width, height, rect, fill);
+            draw_rect_frame(mmap, width, height, rect, [0xd0, 0xff, 0xe0, 0xa0]);
+            self.text_renderer.draw_text(
+                mmap,
+                width,
+                height,
+                RectPx {
+                    x: rect.x + 8,
+                    y: rect.y + 3,
+                    w: rect.w - 16,
+                    h: rect.h - 6,
+                },
+                &label,
+                (rect.h as f32 * 0.48).clamp(14.0, 24.0),
+                [0xff, 0xff, 0xff, 0xf0],
+            );
+
+            x += rect.w + gap;
+        }
+    }
+
+    fn ime_header_text(&self) -> String {
+        let mut header = String::new();
+        if !self.ime_status.preedit.is_empty() {
+            header.push_str(&self.ime_status.preedit);
+        }
+        if !self.ime_status.commit_preview.is_empty() {
+            if !header.is_empty() {
+                header.push_str(" > ");
+            }
+            header.push_str(&self.ime_status.commit_preview);
+        }
+        if header.is_empty() {
+            header.push_str("IME");
+        }
+        header
+    }
+
+    fn ime_candidate_label(index: usize, candidate: &ImeCandidate) -> String {
+        let mut label = candidate.label.clone();
+        if !candidate.text.is_empty() {
+            label.push(' ');
+            label.push_str(&candidate.text);
+        }
+        if label.trim().is_empty() {
+            label = format!("{}", index + 1);
+        }
+        label
+    }
+
 
     fn apply_input_region(&self, qh: &QueueHandle<Self>, policy: &CapturePolicy) -> Result<()> {
         let surface = self
@@ -3352,11 +3562,7 @@ impl App {
         match reader.read_line(&mut line) {
             Ok(0) => {}
             Ok(_) => match serde_json::from_str::<ImeStatus>(line.trim()) {
-                Ok(status)
-                    if status.protocol == "touchdeck-ime-v1"
-                        && status.kind == "status"
-                        && status.source == "touchdeck" =>
-                {
+                Ok(status) if status.protocol == "touchdeck-ime-v1" && status.kind == "status" => {
                     if status != self.ime_status {
                         self.ime_status = status;
                         self.ime_status_dirty = true;

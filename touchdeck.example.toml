@@ -63,7 +63,8 @@ morph = "&kpe QUESTION"
 key_translation = "effective"
 
 [ime.popup]
-# Physical-keyboard candidate popup. Colors are #RRGGBB or #RRGGBBAA.
+# Native Wayland input-popup style. Xwayland/fcitx server-side candidates are
+# rendered by the main TouchDeck overlay from subscribed IME status.
 width = 560
 max_candidates = 6
 height_empty = 48
