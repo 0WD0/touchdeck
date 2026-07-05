@@ -660,7 +660,7 @@ impl ImeApp {
             return Ok(());
         }
 
-        if self.fcitx_focus.is_some() {
+        if self.fcitx_uses_client_side_input_panel() {
             self.hide_popup(qh);
             return Ok(());
         }
