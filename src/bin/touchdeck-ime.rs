@@ -73,6 +73,7 @@ struct ImeApp {
     serial: u32,
     preedit: String,
     status: ImeStatus,
+    status_subscribers: Vec<Sender<ImeStatus>>,
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
     running: bool,
@@ -94,9 +95,14 @@ struct TouchDeckEvent {
     modifiers: u32,
 }
 
-struct TouchDeckRequest {
-    event: TouchDeckEvent,
-    response: Sender<ImeStatus>,
+enum TouchDeckRequest {
+    Event {
+        event: TouchDeckEvent,
+        response: Sender<ImeStatus>,
+    },
+    Subscribe {
+        response: Sender<ImeStatus>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,8 +186,16 @@ fn main() -> Result<()> {
             .context("dispatch pending Wayland events")?;
 
         while let Ok(request) = event_rx.try_recv() {
-            let status = app.handle_touchdeck_event(request.event);
-            let _ = request.response.send(status);
+            match request {
+                TouchDeckRequest::Event { event, response } => {
+                    let status = app.handle_touchdeck_event(event);
+                    app.broadcast_status();
+                    let _ = response.send(status);
+                }
+                TouchDeckRequest::Subscribe { response } => {
+                    app.add_status_subscriber(response);
+                }
+            }
         }
 
         event_queue.flush().context("flush Wayland requests")?;
@@ -283,6 +297,7 @@ impl ImeApp {
             "touchdeck-ime: physical key={} state={:?} modifiers={} handled={} preedit={:?}",
             key, key_state, self.physical_modifiers, handled, self.preedit
         );
+        self.broadcast_status();
     }
 
     fn passthrough_physical_key(
@@ -455,6 +470,21 @@ impl ImeApp {
         status.active = self.active;
         status
     }
+
+    fn add_status_subscriber(&mut self, response: Sender<ImeStatus>) {
+        let _ = response.send(self.current_status());
+        self.status_subscribers.push(response);
+        eprintln!(
+            "touchdeck-ime: status subscriber connected; count={}",
+            self.status_subscribers.len()
+        );
+    }
+
+    fn broadcast_status(&mut self) {
+        let status = self.current_status();
+        self.status_subscribers
+            .retain(|subscriber| subscriber.send(status.clone()).is_ok());
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for ImeApp {
@@ -555,6 +585,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
                 if let Some(rime) = state.rime.as_mut() {
                     rime.clear();
                 }
+                state.broadcast_status();
                 eprintln!("touchdeck-ime: activate");
             }
             zwp_input_method_v2::Event::Deactivate => {
@@ -564,6 +595,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
                 if let Some(rime) = state.rime.as_mut() {
                     rime.clear();
                 }
+                state.broadcast_status();
                 eprintln!("touchdeck-ime: deactivate");
             }
             zwp_input_method_v2::Event::SurroundingText {
@@ -962,9 +994,34 @@ fn handle_client(mut stream: UnixStream, tx: Sender<TouchDeckRequest>) -> Result
 
         let event: TouchDeckEvent =
             serde_json::from_str(&line).with_context(|| format!("parse event {line}"))?;
+
+        if event.protocol == "touchdeck-ime-v1"
+            && event.kind == "subscribe_status"
+            && event.source == "touchdeck"
+        {
+            let (status_tx, status_rx) = mpsc::channel();
+            if tx
+                .send(TouchDeckRequest::Subscribe {
+                    response: status_tx,
+                })
+                .is_err()
+            {
+                break;
+            }
+
+            for status in status_rx {
+                serde_json::to_writer(&mut stream, &status)
+                    .context("write subscribed touchdeck-ime status")?;
+                stream
+                    .write_all(b"\n")
+                    .context("write subscribed touchdeck-ime status newline")?;
+            }
+            break;
+        }
+
         let (response_tx, response_rx) = mpsc::channel();
         if tx
-            .send(TouchDeckRequest {
+            .send(TouchDeckRequest::Event {
                 event,
                 response: response_tx,
             })

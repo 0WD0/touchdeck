@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -116,6 +117,7 @@ struct App {
     last_presented_mode: Mode,
     ime_status: ImeStatus,
     ime_status_dirty: bool,
+    ime_status_rx: Option<Receiver<ImeStatus>>,
     text_renderer: TextRenderer,
     modifier_mask: u32,
     running: bool,
@@ -149,6 +151,7 @@ impl Default for App {
             last_presented_mode: Mode::Base,
             ime_status: ImeStatus::default(),
             ime_status_dirty: false,
+            ime_status_rx: None,
             text_renderer: TextRenderer::new(),
             modifier_mask: 0,
             running: false,
@@ -472,6 +475,62 @@ fn parse_text_output_backend(value: &str) -> Result<TextOutputBackend> {
             "unsupported text output backend {other}; supported: virtual-keyboard, ime, both"
         )),
     }
+}
+
+fn spawn_ime_status_subscriber(socket_path: PathBuf) -> Receiver<ImeStatus> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || loop {
+        match UnixStream::connect(&socket_path) {
+            Ok(mut stream) => {
+                let message = serde_json::json!({
+                    "protocol": "touchdeck-ime-v1",
+                    "type": "subscribe_status",
+                    "source": "touchdeck",
+                });
+
+                if let Err(err) = serde_json::to_writer(&mut stream, &message)
+                    .and_then(|()| stream.write_all(b"\n").map_err(serde_json::Error::io))
+                {
+                    eprintln!("touchdeck: failed to subscribe touchdeck-ime status: {err}");
+                    thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+
+                eprintln!(
+                    "touchdeck: subscribed to touchdeck-ime status at {}",
+                    socket_path.display()
+                );
+                let reader = BufReader::new(stream);
+                for line in reader.lines() {
+                    let Ok(line) = line else {
+                        break;
+                    };
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<ImeStatus>(line.trim()) {
+                        Ok(status) => {
+                            if tx.send(status).is_err() {
+                                return;
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("touchdeck: failed to parse subscribed IME status: {err}");
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "touchdeck: waiting for touchdeck-ime status socket {}: {err}",
+                    socket_path.display()
+                );
+            }
+        }
+
+        thread::sleep(Duration::from_millis(500));
+    });
+    rx
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2200,6 +2259,11 @@ fn main() -> Result<()> {
         running: true,
         ..Default::default()
     };
+    if app.config.text_output.backend.uses_ime() {
+        app.ime_status_rx = Some(spawn_ime_status_subscriber(
+            app.config.text_output.ime_socket.clone(),
+        ));
+    }
 
     display.get_registry(&qh, ());
     event_queue
@@ -2215,6 +2279,8 @@ fn main() -> Result<()> {
         event_queue
             .dispatch_pending(&mut app)
             .context("dispatch pending Wayland events")?;
+        app.drain_ime_status(&qh)
+            .context("drain touchdeck-ime status")?;
 
         let now_ms = app.now_ms();
         let size = app.surface_size();
@@ -2333,6 +2399,12 @@ impl App {
         if let Some(hint) = self.mode_hint {
             deadline = Some(deadline.map_or(hint.until_ms, |deadline| deadline.min(hint.until_ms)));
         }
+        if self.ime_status_rx.is_some() {
+            let refresh_deadline = self.now_ms().saturating_add(33);
+            deadline = Some(deadline.map_or(refresh_deadline, |deadline| {
+                deadline.min(refresh_deadline)
+            }));
+        }
 
         deadline.map(|deadline_ms| {
             let now_ms = self.now_ms();
@@ -2349,6 +2421,31 @@ impl App {
         }
 
         self.mode_hint = None;
+        if self.width != 0 && self.height != 0 {
+            self.attach_overlay_buffer(qh, self.width, self.height)?;
+        }
+        Ok(())
+    }
+
+    fn drain_ime_status(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        let mut latest = None;
+        if let Some(rx) = &self.ime_status_rx {
+            while let Ok(status) = rx.try_recv() {
+                if status.protocol == "touchdeck-ime-v1" && status.kind == "status" {
+                    latest = Some(status);
+                }
+            }
+        }
+
+        let Some(status) = latest else {
+            return Ok(());
+        };
+
+        if status == self.ime_status {
+            return Ok(());
+        }
+
+        self.ime_status = status;
         if self.width != 0 && self.height != 0 {
             self.attach_overlay_buffer(qh, self.width, self.height)?;
         }
