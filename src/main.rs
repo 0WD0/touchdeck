@@ -3137,11 +3137,9 @@ impl App {
             }
         };
 
-        let Some((tile_x, tile_y)) = layout.tile_pos_in_workspace_view else {
-            return None;
-        };
-        let window_size_w = layout.window_size.0 as f64;
-        let window_size_h = layout.window_size.1 as f64;
+        let (origin_x, origin_y, output_window_w, output_window_h) = layout.window_rect_in_output;
+        let window_size_w = output_window_w as f64;
+        let window_size_h = output_window_h as f64;
         if window_size_w <= 0.0 || window_size_h <= 0.0 {
             return None;
         }
@@ -3154,8 +3152,6 @@ impl App {
 
         let local_x = (cursor_rect.x - window_x) as f64;
         let local_y = (cursor_rect.y - window_y) as f64;
-        let origin_x = tile_x + layout.window_offset_in_tile.0;
-        let origin_y = tile_y + layout.window_offset_in_tile.1;
         let cursor_x = (origin_x + local_x / scale_x)
             .round()
             .clamp(0.0, screen_w.saturating_sub(1) as f64) as i32;

@@ -7,9 +7,7 @@ use anyhow::{anyhow, Context, Result};
 
 #[derive(Clone, Copy, Debug)]
 pub struct FocusedWindowLayout {
-    pub tile_pos_in_workspace_view: Option<(f64, f64)>,
-    pub window_offset_in_tile: (f64, f64),
-    pub window_size: (i32, i32),
+    pub window_rect_in_output: (f64, f64, i32, i32),
 }
 
 pub fn focused_window_layout() -> Result<Option<FocusedWindowLayout>> {
@@ -29,21 +27,13 @@ pub fn focused_window_layout() -> Result<Option<FocusedWindowLayout>> {
         return Ok(None);
     };
 
-    let tile_pos_in_workspace_view = layout
-        .get("tile_pos_in_workspace_view")
-        .and_then(json_pair_f64);
-    let window_offset_in_tile = layout
-        .get("window_offset_in_tile")
-        .and_then(json_pair_f64)
-        .unwrap_or((0.0, 0.0));
-    let Some(window_size) = layout.get("window_size").and_then(json_pair_i32) else {
-        return Ok(None);
-    };
+    let window_rect_in_output = layout
+        .get("window_rect_in_output")
+        .and_then(json_window_rect)
+        .ok_or_else(|| anyhow!("niri FocusedWindow layout missing window_rect_in_output"))?;
 
     Ok(Some(FocusedWindowLayout {
-        tile_pos_in_workspace_view,
-        window_offset_in_tile,
-        window_size,
+        window_rect_in_output,
     }))
 }
 
@@ -79,21 +69,15 @@ pub fn send_ipc_request_json(request: &str) -> Result<serde_json::Value> {
     Ok(value)
 }
 
-fn json_pair_f64(value: &serde_json::Value) -> Option<(f64, f64)> {
+fn json_window_rect(value: &serde_json::Value) -> Option<(f64, f64, i32, i32)> {
     let values = value.as_array()?;
-    if values.len() != 2 {
-        return None;
-    }
-    Some((values[0].as_f64()?, values[1].as_f64()?))
-}
-
-fn json_pair_i32(value: &serde_json::Value) -> Option<(i32, i32)> {
-    let values = value.as_array()?;
-    if values.len() != 2 {
+    if values.len() != 4 {
         return None;
     }
     Some((
-        i32::try_from(values[0].as_i64()?).ok()?,
-        i32::try_from(values[1].as_i64()?).ok()?,
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        i32::try_from(values[2].as_i64()?).ok()?,
+        i32::try_from(values[3].as_i64()?).ok()?,
     ))
 }
