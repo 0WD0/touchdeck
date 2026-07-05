@@ -8,6 +8,7 @@ use anyhow::{anyhow, Context, Result};
 #[derive(Clone, Copy, Debug)]
 pub struct FocusedWindowLayout {
     pub window_rect_in_output: (f64, f64, i32, i32),
+    pub working_area_in_output: (f64, f64, f64, f64),
 }
 
 pub fn focused_window_layout() -> Result<Option<FocusedWindowLayout>> {
@@ -31,9 +32,14 @@ pub fn focused_window_layout() -> Result<Option<FocusedWindowLayout>> {
         .get("window_rect_in_output")
         .and_then(json_window_rect)
         .ok_or_else(|| anyhow!("niri FocusedWindow layout missing window_rect_in_output"))?;
+    let working_area_in_output = layout
+        .get("working_area_in_output")
+        .and_then(json_rect_f64)
+        .ok_or_else(|| anyhow!("niri FocusedWindow layout missing working_area_in_output"))?;
 
     Ok(Some(FocusedWindowLayout {
         window_rect_in_output,
+        working_area_in_output,
     }))
 }
 
@@ -79,5 +85,18 @@ fn json_window_rect(value: &serde_json::Value) -> Option<(f64, f64, i32, i32)> {
         values[1].as_f64()?,
         i32::try_from(values[2].as_i64()?).ok()?,
         i32::try_from(values[3].as_i64()?).ok()?,
+    ))
+}
+
+fn json_rect_f64(value: &serde_json::Value) -> Option<(f64, f64, f64, f64)> {
+    let values = value.as_array()?;
+    if values.len() != 4 {
+        return None;
+    }
+    Some((
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+        values[3].as_f64()?,
     ))
 }

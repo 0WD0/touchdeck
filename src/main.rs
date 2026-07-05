@@ -3176,7 +3176,11 @@ impl App {
             }
         };
 
-        let (origin_x, origin_y, output_window_w, output_window_h) = layout.window_rect_in_output;
+        let (window_output_x, window_output_y, output_window_w, output_window_h) =
+            layout.window_rect_in_output;
+        let (workarea_x, workarea_y, workarea_w, workarea_h) = layout.working_area_in_output;
+        let origin_x = window_output_x - workarea_x;
+        let origin_y = window_output_y - workarea_y;
         let window_size_w = output_window_w as f64;
         let window_size_h = output_window_h as f64;
         if window_size_w <= 0.0 || window_size_h <= 0.0 {
@@ -3188,7 +3192,7 @@ impl App {
         if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
             if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
                 eprintln!(
-                    "touchdeck: ime geometry x11-root invalid scale raw=({}, {} {}x{}) x11_window=({}, {} {}x{}) niri_window_rect=({:.2}, {:.2} {}x{}) scale=({:.4}, {:.4})",
+                    "touchdeck: ime geometry x11-root invalid scale raw=({}, {} {}x{}) x11_window=({}, {} {}x{}) niri_window_rect=({:.2}, {:.2} {}x{}) niri_workarea=({:.2}, {:.2} {:.2}x{:.2}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4})",
                     cursor_rect.x,
                     cursor_rect.y,
                     cursor_rect.w,
@@ -3197,10 +3201,16 @@ impl App {
                     window_y,
                     window_w,
                     window_h,
-                    origin_x,
-                    origin_y,
+                    window_output_x,
+                    window_output_y,
                     output_window_w,
                     output_window_h,
+                    workarea_x,
+                    workarea_y,
+                    workarea_w,
+                    workarea_h,
+                    origin_x,
+                    origin_y,
                     scale_x,
                     scale_y
                 );
@@ -3220,7 +3230,7 @@ impl App {
 
         if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
             eprintln!(
-                "touchdeck: ime geometry x11-root raw=({}, {} {}x{}) root={:?}x{:?} x11_window=({}, {} {}x{}) niri_window_rect=({:.2}, {:.2} {}x{}) scale=({:.4}, {:.4}) local=({:.2}, {:.2}) anchor=({}, {} h={}) screen={}x{}",
+                "touchdeck: ime geometry x11-root raw=({}, {} {}x{}) root={:?}x{:?} x11_window=({}, {} {}x{}) niri_window_rect=({:.2}, {:.2} {}x{}) niri_workarea=({:.2}, {:.2} {:.2}x{:.2}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4}) local=({:.2}, {:.2}) anchor=({}, {} h={}) screen={}x{}",
                 cursor_rect.x,
                 cursor_rect.y,
                 cursor_rect.w,
@@ -3231,10 +3241,16 @@ impl App {
                 window_y,
                 window_w,
                 window_h,
-                origin_x,
-                origin_y,
+                window_output_x,
+                window_output_y,
                 output_window_w,
                 output_window_h,
+                workarea_x,
+                workarea_y,
+                workarea_w,
+                workarea_h,
+                origin_x,
+                origin_y,
                 scale_x,
                 scale_y,
                 local_x,
