@@ -1,161 +1,431 @@
 # touchdeck
 
-Host-side Wayland touch input layer for niri.
+Host-side Wayland touch input layer for niri, optimized for phone portrait streaming.
 
-It creates a transparent `wlr-layer-shell` overlay, receives `wl_touch` events,
-controls its Wayland input region dynamically, resolves touch gestures through a
-mode/layer keymap, and dispatches actions to either niri or a Wayland virtual
-keyboard.
+TouchDeck is not a traditional on-screen keyboard window. It is a programmable
+Wayland input layer:
 
-## Current model
+```text
+wl_touch events
+  -> slot hit testing from SVG layout
+  -> gesture recognition
+  -> mode/layer keymap resolution
+  -> behavior dispatch
+  -> niri IPC / virtual keyboard / touchdeck-ime
+```
 
-The prototype separates input ownership from application passthrough:
+The current project has two binaries:
 
-- `Base`: fullscreen capture. This is the normal programmable touch layer.
-- `Text`: fullscreen capture for virtual-keyboard text/key output.
-- `NiriMomentary`: fullscreen capture while a configured momentary mode trigger is held.
-- `NiriLocked`: fullscreen capture after a configured lock trigger.
-- `Passthrough`: only the active binding targets for the current mode/layer are captured; the rest of the screen passes through to applications.
+- `touchdeck`: the fullscreen layer-shell overlay, gesture engine, keymap engine, niri dispatcher, and key sender.
+- `touchdeck-ime`: an input-method-v2 + librime frontend used when TouchDeck key events should pass through Rime.
 
-`Passthrough` is a mode, not the default behavior.
+## Quick start
 
-There is also a layer stack:
+Run the IME frontend first if the config uses `output = "ime"`:
 
-- `base`: default key bindings.
-- `niri`: niri control bindings.
-- Layer resolution checks the top layer first, then lower layers.
-- `layer_momentary` pushes a layer and restores the previous stack on release.
-- `layer_toggle` pushes an inactive layer or removes an active layer.
+```sh
+cd /home/disk/Projects/touchdeck
+TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml cargo run --release --bin touchdeck-ime
+```
 
-This is still not a full ZMK-like behavior engine. It now has the minimum shape
-for configurable mode, layer stack, trigger, and behavior resolution.
+Then run TouchDeck:
 
-## Built-in slots
+```sh
+cd /home/disk/Projects/touchdeck
+TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml cargo run --release --bin touchdeck
+```
 
-The built-in layout provides these slot IDs:
+Useful debug run:
 
-- `left_bottom`: `x 0.00..0.18`, `y 0.82..1.00`
-- `right_bottom`: `x 0.82..1.00`, `y 0.82..1.00`
-- `bottom_edge`: `x 0.18..0.82`, `y 0.94..1.00`
-- `top_left`: `x 0.00..0.12`, `y 0.00..0.10`
-- `center`: `x 0.18..0.82`, `y 0.12..0.82`
-- `full`: full overlay
+```sh
+cd /home/disk/Projects/touchdeck
+TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
+TOUCHDECK_DEBUG_DRAW=1 \
+TOUCHDECK_LOG_TOUCH=1 \
+cargo run --release --bin touchdeck
+```
 
-External layouts are SVG files. TOML keymaps reference slots by ID; TOML does
-not define slot geometry.
+If you only want raw Wayland virtual-keyboard output and do not want Rime:
+
+```sh
+TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
+TOUCHDECK_TEXT_OUTPUT=virtual-keyboard \
+cargo run --release --bin touchdeck
+```
+
+## Current design rules
+
+TouchDeck is in rapid iteration. The runtime intentionally does not keep legacy
+fallback layouts or fallback keymaps in `main.rs`.
+
+The default usable setup lives in files:
+
+- `touchdeck.example.toml`: default profile, keymap, IME settings, popup theme.
+- `layouts/phone-portrait.svg`: default phone portrait slot layout.
+- `examples/layouts/keymaps/*.toml`: alternative keymap examples.
+
+A config file should describe behavior. SVG should describe geometry. Source code
+should not contain named slot/keymap defaults.
+
+## Runtime configuration lookup
+
+TouchDeck loads config in this order:
+
+```text
+TOUCHDECK_CONFIG
+  -> ./touchdeck.toml if present
+  -> empty runtime config
+```
+
+For real use, set `TOUCHDECK_CONFIG` explicitly.
+
+Important environment overrides:
+
+- `TOUCHDECK_CONFIG`: path to TOML config.
+- `TOUCHDECK_TEXT_OUTPUT`: `virtual-keyboard`, `ime`, or `both`.
+- `TOUCHDECK_IME_SOCKET`: Unix socket path for `touchdeck-ime`.
+- `TOUCHDECK_XKB_KEYMAP`: raw XKB keymap file for virtual keyboard output.
+- `TOUCHDECK_DEBUG_DRAW=1`: draw overlay debug/keycap UI.
+- `TOUCHDECK_DEBUG_ALPHA=0..255`: overlay background alpha.
+- `TOUCHDECK_LOG_TOUCH=1`: log raw touch events.
+- `TOUCHDECK_REPEAT_START_MS`: global first-repeat delay fallback.
+- `TOUCHDECK_REPEAT_INTERVAL_MS`: global repeat interval fallback.
+
+## Modes and layers
+
+Modes decide how touch input is interpreted. Layers decide which bindings are
+active within a mode.
+
+Current modes:
+
+- `base`: normal programmable touch layer.
+- `text`: text keyboard / key output mode.
+- `niri_momentary`: niri control while a momentary trigger is held.
+- `niri_locked`: niri control until explicitly unlocked.
+- `passthrough`: only active binding targets are captured; other areas pass through to apps.
+
+Current layers:
+
+- `base`
+- `niri`
+
+Layer resolution checks the top layer first, then lower layers. `layer_momentary`
+pushes a layer and restores the previous stack on release. `layer_toggle` pushes
+an inactive layer or removes an active layer.
+
+`passthrough` is explicit. Central passthrough is not assumed in every mode.
+
+## Layout SVG
+
+Layout geometry is described by SVG. TOML references slots by ID.
 
 ```toml
 [layout]
 svg = "layouts/phone-portrait.svg"
 ```
 
-The checked-in phone portrait layout is not a physical-keyboard clone. It keeps
-the central screen relatively open and places key slots in lower left/right
-thumb clusters, with a larger bottom space/control row.
+SVG v1 supports `<rect>` slots with these attributes:
 
-SVG layout v1 reads only `<rect>` elements with `data-td-slot`:
+- `data-td-slot`: required stable slot ID.
+- `data-td-role`: optional `zone`, `key`, `gesture-area`, or decoration role.
+- `data-td-capture`: optional boolean, defaults to `true`.
+- `data-td-label`: optional display/debug label.
+
+Example:
 
 ```xml
 <svg viewBox="0 0 1000 2400" xmlns="http://www.w3.org/2000/svg">
   <rect
-    data-td-slot="left_bottom"
-    data-td-role="zone"
+    data-td-slot="thumb_spc"
+    data-td-role="key"
     data-td-capture="true"
-    data-td-label="NIRI"
-    x="0"
-    y="1968"
-    width="180"
-    height="432" />
+    data-td-label="SPC"
+    x="300"
+    y="2200"
+    width="360"
+    height="150" />
 </svg>
 ```
 
-Supported SVG slot attributes:
+The SVG `viewBox` is normalized to the current surface size. Currently supported
+hit/capture geometry is rectangular. `path`, `circle`, transforms, and group-level
+inheritance are not supported yet.
 
-- `data-td-slot`: required slot ID
-- `data-td-role`: optional `zone`, `key`, or `gesture-area`
-- `data-td-capture`: optional boolean, defaults to `true`
-- `data-td-label`: optional debug/display label
+## Keymap structure
 
-SVG `viewBox` is used to normalize coordinates. `path`, `circle`, transforms,
-and group-level inheritance are not supported yet.
+Keyboard maps are generated from existing SVG slot IDs:
 
-In debug draw mode, slot `role`, `capture`, and `label` metadata are used to
-color slot rectangles and mark labeled slots. Current mode/layer binding targets
-are highlighted on top of the base layout.
+```toml
+[[keyboard.layers]]
+mode = "text"
+layer = "base"
+repeat_start_ms = 520
+repeat_interval_ms = 55
 
-## Built-in bindings
+[keyboard.layers.tap]
+key_q = "&kp Q"
+thumb_spc = "&kp SPC"
 
-Mode ownership controls are now represented as default bindings:
-
-- `base/base`, left-bottom hold: `mode_momentary:niri`
-- `passthrough/base`, left-bottom hold: `mode_momentary:niri`
-- `base/base`, left-bottom double tap: `mode_toggle:niri_locked`
-- `niri_locked/niri`, left-bottom double tap: `mode:base`
-- `base/base`, bottom-edge double tap: `mode_toggle:passthrough`
-- `passthrough/base`, bottom-edge double tap: `mode:base`
-- `base/base`, bottom-edge swipe up: `mode_toggle:text`
-- `passthrough/base`, bottom-edge swipe up: `mode:text`
-- `text/base`, bottom-edge swipe down: `mode:base`
-- Top-left tap in base, text, passthrough, or niri locked: `exit`
-
-Text mode uses key slots defined by the active SVG layout. Config files map
-slot IDs to key behavior with `[[keyboard.layers]]`; geometry stays in SVG.
-`keyboard.layers` supports direct per-slot gestures: tap, hold, repeat, and four swipe
-directions. Text mode draws keycaps even when debug draw is disabled, and labels
-are resolved from behavior bindings rather than from static SVG metadata.
-
-Text keycap labels are laid out as gesture hints:
-
-- Center: tap binding
-- Top edge: swipe up binding
-- Bottom edge: swipe down binding
-- Left edge: swipe left binding
-- Right edge: swipe right binding
-- Small lower-left hint: hold binding, when present
-
-The built-in text keyboard is phone-first:
-
-- tap: alphabetic QWERTY keys plus `ESC`, `SPC`, `BSPC`, `RET`
-- hold: upper modifier keys `SFT`, `CTL`, `ALT`, `SUP` stay pressed until touch release
-- swipe up: numbers and common symbols, optimized for quick thumb flicks
-- directional swipes on selected home/special keys: arrows, word movement, backspace, enter, escape, and tab
-
-The Charybdis/ZMK config is used as a reference for behavior composition,
-high-frequency actions, and naming conventions, not as the visual or ergonomic
-layout template.
-
-Default niri gestures still exist when no configured binding matches in niri modes:
-
-- One-finger swipe left: `focus-column-left`
-- One-finger swipe right: `focus-column-right`
-- One-finger swipe up: `focus-workspace-up`
-- One-finger swipe down: `focus-workspace-down`
-- Two-finger tap: `toggle-overview`
-
-Three-finger tap remains a hard safety exit.
-
-## Virtual keyboard
-
-The prototype binds `zwp_virtual_keyboard_manager_v1`, creates a virtual
-keyboard for the current `wl_seat`, sends an XKB keymap, then emits key
-press/release events for structured `key` and `key_sequence` behaviors.
-
-By default it uses a built-in `us/pc105` XKB keymap. To provide your own raw XKB
-keymap:
-
-```sh
-TOUCHDECK_XKB_KEYMAP=/path/to/keymap.xkb cargo run --release
+[keyboard.layers.swipe_left]
+key_h = "&hold_repeat LEFT"
+thumb_spc = "&hold_repeat BSPC"
 ```
 
-If `zwp_virtual_keyboard_manager_v1` is unavailable, keyboard actions are ignored
-and niri actions still work when `$NIRI_SOCKET` is available.
+`[[keyboard.layers]]` fields:
+
+- `mode`: defaults to `text`.
+- `layer`: defaults to `base`.
+- `tap`: slot ID to behavior table.
+- `hold`: slot ID to behavior table evaluated after hold threshold.
+- `repeat`: slot ID to fixed hold-repeat table.
+- `swipe_up`, `swipe_down`, `swipe_left`, `swipe_right`: slot ID to behavior table.
+- `fingers`: defaults to `1`.
+- `max_ms`: optional tap/swipe time limit.
+- `hold_ms`: optional hold threshold.
+- `repeat_start_ms`: first repeat delay for `&hold_repeat` in this layer.
+- `repeat_interval_ms`: later repeat interval for `&hold_repeat` in this layer.
+- `min_px`: optional swipe distance threshold.
+- `priority`: defaults to `0`.
+- `consume`: defaults to `true`.
+
+The same slot may have tap, hold, and directional swipe bindings. Text keycaps
+render gesture hints:
+
+- center: tap
+- top edge: swipe up
+- bottom edge: swipe down
+- left edge: swipe left
+- right edge: swipe right
+- small lower-left hint: hold
+
+## Behavior invocation syntax
+
+TouchDeck uses a ZMK-inspired behavior invocation syntax.
+
+Common builtins:
+
+- `&kp KEY`: tap a key or key chord.
+- `&kpe KEY`: tap with effective Rime keysym translation.
+- `&kpr KEY`: tap with raw Rime keysym translation.
+- `&ik KEY`: route as `ime-key`.
+- `&ak KEY`: route as `app-key`.
+- `&it KEY`: route as `ime-text`.
+- `&io KEY`: route as `ime-only`.
+- `&hold KEY`: press key on hold, release when touch is released.
+- `&key_repeat`: repeat the previous key sequence.
+- `&hold_repeat KEY`: immediately send key once, then repeat while held.
+- `&trans`: fall through to lower active layer.
+- `&none`: consume without action.
+
+Examples:
+
+```toml
+key_a = "&kp A"
+key_h = "&hold_repeat LEFT"
+key_slash = "&kpe QUESTION"
+thumb_ret = "&kp LC(RET)"
+```
+
+Named behaviors can define richer options:
+
+```toml
+[behaviors.cursor_left]
+type = "hold_repeat"
+keys = "LEFT"
+start_ms = 650
+interval_ms = 70
+route = "ime-key"
+
+[keyboard.layers.swipe_down]
+key_h = "&cursor_left"
+```
+
+## Key syntax
+
+Key syntax supports a ZMK-style subset:
+
+- Letters: `A` through `Z`.
+- Numbers: `N1` through `N0`.
+- Common keys: `RET`, `SPC`, `TAB`, `ESC`, `BSPC`, `DEL`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `HOME`, `END`, `PAGE_UP`, `PAGE_DOWN`.
+- Modifiers: `LCTRL`, `LSHIFT`, `LALT`, `LGUI`, `RCTRL`, `RSHIFT`, `RALT`, `RGUI`.
+- Modifier wrappers: `LC(...)`, `LS(...)`, `LA(...)`, `LG(...)`, `RC(...)`, `RS(...)`, `RA(...)`, `RG(...)`.
+- US punctuation: `MINUS`, `EQUAL`, `LEFT_BRACKET`, `RIGHT_BRACKET`, `SEMICOLON`, `SINGLE_QUOTE`, `GRAVE`, `BACKSLASH`, `COMMA`, `PERIOD`, `SLASH`.
+- Shifted punctuation: `EXCLAMATION`, `AT_SIGN`, `HASH`, `DOLLAR`, `PERCENT`, `CARET`, `AMPERSAND`, `ASTERISK`, `UNDERSCORE`, `QUESTION`.
+
+Examples:
+
+```text
+LC(C)
+LC(X) LC(S)
+LS(SLASH)
+LC(LEFT)
+```
+
+## Hold repeat timing
+
+`&hold_repeat KEY` has two intervals:
+
+```text
+cross threshold / hold trigger
+  -> send KEY once immediately
+  -> wait start_ms
+  -> repeat every interval_ms until release
+```
+
+Defaults come from:
+
+```text
+behavior start_ms / interval_ms
+  -> keyboard layer repeat_start_ms / repeat_interval_ms
+  -> TOUCHDECK_REPEAT_START_MS / TOUCHDECK_REPEAT_INTERVAL_MS
+  -> built-in fallback values
+```
+
+Default profile values are intentionally conservative for phone swipes:
+
+```toml
+repeat_start_ms = 520
+repeat_interval_ms = 55
+```
+
+This makes a short swipe produce one movement, while a deliberate hold starts
+continuous movement later.
+
+## Text output backends
+
+Configured in `[keyboard]` or `[ime]`:
+
+```toml
+[keyboard]
+output = "ime"
+```
+
+Supported values:
+
+- `virtual-keyboard`: send `zwp_virtual_keyboard_v1` events directly to the focused app.
+- `ime`: send key events to `touchdeck-ime` over a Unix socket.
+- `both`: send to both, useful only while debugging.
+
+`virtual-keyboard` is simple but may bypass input methods depending on compositor
+routing. `ime` is the preferred path for Rime input.
+
+## touchdeck-ime and Rime
+
+`touchdeck-ime` is a minimal Wayland input-method-v2 frontend backed by librime.
+It handles two input sources:
+
+- Physical keyboard events from input-method keyboard grab.
+- TouchDeck key events sent over `touchdeck-ime-v1` IPC.
+
+It shows preedit/candidates in a layer-shell popup near the text input rectangle
+when available. TouchDeck can also render the same IME status in its own overlay.
+
+Run it before `touchdeck` when using `output = "ime"`:
+
+```sh
+TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml cargo run --release --bin touchdeck-ime
+```
+
+Rime directories:
+
+- Shared data dir is currently `/usr/share/rime-data`.
+- User data dir defaults to `$XDG_DATA_HOME/touchdeck/rime`.
+- If `XDG_DATA_HOME` is unset, user data defaults to `~/.local/share/touchdeck/rime`.
+- Override user data with `TOUCHDECK_RIME_USER_DATA_DIR`.
+
+Example using an existing fcitx5-rime user directory:
+
+```sh
+TOUCHDECK_RIME_USER_DATA_DIR=/home/_WD_/.local/share/fcitx5/rime \
+TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
+cargo run --release --bin touchdeck-ime
+```
+
+Useful Rime environment variables:
+
+- `TOUCHDECK_RIME_USER_DATA_DIR`: user data directory.
+- `TOUCHDECK_RIME_DEPLOY=0`: skip deployment on startup.
+- `TOUCHDECK_RIME_LOG_DIR`: librime log directory.
+- `TOUCHDECK_RIME_LOG_LEVEL`: librime min log level.
+
+If your schema uses Lua processors/translators/filters, librime must be built
+with the corresponding plugin support. Errors such as `error creating processor:
+'lua_processor'` mean the Rime plugin stack is missing, not that the keymap is
+wrong.
+
+## IME key route model
+
+Each key behavior can choose how it interacts with Rime and the focused app.
+Default route is `ime-key`.
+
+Routes:
+
+- `ime-key`: send to Rime first. If Rime handles the key, consume it. If Rime does not handle it, forward the original key to the app.
+- `ime-only`: send to Rime first. If Rime does not handle it, consume it anyway.
+- `app-key`: bypass Rime and forward directly to the focused app.
+- `ime-text`: commit printable text through text-input; Ctrl/Alt/Super combinations are forwarded as keys.
+
+Examples:
+
+```toml
+[behaviors.cursor_left]
+type = "hold_repeat"
+keys = "LEFT"
+route = "ime-key"
+
+[behaviors.raw_enter]
+type = "key"
+keys = "RET"
+route = "app-key"
+
+[behaviors.literal_a]
+type = "key"
+keys = "A"
+route = "ime-text"
+```
+
+Inline aliases:
+
+```toml
+key_h = "&ik LEFT"  # Rime first, app fallback
+key_l = "&ak RIGHT" # app direct
+key_a = "&it A"     # text commit
+key_x = "&io ESC"   # Rime only
+```
+
+Use `ime-key` for normal text keyboard keys and cursor keys. It matches the
+fcitx model: `process_key` decides whether Rime consumed the key; unhandled keys
+are forwarded rather than guessed from preedit state.
+
+## Rime key translation
+
+`translation` controls what keysym is sent to Rime when modifiers are active.
+
+Configured globally:
+
+```toml
+[ime]
+key_translation = "effective"
+```
+
+Per behavior:
+
+```toml
+key_slash = "&kpr SLASH"      # raw / with Shift modifier if held
+key_question = "&kpe QUESTION" # effective ?
+```
+
+Policies:
+
+- `effective`: translate shifted printable keys before calling Rime. `Shift+/` can become `?`.
+- `raw`: send the raw key symbol plus modifier mask. `Shift+/` stays `/` with Shift.
 
 ## niri IPC
 
-niri actions are sent directly to `$NIRI_SOCKET` as JSON IPC requests. The
-prototype does not run `niri msg action` and does not keep a command fallback.
+niri actions are sent directly to `$NIRI_SOCKET` as JSON IPC. TouchDeck does not
+run `niri msg` and does not keep a command fallback.
 
-Supported socket actions right now:
+Supported configured actions currently include:
 
 - `focus-column-left`
 - `focus-column-right`
@@ -163,151 +433,36 @@ Supported socket actions right now:
 - `focus-workspace-down`
 - `toggle-overview`
 
-Configured niri actions are parsed into a typed action enum. Unsupported TOML
-actions fail during config loading; unsupported environment override values are
-logged and disabled instead of trying to guess a JSON shape or shelling out.
+The default phone portrait config maps niri portrait movement ergonomically, not
+as a literal desktop left/right mapping.
 
-## Configurable bindings
+## Debug and troubleshooting
 
-If `TOUCHDECK_CONFIG` is set, that TOML file is loaded. Otherwise `./touchdeck.toml`
-is loaded when it exists. If a config file contains `[[bindings]]`, those
-bindings replace the built-in bindings. There is no legacy `gesture/action`
-compatibility; use structured `trigger` and `behavior` tables.
+Useful flags:
 
-Use [touchdeck.example.toml](/home/disk/Projects/touchdeck-prototype/touchdeck.example.toml) as a full working example.
-
-Example binding:
-
-```toml
-[[bindings]]
-mode = "base"
-layer = "base"
-trigger = { type = "swipe", target = "bottom_edge", direction = "up" }
-behavior = { type = "mode", mode = "text" }
+```sh
+TOUCHDECK_DEBUG_DRAW=1
+TOUCHDECK_DEBUG_ALPHA=64
+TOUCHDECK_LOG_TOUCH=1
 ```
 
-Keyboard layers generate tap/hold/repeat/swipe bindings from existing SVG slots.
-They do not define geometry. Binding values use ZMK-style behavior invocation:
+When diagnosing key behavior, prefer `TOUCHDECK_LOG_TOUCH=1` plus
+`touchdeck-ime` logs. The IME log line includes key, state, modifiers, route,
+handled, and current preedit.
 
-```toml
-[keyboard]
+Common issues:
 
-[[keyboard.layers]]
-mode = "text"
-layer = "base"
+- Key reaches app but not Rime: use `output = "ime"`, start `touchdeck-ime`, and keep route as `ime-key`.
+- Cursor key edits app instead of candidate/preedit: keep route as `ime-key`; if Rime handles it, it will be consumed.
+- Cursor key must always bypass Rime: use `route = "app-key"` or `&ak KEY`.
+- Swipe jumps too far: increase `repeat_start_ms` or `start_ms`; increase `repeat_interval_ms` if continuous repeat is too fast.
+- Rime falls back to an unexpected schema: check your Rime user data directory and `default.custom.yaml` / `default.yaml`.
+- Lua schema fails: your librime/plugin build is missing Lua support.
 
-[keyboard.layers.tap]
-key_q = "&kp Q"
-key_w = "&kp W"
-key_spc = "&kp SPC"
-key_del = "&kp BSPC"
+## Current limitations
 
-[keyboard.layers.hold]
-key_shift = "&hold LSHIFT"
-key_ctrl = "&hold LCTRL"
-key_alt = "&hold LALT"
-key_super = "&hold LGUI"
-
-[keyboard.layers.swipe_up]
-key_q = "&kp N1"
-key_w = "&kp N2"
-key_a = "&kp EXCLAMATION"
-key_s = "&kp AT_SIGN"
-key_spc = "&kp TAB"
-
-[keyboard.layers.swipe_left]
-key_h = "&hold_repeat LEFT"
-key_spc = "&hold_repeat BSPC"
-
-[keyboard.layers.swipe_down]
-key_j = "&hold_repeat DOWN"
-key_spc = "&kp ESC"
-
-[keyboard.layers.swipe_right]
-key_l = "&hold_repeat RIGHT"
-key_spc = "&kp RET"
-```
-
-Map fields:
-
-- `mode`: defaults to `text`
-- `layer`: defaults to `base`
-- `tap`: optional table mapping slot IDs to behavior bindings
-- `hold`: optional table mapping slot IDs to behavior bindings evaluated at the hold threshold
-- `repeat`: optional table mapping slot IDs to fixed hold-repeat behavior bindings
-- `swipe_up`: optional table mapping slot IDs to behavior bindings
-- `swipe_down`: optional table mapping slot IDs to behavior bindings
-- `swipe_left`: optional table mapping slot IDs to behavior bindings
-- `swipe_right`: optional table mapping slot IDs to behavior bindings
-- `fingers`: defaults to `1`
-- `max_ms`: optional tap/swipe time limit
-- `hold_ms`: optional hold threshold
-- `min_px`: optional swipe distance threshold
-- `priority`: defaults to `0`
-- `consume`: defaults to `true`
-
-For example, this gives vim-style arrows without a nav layer:
-
-```toml
-[keyboard.layers.swipe_left]
-key_h = "&kp LEFT"
-
-[keyboard.layers.swipe_down]
-key_j = "&kp DOWN"
-
-[keyboard.layers.swipe_up]
-key_k = "&kp UP"
-
-[keyboard.layers.swipe_right]
-key_l = "&kp RIGHT"
-```
-
-Upper modifier slots are intended to be held with one thumb/finger while another key is tapped or flicked.
-
-The same slot can be bound to multiple gestures. The main keycap label remains
-the active tap binding; directional gesture bindings are rendered as edge hints.
-Swipe bindings that use `&hold KEY` or `&hold_repeat KEY` activate as soon as the
-finger crosses the swipe threshold and stay active until release. Plain `&kp KEY`
-swipes still resolve once on release.
-
-Supported trigger types:
-
-- `tap`
-- `double_tap`
-- `hold`
-- `swipe`
-
-Trigger fields:
-
-- `target`: one of the slot IDs declared by the configured layout
-- `fingers`: defaults to `1`
-- `direction`: required for `swipe`; one of `left`, `right`, `up`, `down`
-- `min_ms`: supported by `hold`
-- `max_ms`: supported by `tap`, `double_tap`, and `swipe`
-- `min_px`: supported by `swipe`
-
-Supported behavior types:
-
-- `key` with `key = "LC(C)"` or `key = "SPC"`
-- `key_sequence` with `keys = "LC(X) LC(S)"`
-- `niri` with `action = "focus-column-left"`
-- `mode` / `mode_set` with `mode = "base"`
-- `mode_toggle` with `mode = "passthrough"`
-- `mode_momentary` with `mode = "niri"`
-- `layer` / `layer_set` with `layer = "base"`
-- `layer_toggle` with `layer = "niri"`
-- `layer_momentary` with `layer = "niri"`
-- `sequence` with inline `steps = [...]`
-- `macro` with `macro = "copy"`
-- `transparent`
-- `noop`
-- `exit`
-
-Key syntax for `key`, `key_sequence`, and `key_sequence` macro steps follows a ZMK-style subset:
-
-- Examples: `A`, `N1`, `RET`, `LEFT`, `LC(C)`, `LC(X) LC(S)`, `LA(RET)`, `LG(LEFT)`
-- Common key tokens: `RET`, `SPC`, `TAB`, `ESC`, `BSPC`, `DEL`, `DELETE`, `LEFT`, `RIGHT`, `UP`, `DOWN`
-- Letter and number tokens: `A` through `Z`, `N1` through `N0`
-- US punctuation tokens: `MINUS`, `EQUAL`, `LEFT_BRACKET`, `RIGHT_BRACKET`, `SEMICOLON`, `SINGLE_QUOTE`, `GRAVE`, `BACKSLASH`, `COMMA`, `PERIOD`, `SLASH`
-- Shifted punctuation tokens: `EXCLAMATION`, `AT_SIGN`, `HASH`, `DOLLAR`, `PERCENT`, `CARET`, `AMPERSAND`, `ASTERISK`, `UNDERSCORE`, `QUESTION`
-- Modifier wrappers: `LC(...)`, `LS(...)`, `LA(...)`, `LG(...)`, `RC(...)`, `RS(...)`, `RA(...)`, `RG(...)`
+- SVG layout supports rect slots only.
+- Runtime has no built-in fallback slot/keymap defaults.
+- Modes and layers are intentionally small: `base`, `text`, `niri_momentary`, `niri_locked`, `passthrough`; layers `base`, `niri`.
+- `touchdeck-ime` is a focused Rime frontend, not a full fcitx replacement yet.
+- No graphical layout editor yet.
