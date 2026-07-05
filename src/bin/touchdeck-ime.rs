@@ -14,11 +14,16 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use wayland_client::protocol::{wl_registry, wl_seat};
-use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat};
+use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_keyboard_grab_v2::{self, ZwpInputMethodKeyboardGrabV2},
     zwp_input_method_manager_v2::{self, ZwpInputMethodManagerV2},
     zwp_input_method_v2::{self, ZwpInputMethodV2},
+};
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+    zwp_virtual_keyboard_manager_v1::{self, ZwpVirtualKeyboardManagerV1},
+    zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
 };
 
 const RIME_FALSE: c_int = 0;
@@ -59,11 +64,16 @@ const XK_SUPER_R: u32 = 0xffec;
 struct ImeApp {
     seat: Option<wl_seat::WlSeat>,
     input_method_manager: Option<ZwpInputMethodManagerV2>,
+    virtual_keyboard_manager: Option<ZwpVirtualKeyboardManagerV1>,
     input_method: Option<ZwpInputMethodV2>,
+    keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2>,
+    virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
     rime: Option<RimeEngine>,
     active: bool,
     serial: u32,
     preedit: String,
+    physical_modifiers: u32,
+    virtual_keyboard_has_keymap: bool,
     running: bool,
 }
 
@@ -143,16 +153,111 @@ fn main() -> Result<()> {
 
 impl ImeApp {
     fn maybe_init_input_method(&mut self, qh: &QueueHandle<Self>) {
-        if self.input_method.is_some() {
-            return;
+        if self.input_method.is_none() {
+            let (Some(manager), Some(seat)) = (&self.input_method_manager, &self.seat) else {
+                return;
+            };
+
+            self.input_method = Some(manager.get_input_method(seat, qh, ()));
+            eprintln!("touchdeck-ime: input-method-v2 object created");
         }
 
-        let (Some(manager), Some(seat)) = (&self.input_method_manager, &self.seat) else {
+        if self.virtual_keyboard.is_none() {
+            if let (Some(manager), Some(seat)) = (&self.virtual_keyboard_manager, &self.seat) {
+                self.virtual_keyboard = Some(manager.create_virtual_keyboard(seat, qh, ()));
+                eprintln!("touchdeck-ime: virtual-keyboard object created");
+            }
+        }
+
+        if self.keyboard_grab.is_none()
+            && self.input_method.is_some()
+            && self.virtual_keyboard.is_some()
+        {
+            if let Some(input_method) = &self.input_method {
+                self.keyboard_grab = Some(input_method.grab_keyboard(qh, ()));
+                eprintln!("touchdeck-ime: input-method keyboard grab created");
+            }
+        } else if self.input_method.is_some()
+            && self.virtual_keyboard_manager.is_none()
+            && self.keyboard_grab.is_none()
+        {
+            eprintln!(
+                "touchdeck-ime: no virtual-keyboard manager yet; physical keyboard grab disabled"
+            );
+        }
+    }
+
+    fn handle_physical_key(
+        &mut self,
+        time: u32,
+        key: u32,
+        state: WEnum<wl_keyboard::KeyState>,
+    ) {
+        let Some(key_state) = parse_wayland_key_state(&state) else {
+            self.passthrough_physical_key(time, key, state);
             return;
         };
 
-        self.input_method = Some(manager.get_input_method(seat, qh, ()));
-        eprintln!("touchdeck-ime: input-method-v2 object created");
+        if !self.active {
+            self.passthrough_physical_key(time, key, state);
+            return;
+        }
+
+        let Some(keysym) = evdev_key_to_keysym(key) else {
+            self.passthrough_physical_key(time, key, state);
+            return;
+        };
+
+        let output = {
+            let Some(rime) = self.rime.as_mut() else {
+                self.passthrough_physical_key(time, key, state);
+                return;
+            };
+
+            match rime.process_key(keysym, key_state, self.physical_modifiers) {
+                Ok(output) => output,
+                Err(err) => {
+                    eprintln!("touchdeck-ime: rime error for physical key {key}: {err:?}");
+                    self.passthrough_physical_key(time, key, state);
+                    return;
+                }
+            }
+        };
+
+        let handled = output.handled;
+        self.apply_rime_output(output);
+
+        if !handled {
+            self.passthrough_physical_key(time, key, state);
+        }
+
+        eprintln!(
+            "touchdeck-ime: physical key={} state={:?} modifiers={} handled={} preedit={:?}",
+            key, key_state, self.physical_modifiers, handled, self.preedit
+        );
+    }
+
+    fn passthrough_physical_key(
+        &self,
+        time: u32,
+        key: u32,
+        state: WEnum<wl_keyboard::KeyState>,
+    ) {
+        if let Some(virtual_keyboard) = &self.virtual_keyboard {
+            virtual_keyboard.key(time, key, state.into());
+        }
+    }
+
+    fn passthrough_physical_modifiers(
+        &self,
+        mods_depressed: u32,
+        mods_latched: u32,
+        mods_locked: u32,
+        group: u32,
+    ) {
+        if let Some(virtual_keyboard) = &self.virtual_keyboard {
+            virtual_keyboard.modifiers(mods_depressed, mods_latched, mods_locked, group);
+        }
     }
 
     fn handle_touchdeck_event(&mut self, event: TouchDeckEvent) {
@@ -328,6 +433,17 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ImeApp {
                 eprintln!("touchdeck-ime: bound zwp_input_method_manager_v2");
                 state.maybe_init_input_method(qh);
             }
+            "zwp_virtual_keyboard_manager_v1" if state.virtual_keyboard_manager.is_none() => {
+                state.virtual_keyboard_manager =
+                    Some(registry.bind::<ZwpVirtualKeyboardManagerV1, _, _>(
+                        name,
+                        version.min(1),
+                        qh,
+                        (),
+                    ));
+                eprintln!("touchdeck-ime: bound zwp_virtual_keyboard_manager_v1");
+                state.maybe_init_input_method(qh);
+            }
             _ => {}
         }
     }
@@ -415,6 +531,82 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
             }
             _ => {}
         }
+    }
+}
+
+impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for ImeApp {
+    fn event(
+        state: &mut Self,
+        _grab: &ZwpInputMethodKeyboardGrabV2,
+        event: zwp_input_method_keyboard_grab_v2::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_input_method_keyboard_grab_v2::Event::Keymap { format, fd, size } => {
+                if state.virtual_keyboard_has_keymap {
+                    return;
+                }
+
+                if let Some(virtual_keyboard) = &state.virtual_keyboard {
+                    virtual_keyboard.keymap(format.into(), fd.as_fd(), size);
+                    state.virtual_keyboard_has_keymap = true;
+                    eprintln!("touchdeck-ime: forwarded physical keymap to virtual keyboard");
+                }
+            }
+            zwp_input_method_keyboard_grab_v2::Event::Key {
+                time,
+                key,
+                state: key_state,
+                ..
+            } => {
+                state.handle_physical_key(time, key, key_state);
+            }
+            zwp_input_method_keyboard_grab_v2::Event::Modifiers {
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+                ..
+            } => {
+                state.physical_modifiers = mods_depressed;
+                state.passthrough_physical_modifiers(
+                    mods_depressed,
+                    mods_latched,
+                    mods_locked,
+                    group,
+                );
+            }
+            zwp_input_method_keyboard_grab_v2::Event::RepeatInfo { rate, delay } => {
+                eprintln!("touchdeck-ime: physical repeat_info rate={rate} delay={delay}");
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpVirtualKeyboardManagerV1, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _manager: &ZwpVirtualKeyboardManagerV1,
+        _event: zwp_virtual_keyboard_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpVirtualKeyboardV1, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _keyboard: &ZwpVirtualKeyboardV1,
+        _event: zwp_virtual_keyboard_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
     }
 }
 
@@ -700,6 +892,15 @@ fn parse_key_state(state: &str) -> Option<KeyState> {
     }
 }
 
+fn parse_wayland_key_state(state: &WEnum<wl_keyboard::KeyState>) -> Option<KeyState> {
+    match state {
+        WEnum::Value(wl_keyboard::KeyState::Pressed) => Some(KeyState::Pressed),
+        WEnum::Value(wl_keyboard::KeyState::Released) => Some(KeyState::Released),
+        WEnum::Unknown(2) => Some(KeyState::Pressed),
+        _ => None,
+    }
+}
+
 fn evdev_key_to_keysym(key: u32) -> Option<u32> {
     Some(match key {
         1 => XK_ESCAPE,
@@ -794,163 +995,165 @@ fn rime_modifier_mask(xkb_modifiers: u32) -> u32 {
 
 fn keysym_to_text(keysym: u32, rime_mask: u32) -> Option<String> {
     let shifted = rime_mask & RIME_SHIFT_MASK != 0;
-    let ch = match keysym {
-        key @ b'a' as u32..=b'z' as u32 => {
-            let ch = char::from_u32(key)?;
-            if shifted {
-                ch.to_ascii_uppercase()
-            } else {
-                ch
-            }
+    if (97..=122).contains(&keysym) {
+        let ch = char::from_u32(keysym)?;
+        return Some(if shifted {
+            ch.to_ascii_uppercase()
+        } else {
+            ch
         }
-        b'1' as u32 => {
+        .to_string());
+    }
+
+    let ch = match keysym {
+        49 => {
             if shifted {
                 '!'
             } else {
                 '1'
             }
         }
-        b'2' as u32 => {
+        50 => {
             if shifted {
                 '@'
             } else {
                 '2'
             }
         }
-        b'3' as u32 => {
+        51 => {
             if shifted {
                 '#'
             } else {
                 '3'
             }
         }
-        b'4' as u32 => {
+        52 => {
             if shifted {
                 '$'
             } else {
                 '4'
             }
         }
-        b'5' as u32 => {
+        53 => {
             if shifted {
                 '%'
             } else {
                 '5'
             }
         }
-        b'6' as u32 => {
+        54 => {
             if shifted {
                 '^'
             } else {
                 '6'
             }
         }
-        b'7' as u32 => {
+        55 => {
             if shifted {
                 '&'
             } else {
                 '7'
             }
         }
-        b'8' as u32 => {
+        56 => {
             if shifted {
                 '*'
             } else {
                 '8'
             }
         }
-        b'9' as u32 => {
+        57 => {
             if shifted {
                 '('
             } else {
                 '9'
             }
         }
-        b'0' as u32 => {
+        48 => {
             if shifted {
                 ')'
             } else {
                 '0'
             }
         }
-        b'-' as u32 => {
+        45 => {
             if shifted {
                 '_'
             } else {
                 '-'
             }
         }
-        b'=' as u32 => {
+        61 => {
             if shifted {
                 '+'
             } else {
                 '='
             }
         }
-        b'[' as u32 => {
+        91 => {
             if shifted {
                 '{'
             } else {
                 '['
             }
         }
-        b']' as u32 => {
+        93 => {
             if shifted {
                 '}'
             } else {
                 ']'
             }
         }
-        b'\\' as u32 => {
+        92 => {
             if shifted {
                 '|'
             } else {
                 '\\'
             }
         }
-        b';' as u32 => {
+        59 => {
             if shifted {
                 ':'
             } else {
                 ';'
             }
         }
-        b'\'' as u32 => {
+        39 => {
             if shifted {
                 '"'
             } else {
                 '\''
             }
         }
-        b'`' as u32 => {
+        96 => {
             if shifted {
                 '~'
             } else {
                 '`'
             }
         }
-        b',' as u32 => {
+        44 => {
             if shifted {
                 '<'
             } else {
                 ','
             }
         }
-        b'.' as u32 => {
+        46 => {
             if shifted {
                 '>'
             } else {
                 '.'
             }
         }
-        b'/' as u32 => {
+        47 => {
             if shifted {
                 '?'
             } else {
                 '/'
             }
         }
-        b' ' as u32 => ' ',
+        32 => ' ',
         _ => return None,
     };
 
