@@ -72,6 +72,7 @@ const XK_SUPER_R: u32 = 0xffec;
 
 #[derive(Default)]
 struct ImeApp {
+    config: ImeRuntimeConfig,
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     seat: Option<wl_seat::WlSeat>,
@@ -114,6 +115,94 @@ struct RectPx {
 struct TextRenderer {
     font_system: FontSystem,
     swash_cache: SwashCache,
+}
+
+#[derive(Clone, Debug)]
+struct ImeRuntimeConfig {
+    popup: PopupConfig,
+}
+
+impl Default for ImeRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            popup: PopupConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PopupConfig {
+    width: u32,
+    max_candidates: usize,
+    height_empty: u32,
+    height_candidates: u32,
+    header_height: i32,
+    padding_x: i32,
+    header_y: i32,
+    candidate_gap: i32,
+    candidate_min_width: i32,
+    candidate_max_width: i32,
+    candidate_unit_width: i32,
+    candidate_extra_width: i32,
+    preedit_font_size: f32,
+    candidate_font_size: f32,
+    background_color: Rgba,
+    border_color: Rgba,
+    separator_color: Rgba,
+    preedit_color: Rgba,
+    candidate_text_color: Rgba,
+    highlight_background_color: Rgba,
+    first_candidate_background_color: Rgba,
+}
+
+impl Default for PopupConfig {
+    fn default() -> Self {
+        Self {
+            width: 560,
+            max_candidates: 6,
+            height_empty: 48,
+            height_candidates: 88,
+            header_height: 32,
+            padding_x: 10,
+            header_y: 5,
+            candidate_gap: 6,
+            candidate_min_width: 48,
+            candidate_max_width: 154,
+            candidate_unit_width: 8,
+            candidate_extra_width: 26,
+            preedit_font_size: 15.5,
+            candidate_font_size: 16.0,
+            background_color: Rgba::new(0x1a, 0x22, 0x26, 0xe6),
+            border_color: Rgba::new(0x79, 0x8b, 0x86, 0x96),
+            separator_color: Rgba::new(0x6c, 0x78, 0x72, 0x70),
+            preedit_color: Rgba::new(0xd8, 0xde, 0xe8, 0xee),
+            candidate_text_color: Rgba::new(0xff, 0xff, 0xff, 0xf0),
+            highlight_background_color: Rgba::new(0x3b, 0x86, 0xf2, 0xdc),
+            first_candidate_background_color: Rgba::new(0x2e, 0x3d, 0x44, 0x70),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Rgba {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+impl Rgba {
+    const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+
+    fn rgba(self) -> [u8; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+
+    fn bgra(self) -> [u8; 4] {
+        [self.b, self.g, self.r, self.a]
+    }
 }
 
 impl Default for TextRenderer {
@@ -248,6 +337,7 @@ impl Default for ImeStatus {
 }
 
 fn main() -> Result<()> {
+    let config = load_ime_config().context("load touchdeck-ime config")?;
     let socket_path = env::var_os("TOUCHDECK_IME_SOCKET")
         .map(PathBuf::from)
         .unwrap_or_else(default_socket_path);
@@ -259,6 +349,7 @@ fn main() -> Result<()> {
     let qh = event_queue.handle();
 
     let mut app = ImeApp {
+        config,
         rime: Some(RimeEngine::new().context("initialize librime")?),
         running: true,
         ..Default::default()
@@ -399,9 +490,14 @@ impl ImeApp {
             .as_ref()
             .ok_or_else(|| anyhow!("input popup surface is unavailable"))?;
 
-        let width = env_u32("TOUCHDECK_IME_POPUP_WIDTH", 620).clamp(220, 1600);
-        let candidate_count = status.candidates.iter().take(5).count();
-        let height = if candidate_count == 0 { 74 } else { 132 };
+        let popup = self.config.popup.clone();
+        let width = env_u32("TOUCHDECK_IME_POPUP_WIDTH", popup.width).clamp(220, 1600);
+        let candidate_count = status.candidates.iter().take(popup.max_candidates).count();
+        let height = if candidate_count == 0 {
+            popup.height_empty
+        } else {
+            popup.height_candidates
+        };
         let stride = width
             .checked_mul(4)
             .ok_or_else(|| anyhow!("invalid popup buffer stride"))?;
@@ -414,7 +510,14 @@ impl ImeApp {
             .context("resize popup shm backing file")?;
         let mut mmap = unsafe { MmapMut::map_mut(&file).context("map popup shm backing file")? };
         mmap.fill(0);
-        draw_popup_status(&mut self.text_renderer, &mut mmap, width, height, status);
+        draw_popup_status(
+            &mut self.text_renderer,
+            &mut mmap,
+            width,
+            height,
+            status,
+            &popup,
+        );
         mmap.flush().context("flush popup shm backing file")?;
 
         let pool = shm.create_pool(file.as_fd(), len as i32, qh, ());
@@ -1314,6 +1417,161 @@ fn default_socket_path() -> PathBuf {
         .join("touchdeck-ime.sock")
 }
 
+fn load_ime_config() -> Result<ImeRuntimeConfig> {
+    let Some(path) = config_path() else {
+        return Ok(ImeRuntimeConfig::default());
+    };
+    let source = fs::read_to_string(&path)
+        .with_context(|| format!("read touchdeck config {}", path.display()))?;
+    let file_config: TouchDeckImeConfigFile = toml::from_str(&source)
+        .with_context(|| format!("parse touchdeck config {}", path.display()))?;
+    let mut config = ImeRuntimeConfig::default();
+    if let Some(ime) = file_config.ime {
+        if let Some(popup) = ime.popup {
+            config.popup.apply(popup)?;
+        }
+    }
+    Ok(config)
+}
+
+fn config_path() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("TOUCHDECK_CONFIG") {
+        return Some(PathBuf::from(path));
+    }
+    let default_path = PathBuf::from("touchdeck.toml");
+    default_path.exists().then_some(default_path)
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TouchDeckImeConfigFile {
+    ime: Option<ImeConfigFile>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ImeConfigFile {
+    popup: Option<PopupConfigFile>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PopupConfigFile {
+    width: Option<u32>,
+    max_candidates: Option<usize>,
+    height_empty: Option<u32>,
+    height_candidates: Option<u32>,
+    header_height: Option<i32>,
+    padding_x: Option<i32>,
+    header_y: Option<i32>,
+    candidate_gap: Option<i32>,
+    candidate_min_width: Option<i32>,
+    candidate_max_width: Option<i32>,
+    candidate_unit_width: Option<i32>,
+    candidate_extra_width: Option<i32>,
+    preedit_font_size: Option<f32>,
+    candidate_font_size: Option<f32>,
+    background_color: Option<String>,
+    border_color: Option<String>,
+    separator_color: Option<String>,
+    preedit_color: Option<String>,
+    candidate_text_color: Option<String>,
+    highlight_background_color: Option<String>,
+    first_candidate_background_color: Option<String>,
+}
+
+impl PopupConfig {
+    fn apply(&mut self, value: PopupConfigFile) -> Result<()> {
+        if let Some(width) = value.width {
+            self.width = width;
+        }
+        if let Some(max_candidates) = value.max_candidates {
+            self.max_candidates = max_candidates.max(1);
+        }
+        if let Some(height_empty) = value.height_empty {
+            self.height_empty = height_empty;
+        }
+        if let Some(height_candidates) = value.height_candidates {
+            self.height_candidates = height_candidates;
+        }
+        if let Some(header_height) = value.header_height {
+            self.header_height = header_height.max(1);
+        }
+        if let Some(padding_x) = value.padding_x {
+            self.padding_x = padding_x.max(0);
+        }
+        if let Some(header_y) = value.header_y {
+            self.header_y = header_y.max(0);
+        }
+        if let Some(candidate_gap) = value.candidate_gap {
+            self.candidate_gap = candidate_gap.max(0);
+        }
+        if let Some(candidate_min_width) = value.candidate_min_width {
+            self.candidate_min_width = candidate_min_width.max(1);
+        }
+        if let Some(candidate_max_width) = value.candidate_max_width {
+            self.candidate_max_width = candidate_max_width.max(self.candidate_min_width);
+        }
+        if let Some(candidate_unit_width) = value.candidate_unit_width {
+            self.candidate_unit_width = candidate_unit_width.max(1);
+        }
+        if let Some(candidate_extra_width) = value.candidate_extra_width {
+            self.candidate_extra_width = candidate_extra_width.max(0);
+        }
+        if let Some(preedit_font_size) = value.preedit_font_size {
+            self.preedit_font_size = preedit_font_size.max(1.0);
+        }
+        if let Some(candidate_font_size) = value.candidate_font_size {
+            self.candidate_font_size = candidate_font_size.max(1.0);
+        }
+        if let Some(color) = value.background_color {
+            self.background_color = parse_hex_color(&color, "ime.popup.background_color")?;
+        }
+        if let Some(color) = value.border_color {
+            self.border_color = parse_hex_color(&color, "ime.popup.border_color")?;
+        }
+        if let Some(color) = value.separator_color {
+            self.separator_color = parse_hex_color(&color, "ime.popup.separator_color")?;
+        }
+        if let Some(color) = value.preedit_color {
+            self.preedit_color = parse_hex_color(&color, "ime.popup.preedit_color")?;
+        }
+        if let Some(color) = value.candidate_text_color {
+            self.candidate_text_color =
+                parse_hex_color(&color, "ime.popup.candidate_text_color")?;
+        }
+        if let Some(color) = value.highlight_background_color {
+            self.highlight_background_color =
+                parse_hex_color(&color, "ime.popup.highlight_background_color")?;
+        }
+        if let Some(color) = value.first_candidate_background_color {
+            self.first_candidate_background_color =
+                parse_hex_color(&color, "ime.popup.first_candidate_background_color")?;
+        }
+        Ok(())
+    }
+}
+
+fn parse_hex_color(value: &str, name: &str) -> Result<Rgba> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    if hex.len() != 6 && hex.len() != 8 {
+        return Err(anyhow!(
+            "{name} must be #RRGGBB or #RRGGBBAA, got {value:?}"
+        ));
+    }
+    let r = parse_hex_byte(hex, 0, name)?;
+    let g = parse_hex_byte(hex, 2, name)?;
+    let b = parse_hex_byte(hex, 4, name)?;
+    let a = if hex.len() == 8 {
+        parse_hex_byte(hex, 6, name)?
+    } else {
+        0xff
+    };
+    Ok(Rgba::new(r, g, b, a))
+}
+
+fn parse_hex_byte(hex: &str, start: usize, name: &str) -> Result<u8> {
+    u8::from_str_radix(&hex[start..start + 2], 16)
+        .with_context(|| format!("parse {name} color component"))
+}
+
 fn default_rime_shared_data_dir() -> PathBuf {
     PathBuf::from("/usr/share/rime-data")
 }
@@ -1728,6 +1986,7 @@ fn draw_popup_status(
     width: u32,
     height: u32,
     status: &ImeStatus,
+    popup: &PopupConfig,
 ) {
     let panel = RectPx {
         x: 0,
@@ -1735,10 +1994,14 @@ fn draw_popup_status(
         w: width as i32,
         h: height as i32,
     };
-    fill_rect(buf, width, height, panel, [0x08, 0x14, 0x18, 0xee]);
-    draw_rect_frame(buf, width, height, panel, [0x40, 0xff, 0xd0, 0xd8]);
+    fill_rect(buf, width, height, panel, popup.background_color.bgra());
+    draw_rect_frame(buf, width, height, panel, popup.border_color.bgra());
 
-    let header_h = if status.candidates.is_empty() { height as i32 - 14 } else { 52 };
+    let header_h = if status.candidates.is_empty() {
+        height as i32
+    } else {
+        popup.header_height.min(height as i32)
+    };
     let mut header = String::new();
     if !status.preedit.is_empty() {
         header.push_str(&status.preedit);
@@ -1758,70 +2021,102 @@ fn draw_popup_status(
         width,
         height,
         RectPx {
-            x: 14,
-            y: 8,
-            w: width as i32 - 28,
-            h: header_h - 8,
+            x: popup.padding_x + 2,
+            y: popup.header_y,
+            w: width as i32 - (popup.padding_x + 2) * 2,
+            h: header_h - popup.header_y,
         },
         &header,
-        (header_h as f32 * 0.50).clamp(16.0, 28.0),
-        [0xff, 0xff, 0xff, 0xf0],
+        popup.preedit_font_size,
+        popup.preedit_color.rgba(),
     );
 
-    let visible = status.candidates.iter().take(5).collect::<Vec<_>>();
+    let visible = status
+        .candidates
+        .iter()
+        .take(popup.max_candidates)
+        .collect::<Vec<_>>();
     if visible.is_empty() {
         return;
     }
 
-    let gap = 8;
-    let row_y = header_h + 8;
-    let row_h = height as i32 - row_y - 12;
-    let box_w = ((width as i32 - 24 - gap * (visible.len() as i32 - 1))
-        / visible.len() as i32)
-        .max(34);
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: popup.padding_x,
+            y: header_h,
+            w: width as i32 - popup.padding_x * 2,
+            h: 1,
+        },
+        popup.separator_color.bgra(),
+    );
 
+    let gap = popup.candidate_gap;
+    let row_y = header_h + 7;
+    let row_h = height as i32 - row_y - 8;
+    let mut x = popup.padding_x;
     for (index, candidate) in visible.into_iter().enumerate() {
-        let rect = RectPx {
-            x: 12 + index as i32 * (box_w + gap),
-            y: row_y,
-            w: box_w,
-            h: row_h,
-        };
-        let highlighted = status.highlighted_candidate_index == Some(index);
-        let fill = if highlighted {
-            [0x10, 0xff, 0xb0, 0xa8]
-        } else {
-            [0x18, 0x38, 0x34, 0xc0]
-        };
-        fill_rect(buf, width, height, rect, fill);
-        draw_rect_frame(buf, width, height, rect, [0xb0, 0xff, 0xe0, 0xb8]);
-
         let mut label = candidate.label.clone();
+        if label.trim().is_empty() {
+            label = format!("{}", index + 1);
+        }
         if !candidate.text.is_empty() {
             label.push(' ');
             label.push_str(&candidate.text);
         }
-        if !candidate.comment.is_empty() {
-            label.push(' ');
-            label.push_str(&candidate.comment);
+
+        let text_units = label
+            .chars()
+            .map(|ch| if ch.is_ascii() { 1 } else { 2 })
+            .sum::<i32>();
+        let rect_w = (text_units * popup.candidate_unit_width + popup.candidate_extra_width)
+            .clamp(popup.candidate_min_width, popup.candidate_max_width);
+        if x + rect_w > width as i32 - popup.padding_x {
+            break;
         }
-        if label.trim().is_empty() {
-            label = format!("{}", index + 1);
+
+        let rect = RectPx {
+            x,
+            y: row_y,
+            w: rect_w,
+            h: row_h,
+        };
+        let highlighted = status.highlighted_candidate_index == Some(index);
+        if highlighted {
+            fill_rect(
+                buf,
+                width,
+                height,
+                rect,
+                popup.highlight_background_color.bgra(),
+            );
+        } else if index == 0 {
+            fill_rect(
+                buf,
+                width,
+                height,
+                rect,
+                popup.first_candidate_background_color.bgra(),
+            );
         }
+
         renderer.draw_text(
             buf,
             width,
             height,
             RectPx {
-                x: rect.x + 7,
-                y: rect.y + 5,
-                w: rect.w - 14,
-                h: rect.h - 10,
+                x: rect.x + 8,
+                y: rect.y + 4,
+                w: rect.w - 16,
+                h: rect.h - 8,
             },
             &label,
-            (rect.h as f32 * 0.43).clamp(14.0, 24.0),
-            [0xff, 0xff, 0xff, 0xf0],
+            popup.candidate_font_size,
+            popup.candidate_text_color.rgba(),
         );
+        x += rect.w + gap;
     }
 }
 

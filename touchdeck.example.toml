@@ -22,6 +22,30 @@ output = "ime"
 # output = "ime"
 # socket = "/run/user/1000/touchdeck-ime.sock"
 
+[ime.popup]
+# Physical-keyboard candidate popup. Colors are #RRGGBB or #RRGGBBAA.
+width = 560
+max_candidates = 6
+height_empty = 48
+height_candidates = 88
+header_height = 32
+padding_x = 10
+header_y = 5
+candidate_gap = 6
+candidate_min_width = 48
+candidate_max_width = 154
+candidate_unit_width = 8
+candidate_extra_width = 26
+preedit_font_size = 15.5
+candidate_font_size = 16.0
+background_color = "#1a2226e6"
+border_color = "#798b8696"
+separator_color = "#6c787270"
+preedit_color = "#d8dee8ee"
+candidate_text_color = "#fffffff0"
+highlight_background_color = "#3b86f2dc"
+first_candidate_background_color = "#2e3d4470"
+
 [[keyboard.maps]]
 mode = "text"
 layer = "base"
