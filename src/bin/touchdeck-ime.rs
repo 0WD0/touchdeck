@@ -44,6 +44,9 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::{self, ZwpVirtualKeyboardManagerV1},
     zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
 };
+use wayland_protocols_wlr::layer_shell::v1::client::{
+    zwlr_layer_shell_v1, zwlr_layer_surface_v1,
+};
 
 const RIME_FALSE: c_int = 0;
 const RIME_TRUE: c_int = 1;
@@ -91,11 +94,16 @@ struct ImeApp {
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     seat: Option<wl_seat::WlSeat>,
+    layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     input_method_manager: Option<ZwpInputMethodManagerV2>,
     virtual_keyboard_manager: Option<ZwpVirtualKeyboardManagerV1>,
     input_method: Option<ZwpInputMethodV2>,
     popup_surface: Option<wl_surface::WlSurface>,
     input_popup_surface: Option<ZwpInputPopupSurfaceV2>,
+    server_popup_surface: Option<wl_surface::WlSurface>,
+    server_popup_layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
+    server_popup_layer_configured: bool,
+    pending_server_popup_status: Option<ImeStatus>,
     keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2>,
     virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
     popup_buffers: VecDeque<PopupBuffer>,
@@ -646,6 +654,10 @@ impl ImeApp {
             surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
             surface.commit();
         }
+        if let Some(surface) = &self.server_popup_surface {
+            surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
+            surface.commit();
+        }
     }
 
     fn update_popup(&mut self, qh: &QueueHandle<Self>, source: &str) -> Result<()> {
@@ -665,11 +677,110 @@ impl ImeApp {
             return Ok(());
         }
 
+        if self.fcitx_focus.is_some() {
+            return self.render_server_popup(qh, &status);
+        }
+
         if !self.ensure_popup(qh)? {
             return Ok(());
         }
 
         self.render_input_popup(qh, &status)
+    }
+
+    fn render_server_popup(&mut self, qh: &QueueHandle<Self>, status: &ImeStatus) -> Result<()> {
+        if !self.ensure_server_popup(qh, status)? {
+            self.pending_server_popup_status = Some(status.clone());
+            return Ok(());
+        }
+
+        let surface = self
+            .server_popup_surface
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow!("server popup surface is unavailable"))?;
+        self.render_popup_to_surface(qh, &surface, status)
+    }
+
+    fn ensure_server_popup(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        status: &ImeStatus,
+    ) -> Result<bool> {
+        let (width, height) = self.popup_dimensions(status);
+        let (left, top) = self.server_popup_position(width, height);
+
+        if let Some(layer_surface) = &self.server_popup_layer_surface {
+            layer_surface.set_size(width, height);
+            layer_surface.set_margin(top, 0, 0, left);
+            if let Some(surface) = &self.server_popup_surface {
+                surface.commit();
+            }
+            return Ok(self.server_popup_layer_configured);
+        }
+
+        let (Some(compositor), Some(layer_shell)) = (&self.compositor, &self.layer_shell) else {
+            return Ok(false);
+        };
+
+        let surface = compositor.create_surface(qh, ());
+        let region = compositor.create_region(qh, ());
+        surface.set_input_region(Some(&region));
+        region.destroy();
+
+        let layer_surface = layer_shell.get_layer_surface(
+            &surface,
+            None,
+            zwlr_layer_shell_v1::Layer::Overlay,
+            "touchdeck-ime-popup".to_string(),
+            qh,
+            (),
+        );
+        layer_surface.set_anchor(
+            zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Left,
+        );
+        layer_surface.set_size(width, height);
+        layer_surface.set_margin(top, 0, 0, left);
+        layer_surface.set_keyboard_interactivity(
+            zwlr_layer_surface_v1::KeyboardInteractivity::None,
+        );
+        surface.commit();
+
+        self.server_popup_surface = Some(surface);
+        self.server_popup_layer_surface = Some(layer_surface);
+        self.server_popup_layer_configured = false;
+        eprintln!(
+            "touchdeck-ime: server popup layer created x={} y={} w={} h={}",
+            left, top, width, height
+        );
+
+        Ok(false)
+    }
+
+    fn server_popup_position(&self, width: u32, height: u32) -> (i32, i32) {
+        let gap = 6;
+        let Some(rect) = self
+            .fcitx_cursor_rect
+            .as_ref()
+            .filter(|rect| {
+                self.fcitx_focus
+                    .as_ref()
+                    .map(|target| rect.target.matches(target))
+                    .unwrap_or(false)
+            })
+        else {
+            return (0, 0);
+        };
+
+        let left = (rect.x + rect.w - width as i32).max(0);
+        let above = rect.y - height as i32 - gap;
+        let top = if above >= 0 {
+            above
+        } else {
+            rect.y + rect.h + gap
+        };
+
+        (left, top.max(0))
     }
 
     fn render_input_popup(&mut self, qh: &QueueHandle<Self>, status: &ImeStatus) -> Result<()> {
@@ -713,13 +824,7 @@ impl ImeApp {
         status: &ImeStatus,
     ) -> Result<(PopupBuffer, i32, i32)> {
         let popup = self.config.popup.clone();
-        let width = env_u32("TOUCHDECK_IME_POPUP_WIDTH", popup.width).clamp(220, 1600);
-        let candidate_count = status.candidates.iter().take(popup.max_candidates).count();
-        let height = if candidate_count == 0 {
-            popup.height_empty
-        } else {
-            popup.height_candidates
-        };
+        let (width, height) = self.popup_dimensions(status);
         let stride = width
             .checked_mul(4)
             .ok_or_else(|| anyhow!("invalid popup buffer stride"))?;
@@ -764,6 +869,19 @@ impl ImeApp {
             width as i32,
             height as i32,
         ))
+    }
+
+    fn popup_dimensions(&self, status: &ImeStatus) -> (u32, u32) {
+        let popup = &self.config.popup;
+        let width = env_u32("TOUCHDECK_IME_POPUP_WIDTH", popup.width).clamp(220, 1600);
+        let candidate_count = status.candidates.iter().take(popup.max_candidates).count();
+        let height = if candidate_count == 0 {
+            popup.height_empty
+        } else {
+            popup.height_candidates
+        };
+
+        (width, height)
     }
 
     fn handle_physical_key(
@@ -1454,6 +1572,17 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ImeApp {
                 eprintln!("touchdeck-ime: bound wl_seat");
                 state.maybe_init_input_method(qh);
             }
+            "zwlr_layer_shell_v1" if state.layer_shell.is_none() => {
+                state.layer_shell = Some(
+                    registry.bind::<zwlr_layer_shell_v1::ZwlrLayerShellV1, _, _>(
+                        name,
+                        version.min(4),
+                        qh,
+                        (),
+                    ),
+                );
+                eprintln!("touchdeck-ime: bound zwlr_layer_shell_v1");
+            }
             "zwp_input_method_manager_v2" if state.input_method_manager.is_none() => {
                 state.input_method_manager =
                     Some(registry.bind::<ZwpInputMethodManagerV2, _, _>(
@@ -1559,6 +1688,64 @@ impl Dispatch<wl_surface::WlSurface, ()> for ImeApp {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
+    }
+}
+
+impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _layer_shell: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
+        _event: zwlr_layer_shell_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for ImeApp {
+    fn event(
+        state: &mut Self,
+        layer_surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_layer_surface_v1::Event::Configure { serial, .. } => {
+                layer_surface.ack_configure(serial);
+                if state
+                    .server_popup_layer_surface
+                    .as_ref()
+                    .map(|surface| surface == layer_surface)
+                    .unwrap_or(false)
+                {
+                    state.server_popup_layer_configured = true;
+                    if let Some(status) = state.pending_server_popup_status.take() {
+                        if let Err(err) = state.render_server_popup(qh, &status) {
+                            eprintln!(
+                                "touchdeck-ime: failed to render configured server popup: {err:?}"
+                            );
+                        }
+                    }
+                }
+            }
+            zwlr_layer_surface_v1::Event::Closed => {
+                if state
+                    .server_popup_layer_surface
+                    .as_ref()
+                    .map(|surface| surface == layer_surface)
+                    .unwrap_or(false)
+                {
+                    state.server_popup_layer_surface = None;
+                    state.server_popup_surface = None;
+                    state.server_popup_layer_configured = false;
+                    state.pending_server_popup_status = None;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
