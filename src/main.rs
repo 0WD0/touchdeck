@@ -240,6 +240,8 @@ struct Config {
     two_finger_tap_ms: u32,
     exit_tap_ms: u32,
     hold_ms: u32,
+    repeat_start_ms: u32,
+    repeat_interval_ms: u32,
     double_tap_ms: u32,
     swipe_threshold_ratio: f64,
     swipe_threshold_min: f64,
@@ -272,6 +274,8 @@ impl Default for Config {
             two_finger_tap_ms: env_u32("TOUCHDECK_TWO_FINGER_TAP_MS", 350),
             exit_tap_ms: env_u32("TOUCHDECK_EXIT_TAP_MS", 450),
             hold_ms: env_u32("TOUCHDECK_HOLD_MS", 180),
+            repeat_start_ms: env_u32("TOUCHDECK_REPEAT_START_MS", 360),
+            repeat_interval_ms: env_u32("TOUCHDECK_REPEAT_INTERVAL_MS", 45),
             double_tap_ms: env_u32("TOUCHDECK_DOUBLE_TAP_MS", 280),
             swipe_threshold_ratio: env_f64("TOUCHDECK_SWIPE_THRESHOLD_RATIO", 0.08),
             swipe_threshold_min: env_f64("TOUCHDECK_SWIPE_THRESHOLD_MIN", 64.0),
@@ -748,6 +752,7 @@ impl Keymap {
         x: f64,
         y: f64,
         default_hold_ms: u32,
+        default_repeat_start_ms: u32,
     ) -> Option<(GestureAction, u32)> {
         for layer in layers.iter().rev() {
             let mut matches = self
@@ -768,7 +773,13 @@ impl Keymap {
 
                 return Some((
                     binding.behavior.clone().into_action(),
-                    binding.trigger.hold_ms().unwrap_or(default_hold_ms),
+                    binding.trigger.hold_ms().unwrap_or_else(|| {
+                        if binding.behavior.is_repeat() {
+                            default_repeat_start_ms
+                        } else {
+                            default_hold_ms
+                        }
+                    }),
                 ));
             }
         }
@@ -1555,6 +1566,10 @@ enum Behavior {
     Niri(NiriAction),
     KeySequence(Vec<KeyChord>),
     KeyHold(u32),
+    KeyRepeat {
+        sequence: Vec<KeyChord>,
+        interval_ms: Option<u32>,
+    },
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
     ModeToggle(Mode),
@@ -1572,11 +1587,22 @@ impl Behavior {
         matches!(self, Self::Transparent)
     }
 
+    fn is_repeat(&self) -> bool {
+        matches!(self, Self::KeyRepeat { .. })
+    }
+
     fn into_action(self) -> GestureAction {
         match self {
             Self::Niri(action) => GestureAction::Niri(action),
             Self::KeySequence(sequence) => GestureAction::KeySequence(sequence),
             Self::KeyHold(key) => GestureAction::KeyHold(key),
+            Self::KeyRepeat {
+                sequence,
+                interval_ms,
+            } => GestureAction::KeyRepeat {
+                sequence,
+                interval_ms,
+            },
             Self::Sequence(steps) => GestureAction::Sequence(steps),
             Self::ModeSet(mode) => GestureAction::ModeSet(mode),
             Self::ModeToggle(mode) => GestureAction::ModeToggle(mode),
@@ -1624,6 +1650,7 @@ struct KeyboardMapFileConfig {
     layer: Option<String>,
     tap: Option<HashMap<String, String>>,
     hold: Option<HashMap<String, String>>,
+    repeat: Option<HashMap<String, String>>,
     swipe_up: Option<HashMap<String, String>>,
     swipe_down: Option<HashMap<String, String>>,
     swipe_left: Option<HashMap<String, String>>,
@@ -1631,6 +1658,8 @@ struct KeyboardMapFileConfig {
     fingers: Option<usize>,
     max_ms: Option<u32>,
     hold_ms: Option<u32>,
+    repeat_start_ms: Option<u32>,
+    repeat_interval_ms: Option<u32>,
     min_px: Option<f64>,
     priority: Option<i32>,
     consume: Option<bool>,
@@ -1686,6 +1715,7 @@ struct BehaviorFileConfig {
     steps: Option<Vec<ActionStepFileConfig>>,
     mode: Option<String>,
     layer: Option<String>,
+    interval_ms: Option<u32>,
 }
 
 impl Binding {
@@ -1809,6 +1839,7 @@ fn keyboard_map_config(
             ("key_alt", "<leftalt>"),
             ("key_super", "<leftmeta>"),
         ])),
+        repeat: Some(key_pairs(&[("key_del", "DEL")])),
         swipe_up: Some(key_pairs(swipe_up)),
         swipe_down: Some(key_pairs(swipe_down)),
         swipe_left: Some(key_pairs(swipe_left)),
@@ -1816,6 +1847,8 @@ fn keyboard_map_config(
         fingers: None,
         max_ms: None,
         hold_ms: None,
+        repeat_start_ms: None,
+        repeat_interval_ms: None,
         min_px: None,
         priority: None,
         consume: None,
@@ -1838,6 +1871,8 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
         let fingers = map.fingers.unwrap_or(1);
         let max_ms = map.max_ms;
         let hold_ms = map.hold_ms;
+        let repeat_start_ms = map.repeat_start_ms;
+        let repeat_interval_ms = map.repeat_interval_ms;
         let min_px = map.min_px;
         let priority = map.priority.unwrap_or(0);
         let consume = map.consume.unwrap_or(true);
@@ -1867,6 +1902,19 @@ fn expand_keyboard_maps(maps: Vec<KeyboardMapFileConfig>, slots: &SlotRegistry) 
             map.hold,
             fingers,
             hold_ms,
+            priority,
+            consume,
+        )?;
+        expand_keyboard_repeat_map(
+            &mut bindings,
+            slots,
+            map_index,
+            mode,
+            layer,
+            map.repeat,
+            fingers,
+            repeat_start_ms,
+            repeat_interval_ms,
             priority,
             consume,
         )?;
@@ -1978,6 +2026,49 @@ fn expand_keyboard_hold_map(
             behavior: Behavior::KeyHold(parse_single_emacs_key(&key).with_context(|| {
                 format!("parse keyboard map {map_index} hold key for {slot_id} ({key})")
             })?),
+            priority,
+            consume,
+        });
+    }
+
+    Ok(())
+}
+
+fn expand_keyboard_repeat_map(
+    bindings: &mut Vec<Binding>,
+    slots: &SlotRegistry,
+    map_index: usize,
+    mode: Mode,
+    layer: Layer,
+    keys: Option<HashMap<String, String>>,
+    fingers: usize,
+    repeat_start_ms: Option<u32>,
+    repeat_interval_ms: Option<u32>,
+    priority: i32,
+    consume: bool,
+) -> Result<()> {
+    let Some(keys) = keys else {
+        return Ok(());
+    };
+
+    for (slot_id, key) in keys {
+        let target = slots
+            .get(&slot_id)
+            .with_context(|| format!("keyboard map {map_index} repeat target {slot_id}"))?;
+        bindings.push(Binding {
+            mode,
+            layer,
+            trigger: Trigger::Hold {
+                target,
+                fingers,
+                min_ms: repeat_start_ms,
+            },
+            behavior: Behavior::KeyRepeat {
+                sequence: parse_emacs_key_sequence(&key).with_context(|| {
+                    format!("parse keyboard map {map_index} repeat key for {slot_id} ({key})")
+                })?,
+                interval_ms: repeat_interval_ms,
+            },
             priority,
             consume,
         });
@@ -2125,6 +2216,14 @@ struct HeldKeyState {
     key: u32,
 }
 
+#[derive(Clone, Debug)]
+struct RepeatState {
+    hold_id: i32,
+    next_ms: u64,
+    interval_ms: u32,
+    sequence: Vec<KeyChord>,
+}
+
 #[derive(Debug)]
 struct Engine {
     mode: Mode,
@@ -2135,6 +2234,7 @@ struct Engine {
     hold_candidate: Option<HoldCandidate>,
     momentary: Option<MomentaryState>,
     held_keys: Vec<HeldKeyState>,
+    repeaters: Vec<RepeatState>,
     last_tap: Option<TapRecord>,
     last_action: Option<String>,
 }
@@ -2150,6 +2250,7 @@ impl Default for Engine {
             hold_candidate: None,
             momentary: None,
             held_keys: Vec::new(),
+            repeaters: Vec::new(),
             last_tap: None,
             last_action: None,
         }
@@ -2169,6 +2270,10 @@ enum GestureAction {
     KeySequence(Vec<KeyChord>),
     KeyHold(u32),
     KeyRelease(u32),
+    KeyRepeat {
+        sequence: Vec<KeyChord>,
+        interval_ms: Option<u32>,
+    },
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
     ModeToggle(Mode),
@@ -2997,6 +3102,9 @@ impl App {
             GestureAction::KeySequence(sequence) => {
                 self.send_key_sequence(&sequence);
             }
+            GestureAction::KeyRepeat { sequence, .. } => {
+                self.send_key_sequence(&sequence);
+            }
             GestureAction::KeyHold(key) => {
                 self.send_key_state(key, true);
             }
@@ -3253,9 +3361,18 @@ impl Engine {
     }
 
     fn next_timer_deadline_ms(&self) -> Option<u64> {
-        self.hold_candidate
+        let hold_deadline = self
+            .hold_candidate
             .as_ref()
-            .map(|candidate| candidate.deadline_ms)
+            .map(|candidate| candidate.deadline_ms);
+        self.repeaters
+            .iter()
+            .map(|repeater| repeater.next_ms)
+            .fold(hold_deadline, |deadline, repeat_deadline| {
+                Some(deadline.map_or(repeat_deadline, |deadline| {
+                    deadline.min(repeat_deadline)
+                }))
+            })
     }
 
     fn process_timers(
@@ -3264,35 +3381,65 @@ impl Engine {
         config: &Config,
         _size: SurfaceSize,
     ) -> Vec<EngineEffect> {
-        let Some(candidate) = self.hold_candidate.clone() else {
-            return Vec::new();
-        };
-
-        if now_ms < candidate.deadline_ms {
-            return Vec::new();
-        }
-
-        let Some(contact) = self.active.get_mut(&candidate.id) else {
-            self.hold_candidate = None;
-            return Vec::new();
-        };
-
-        if contact_movement(contact) > config.tap_radius {
-            self.hold_candidate = None;
-            return Vec::new();
-        }
-
-        contact.start_x = contact.last_x;
-        contact.start_y = contact.last_y;
-        contact.start_time = contact.last_time;
-        self.finished.clear();
-        self.max_active = 1;
-        let action = candidate.action.clone();
-        self.hold_candidate = None;
-        self.last_tap = None;
-
         let mut effects = Vec::new();
-        self.perform_action(action, &mut effects, config, Some(candidate.id));
+
+        if let Some(candidate) = self.hold_candidate.clone() {
+            if now_ms >= candidate.deadline_ms {
+                let Some(contact) = self.active.get_mut(&candidate.id) else {
+                    self.hold_candidate = None;
+                    return Vec::new();
+                };
+
+                if contact_movement(contact) > config.tap_radius {
+                    self.hold_candidate = None;
+                    return Vec::new();
+                }
+
+                contact.start_x = contact.last_x;
+                contact.start_y = contact.last_y;
+                contact.start_time = contact.last_time;
+                self.finished.clear();
+                self.max_active = 1;
+                let action = candidate.action.clone();
+                self.hold_candidate = None;
+                self.last_tap = None;
+
+                match action {
+                    GestureAction::KeyRepeat {
+                        sequence,
+                        interval_ms,
+                    } => {
+                        let interval_ms = interval_ms.unwrap_or(config.repeat_interval_ms).max(1);
+                        effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
+                            sequence.clone(),
+                        )));
+                        self.repeaters.push(RepeatState {
+                            hold_id: candidate.id,
+                            next_ms: now_ms + u64::from(interval_ms),
+                            interval_ms,
+                            sequence,
+                        });
+                    }
+                    action => {
+                        self.perform_action(action, &mut effects, config, Some(candidate.id));
+                    }
+                }
+            }
+        }
+
+        let active_ids = self.active.keys().copied().collect::<Vec<_>>();
+        for repeater in &mut self.repeaters {
+            if now_ms < repeater.next_ms || !active_ids.contains(&repeater.hold_id) {
+                continue;
+            }
+            effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
+                repeater.sequence.clone(),
+            )));
+            repeater.next_ms = now_ms + u64::from(repeater.interval_ms.max(1));
+        }
+        self.repeaters
+            .retain(|repeater| active_ids.contains(&repeater.hold_id));
+
         effects
     }
 
@@ -3323,7 +3470,15 @@ impl Engine {
         if let Some((action, min_ms)) =
             config
                 .keymap
-                .resolve_hold(self.mode, &self.layer_stack, size, x, y, config.hold_ms)
+                .resolve_hold(
+                    self.mode,
+                    &self.layer_stack,
+                    size,
+                    x,
+                    y,
+                    config.hold_ms,
+                    config.repeat_start_ms,
+                )
         {
             self.hold_candidate = Some(HoldCandidate {
                 id,
@@ -3378,8 +3533,10 @@ impl Engine {
         contact.last_time = time;
 
         let was_held_key = self.held_keys.iter().any(|held| held.hold_id == id);
+        let was_repeating = self.repeaters.iter().any(|repeater| repeater.hold_id == id);
         let mut held_key_effects = self.release_held_keys_for(id);
-        if was_held_key {
+        self.stop_repeaters_for(id);
+        if was_held_key || was_repeating {
             held_key_effects.extend(redraw_if_debug(config));
             self.max_active = self.active.len();
             return held_key_effects;
@@ -3599,6 +3756,7 @@ impl Engine {
         match action {
             GestureAction::Niri(_)
             | GestureAction::KeySequence(_)
+            | GestureAction::KeyRepeat { .. }
             | GestureAction::KeyRelease(_)
             | GestureAction::Exit => {
                 effects.push(EngineEffect::Dispatch(action));
@@ -3692,6 +3850,7 @@ impl Engine {
         self.mode = momentary.return_mode;
         self.layer_stack = momentary.return_layer_stack;
         self.hold_candidate = None;
+        self.repeaters.clear();
         self.last_tap = None;
         eprintln!(
             "touchdeck: return mode {} layer {}",
@@ -3707,6 +3866,7 @@ impl Engine {
         self.layer_stack = default_layer_stack_for_mode(mode);
         self.momentary = None;
         self.hold_candidate = None;
+        self.repeaters.clear();
         self.last_tap = None;
         eprintln!("touchdeck: mode {}", mode_name(mode));
         effects.push(EngineEffect::SetCapture(self.capture_policy(config)));
@@ -3825,6 +3985,7 @@ impl Engine {
             .iter()
             .map(|held| held.hold_id)
             .collect::<Vec<_>>();
+        ids.extend(self.repeaters.iter().map(|repeater| repeater.hold_id));
         if let Some(momentary) = &self.momentary {
             ids.push(momentary.hold_id);
         }
@@ -3879,11 +4040,17 @@ impl Engine {
             .collect()
     }
 
+    fn stop_repeaters_for(&mut self, hold_id: i32) {
+        self.repeaters
+            .retain(|repeater| repeater.hold_id != hold_id);
+    }
+
     fn reset_contacts(&mut self) {
         self.active.clear();
         self.finished.clear();
         self.max_active = 0;
         self.hold_candidate = None;
+        self.repeaters.clear();
     }
 }
 
@@ -4094,6 +4261,16 @@ fn parse_behavior(value: BehaviorFileConfig, macros: &MacroRegistry) -> Result<B
                 .or(value.keys)
                 .ok_or_else(|| anyhow!("key_hold behavior is missing key/keys"))?;
             Ok(Behavior::KeyHold(parse_single_emacs_key(&key)?))
+        }
+        "key_repeat" | "repeat_key" | "repeat" => {
+            let keys = value
+                .key
+                .or(value.keys)
+                .ok_or_else(|| anyhow!("key_repeat behavior is missing key/keys"))?;
+            Ok(Behavior::KeyRepeat {
+                sequence: parse_emacs_key_sequence(&keys)?,
+                interval_ms: value.interval_ms,
+            })
         }
         "sequence" => Ok(Behavior::Sequence(parse_action_steps(
             value
@@ -4418,6 +4595,9 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
         Behavior::Niri(action) => Some(action.as_str().to_string()),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),
         Behavior::KeyHold(key) => key_code_label(*key).map(|label| format!("{}+", label)),
+        Behavior::KeyRepeat { sequence, .. } => {
+            key_sequence_label(sequence).map(|label| format!("{}...", label))
+        }
         Behavior::Sequence(_) => Some("macro".to_string()),
         Behavior::ModeSet(mode) => Some(mode_name(*mode).to_string()),
         Behavior::ModeToggle(mode) => Some(format!("{}*", mode_name(*mode))),
@@ -5599,6 +5779,8 @@ mod tests {
             two_finger_tap_ms: 350,
             exit_tap_ms: 450,
             hold_ms: 180,
+            repeat_start_ms: 360,
+            repeat_interval_ms: 45,
             double_tap_ms: 280,
             swipe_threshold_ratio: 0.08,
             swipe_threshold_min: 64.0,

@@ -49,6 +49,8 @@ first_candidate_background_color = "#2e3d4470"
 [[keyboard.maps]]
 mode = "text"
 layer = "base"
+repeat_start_ms = 360
+repeat_interval_ms = 45
 
 [keyboard.maps.tap]
 key_q = "q"
@@ -88,6 +90,9 @@ key_shift = "<leftshift>"
 key_ctrl = "<leftctrl>"
 key_alt = "<leftalt>"
 key_super = "<leftmeta>"
+
+[keyboard.maps.repeat]
+key_del = "DEL"
 
 [keyboard.maps.swipe_up]
 key_q = "1"
