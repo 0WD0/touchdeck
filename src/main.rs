@@ -396,6 +396,8 @@ struct ImeStatus {
     protocol: String,
     #[serde(rename = "type")]
     kind: String,
+    #[serde(default)]
+    source: String,
     active: bool,
     preedit: String,
     commit_preview: String,
@@ -2431,7 +2433,10 @@ impl App {
         let mut latest = None;
         if let Some(rx) = &self.ime_status_rx {
             while let Ok(status) = rx.try_recv() {
-                if status.protocol == "touchdeck-ime-v1" && status.kind == "status" {
+                if status.protocol == "touchdeck-ime-v1"
+                    && status.kind == "status"
+                    && status.source == "touchdeck"
+                {
                     latest = Some(status);
                 }
             }
@@ -3130,7 +3135,9 @@ impl App {
             Ok(0) => {}
             Ok(_) => match serde_json::from_str::<ImeStatus>(line.trim()) {
                 Ok(status)
-                    if status.protocol == "touchdeck-ime-v1" && status.kind == "status" =>
+                    if status.protocol == "touchdeck-ime-v1"
+                        && status.kind == "status"
+                        && status.source == "touchdeck" =>
                 {
                     if status != self.ime_status {
                         self.ime_status = status;

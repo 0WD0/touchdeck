@@ -1,6 +1,7 @@
+use std::collections::VecDeque;
 use std::env;
 use std::ffi::{CStr, CString};
-use std::fs;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::raw::{c_char, c_int, c_void};
@@ -13,12 +14,19 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache};
+use memmap2::MmapMut;
 use serde::{Deserialize, Serialize};
-use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat};
+use tempfile::tempfile;
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_keyboard, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface,
+};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_keyboard_grab_v2::{self, ZwpInputMethodKeyboardGrabV2},
     zwp_input_method_manager_v2::{self, ZwpInputMethodManagerV2},
+    zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2},
     zwp_input_method_v2::{self, ZwpInputMethodV2},
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
@@ -62,12 +70,18 @@ const XK_SUPER_R: u32 = 0xffec;
 
 #[derive(Default)]
 struct ImeApp {
+    compositor: Option<wl_compositor::WlCompositor>,
+    shm: Option<wl_shm::WlShm>,
     seat: Option<wl_seat::WlSeat>,
     input_method_manager: Option<ZwpInputMethodManagerV2>,
     virtual_keyboard_manager: Option<ZwpVirtualKeyboardManagerV1>,
     input_method: Option<ZwpInputMethodV2>,
+    popup_surface: Option<wl_surface::WlSurface>,
+    input_popup_surface: Option<ZwpInputPopupSurfaceV2>,
     keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2>,
     virtual_keyboard: Option<ZwpVirtualKeyboardV1>,
+    popup_buffers: VecDeque<PopupBuffer>,
+    text_renderer: TextRenderer,
     rime: Option<RimeEngine>,
     active: bool,
     serial: u32,
@@ -77,6 +91,80 @@ struct ImeApp {
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
     running: bool,
+}
+
+struct PopupBuffer {
+    _file: File,
+    _mmap: MmapMut,
+    _pool: wl_shm_pool::WlShmPool,
+    buffer: wl_buffer::WlBuffer,
+    released: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RectPx {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+struct TextRenderer {
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+}
+
+impl Default for TextRenderer {
+    fn default() -> Self {
+        Self {
+            font_system: FontSystem::new(),
+            swash_cache: SwashCache::new(),
+        }
+    }
+}
+
+impl TextRenderer {
+    fn draw_text(
+        &mut self,
+        buf: &mut [u8],
+        width: u32,
+        height: u32,
+        rect: RectPx,
+        text: &str,
+        font_size: f32,
+        color: [u8; 4],
+    ) {
+        if text.trim().is_empty() || rect.w <= 0 || rect.h <= 0 {
+            return;
+        }
+
+        let metrics = Metrics::new(font_size.max(1.0), (font_size * 1.25).max(1.0));
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(Some(rect.w.max(1) as f32), Some(rect.h.max(1) as f32));
+        let attrs = Attrs::new().family(Family::Name("Noto Sans CJK SC"));
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+
+        let text_color = Color::rgba(color[0], color[1], color[2], color[3]);
+        buffer.draw(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            text_color,
+            |x, y, w, h, color| {
+                blend_text_rect(
+                    buf,
+                    width,
+                    height,
+                    RectPx {
+                        x: rect.x + x,
+                        y: rect.y + y,
+                        w: w as i32,
+                        h: h as i32,
+                    },
+                    color,
+                );
+            },
+        );
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +218,7 @@ struct ImeStatus {
     protocol: String,
     #[serde(rename = "type")]
     kind: String,
+    source: String,
     active: bool,
     preedit: String,
     commit_preview: String,
@@ -144,6 +233,7 @@ impl Default for ImeStatus {
         Self {
             protocol: "touchdeck-ime-v1".to_string(),
             kind: "status".to_string(),
+            source: "unknown".to_string(),
             active: false,
             preedit: String::new(),
             commit_preview: String::new(),
@@ -188,8 +278,8 @@ fn main() -> Result<()> {
         while let Ok(request) = event_rx.try_recv() {
             match request {
                 TouchDeckRequest::Event { event, response } => {
-                    let status = app.handle_touchdeck_event(event);
-                    app.broadcast_status();
+                    let status = app.handle_touchdeck_event(&qh, event);
+                    app.broadcast_status("touchdeck");
                     let _ = response.send(status);
                 }
                 TouchDeckRequest::Subscribe { response } => {
@@ -249,8 +339,115 @@ impl ImeApp {
         }
     }
 
+    fn ensure_popup(&mut self, qh: &QueueHandle<Self>) -> Result<bool> {
+        if self.popup_surface.is_some() && self.input_popup_surface.is_some() {
+            return Ok(true);
+        }
+
+        let (Some(compositor), Some(input_method)) = (&self.compositor, &self.input_method) else {
+            return Ok(false);
+        };
+
+        let surface = compositor.create_surface(qh, ());
+        let region = compositor.create_region(qh, ());
+        surface.set_input_region(Some(&region));
+        region.destroy();
+
+        let input_popup = input_method.get_input_popup_surface(&surface, qh, ());
+        self.popup_surface = Some(surface);
+        self.input_popup_surface = Some(input_popup);
+        eprintln!("touchdeck-ime: input popup surface created");
+
+        Ok(true)
+    }
+
+    fn hide_popup(&mut self, _qh: &QueueHandle<Self>) {
+        if let Some(surface) = &self.popup_surface {
+            surface.attach(None::<&wl_buffer::WlBuffer>, 0, 0);
+            surface.commit();
+        }
+    }
+
+    fn update_popup(&mut self, qh: &QueueHandle<Self>, source: &str) -> Result<()> {
+        if source != "physical" {
+            self.hide_popup(qh);
+            return Ok(());
+        }
+
+        let status = self.current_status_with_source(source);
+        if !status.active || status_is_empty(&status) {
+            self.hide_popup(qh);
+            return Ok(());
+        }
+
+        if !self.ensure_popup(qh)? {
+            return Ok(());
+        }
+
+        self.render_popup(qh, &status)
+    }
+
+    fn render_popup(&mut self, qh: &QueueHandle<Self>, status: &ImeStatus) -> Result<()> {
+        let shm = self
+            .shm
+            .as_ref()
+            .ok_or_else(|| anyhow!("wl_shm global is unavailable"))?;
+        let surface = self
+            .popup_surface
+            .as_ref()
+            .ok_or_else(|| anyhow!("input popup surface is unavailable"))?;
+
+        let width = env_u32("TOUCHDECK_IME_POPUP_WIDTH", 620).clamp(220, 1600);
+        let candidate_count = status.candidates.iter().take(5).count();
+        let height = if candidate_count == 0 { 74 } else { 132 };
+        let stride = width
+            .checked_mul(4)
+            .ok_or_else(|| anyhow!("invalid popup buffer stride"))?;
+        let len = stride
+            .checked_mul(height)
+            .ok_or_else(|| anyhow!("invalid popup buffer size"))?;
+
+        let file = tempfile().context("create popup shm backing file")?;
+        file.set_len(u64::from(len))
+            .context("resize popup shm backing file")?;
+        let mut mmap = unsafe { MmapMut::map_mut(&file).context("map popup shm backing file")? };
+        mmap.fill(0);
+        draw_popup_status(&mut self.text_renderer, &mut mmap, width, height, status);
+        mmap.flush().context("flush popup shm backing file")?;
+
+        let pool = shm.create_pool(file.as_fd(), len as i32, qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Argb8888,
+            qh,
+            (),
+        );
+
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, width as i32, height as i32);
+        surface.commit();
+
+        self.popup_buffers.push_back(PopupBuffer {
+            _file: file,
+            _mmap: mmap,
+            _pool: pool,
+            buffer,
+            released: false,
+        });
+        self.popup_buffers.retain(|buffer| !buffer.released);
+        while self.popup_buffers.len() > 8 {
+            self.popup_buffers.pop_front();
+        }
+
+        Ok(())
+    }
+
     fn handle_physical_key(
         &mut self,
+        qh: &QueueHandle<Self>,
         time: u32,
         key: u32,
         state: WEnum<wl_keyboard::KeyState>,
@@ -292,12 +489,15 @@ impl ImeApp {
         if !handled {
             self.passthrough_physical_key(time, key, state);
         }
+        if let Err(err) = self.update_popup(qh, "physical") {
+            eprintln!("touchdeck-ime: failed to update popup: {err:?}");
+        }
 
         eprintln!(
             "touchdeck-ime: physical key={} state={:?} modifiers={} handled={} preedit={:?}",
             key, key_state, self.physical_modifiers, handled, self.preedit
         );
-        self.broadcast_status();
+        self.broadcast_status("physical");
     }
 
     fn passthrough_physical_key(
@@ -323,15 +523,15 @@ impl ImeApp {
         }
     }
 
-    fn handle_touchdeck_event(&mut self, event: TouchDeckEvent) -> ImeStatus {
+    fn handle_touchdeck_event(&mut self, qh: &QueueHandle<Self>, event: TouchDeckEvent) -> ImeStatus {
         if event.protocol != "touchdeck-ime-v1" || event.kind != "key" || event.source != "touchdeck" {
             eprintln!("touchdeck-ime: ignored unsupported event {event:?}");
-            return self.current_status();
+            return self.current_status_with_source("touchdeck");
         }
 
         let Some(state) = parse_key_state(&event.state) else {
             eprintln!("touchdeck-ime: ignored key with unknown state {event:?}");
-            return self.current_status();
+            return self.current_status_with_source("touchdeck");
         };
 
         if !self.active {
@@ -339,25 +539,25 @@ impl ImeApp {
                 "touchdeck-ime: ignored key {} because input method is inactive",
                 event.key
             );
-            return self.current_status();
+            return self.current_status_with_source("touchdeck");
         }
 
         let Some(keysym) = evdev_key_to_keysym(event.key) else {
             eprintln!("touchdeck-ime: ignored unknown evdev key {}", event.key);
-            return self.current_status();
+            return self.current_status_with_source("touchdeck");
         };
 
         let output = {
             let Some(rime) = self.rime.as_mut() else {
                 eprintln!("touchdeck-ime: rime engine unavailable");
-                return self.current_status();
+                return self.current_status_with_source("touchdeck");
             };
 
             match rime.process_key(keysym, state, event.modifiers) {
                 Ok(output) => output,
                 Err(err) => {
                     eprintln!("touchdeck-ime: rime error for key {}: {err:?}", event.key);
-                    return self.current_status();
+                    return self.current_status_with_source("touchdeck");
                 }
             }
         };
@@ -374,7 +574,8 @@ impl ImeApp {
             event.key, state, event.time, event.modifiers, handled, self.preedit
         );
 
-        self.current_status()
+        self.hide_popup(qh);
+        self.current_status_with_source("touchdeck")
     }
 
     fn apply_rime_output(&mut self, output: RimeOutput) {
@@ -466,8 +667,13 @@ impl ImeApp {
     }
 
     fn current_status(&self) -> ImeStatus {
+        self.current_status_with_source("unknown")
+    }
+
+    fn current_status_with_source(&self, source: &str) -> ImeStatus {
         let mut status = self.status.clone();
         status.active = self.active;
+        status.source = source.to_string();
         status
     }
 
@@ -480,8 +686,8 @@ impl ImeApp {
         );
     }
 
-    fn broadcast_status(&mut self) {
-        let status = self.current_status();
+    fn broadcast_status(&mut self, source: &str) {
+        let status = self.current_status_with_source(source);
         self.status_subscribers
             .retain(|subscriber| subscriber.send(status.clone()).is_ok());
     }
@@ -506,6 +712,24 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ImeApp {
         };
 
         match interface.as_str() {
+            "wl_compositor" if state.compositor.is_none() => {
+                state.compositor = Some(registry.bind::<wl_compositor::WlCompositor, _, _>(
+                    name,
+                    version.min(6),
+                    qh,
+                    (),
+                ));
+                eprintln!("touchdeck-ime: bound wl_compositor");
+            }
+            "wl_shm" if state.shm.is_none() => {
+                state.shm = Some(registry.bind::<wl_shm::WlShm, _, _>(
+                    name,
+                    version.min(1),
+                    qh,
+                    (),
+                ));
+                eprintln!("touchdeck-ime: bound wl_shm");
+            }
             "wl_seat" if state.seat.is_none() => {
                 state.seat = Some(registry.bind::<wl_seat::WlSeat, _, _>(
                     name,
@@ -543,6 +767,87 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ImeApp {
     }
 }
 
+impl Dispatch<wl_compositor::WlCompositor, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _compositor: &wl_compositor::WlCompositor,
+        _event: wl_compositor::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_region::WlRegion, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _region: &wl_region::WlRegion,
+        _event: wl_region::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_shm::WlShm, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _shm: &wl_shm::WlShm,
+        _event: wl_shm::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_shm_pool::WlShmPool, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _pool: &wl_shm_pool::WlShmPool,
+        _event: wl_shm_pool::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<wl_buffer::WlBuffer, ()> for ImeApp {
+    fn event(
+        state: &mut Self,
+        buffer: &wl_buffer::WlBuffer,
+        event: wl_buffer::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if matches!(event, wl_buffer::Event::Release) {
+            for backing in &mut state.popup_buffers {
+                if backing.buffer == buffer.clone() {
+                    backing.released = true;
+                    break;
+                }
+            }
+            state.popup_buffers.retain(|backing| !backing.released);
+        }
+    }
+}
+
+impl Dispatch<wl_surface::WlSurface, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _surface: &wl_surface::WlSurface,
+        _event: wl_surface::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
 impl Dispatch<wl_seat::WlSeat, ()> for ImeApp {
     fn event(
         _state: &mut Self,
@@ -575,7 +880,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
         event: zwp_input_method_v2::Event,
         _data: &(),
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
     ) {
         match event {
             zwp_input_method_v2::Event::Activate => {
@@ -585,7 +890,8 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
                 if let Some(rime) = state.rime.as_mut() {
                     rime.clear();
                 }
-                state.broadcast_status();
+                state.hide_popup(qh);
+                state.broadcast_status("physical");
                 eprintln!("touchdeck-ime: activate");
             }
             zwp_input_method_v2::Event::Deactivate => {
@@ -595,7 +901,8 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
                 if let Some(rime) = state.rime.as_mut() {
                     rime.clear();
                 }
-                state.broadcast_status();
+                state.hide_popup(qh);
+                state.broadcast_status("physical");
                 eprintln!("touchdeck-ime: deactivate");
             }
             zwp_input_method_v2::Event::SurroundingText {
@@ -632,6 +939,32 @@ impl Dispatch<ZwpInputMethodV2, ()> for ImeApp {
     }
 }
 
+impl Dispatch<ZwpInputPopupSurfaceV2, ()> for ImeApp {
+    fn event(
+        _state: &mut Self,
+        _popup: &ZwpInputPopupSurfaceV2,
+        event: zwp_input_popup_surface_v2::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_input_popup_surface_v2::Event::TextInputRectangle {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                eprintln!(
+                    "touchdeck-ime: text input rectangle x={} y={} width={} height={}",
+                    x, y, width, height
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for ImeApp {
     fn event(
         state: &mut Self,
@@ -639,7 +972,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for ImeApp {
         event: zwp_input_method_keyboard_grab_v2::Event,
         _data: &(),
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
     ) {
         match event {
             zwp_input_method_keyboard_grab_v2::Event::Keymap { format, fd, size } => {
@@ -659,7 +992,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for ImeApp {
                 state: key_state,
                 ..
             } => {
-                state.handle_physical_key(time, key, key_state);
+                state.handle_physical_key(qh, time, key, key_state);
             }
             zwp_input_method_keyboard_grab_v2::Event::Modifiers {
                 mods_depressed,
@@ -1354,6 +1687,223 @@ fn keysym_to_text(keysym: u32, rime_mask: u32) -> Option<String> {
     };
 
     Some(ch.to_string())
+}
+
+fn status_is_empty(status: &ImeStatus) -> bool {
+    status.preedit.is_empty() && status.commit_preview.is_empty() && status.candidates.is_empty()
+}
+
+fn draw_popup_status(
+    renderer: &mut TextRenderer,
+    buf: &mut [u8],
+    width: u32,
+    height: u32,
+    status: &ImeStatus,
+) {
+    let panel = RectPx {
+        x: 0,
+        y: 0,
+        w: width as i32,
+        h: height as i32,
+    };
+    fill_rect(buf, width, height, panel, [0x08, 0x14, 0x18, 0xee]);
+    draw_rect_frame(buf, width, height, panel, [0x40, 0xff, 0xd0, 0xd8]);
+
+    let header_h = if status.candidates.is_empty() { height as i32 - 14 } else { 52 };
+    let mut header = String::new();
+    if !status.preedit.is_empty() {
+        header.push_str(&status.preedit);
+    }
+    if !status.commit_preview.is_empty() {
+        if !header.is_empty() {
+            header.push_str(" > ");
+        }
+        header.push_str(&status.commit_preview);
+    }
+    if header.is_empty() {
+        header.push_str("IME");
+    }
+
+    renderer.draw_text(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: 14,
+            y: 8,
+            w: width as i32 - 28,
+            h: header_h - 8,
+        },
+        &header,
+        (header_h as f32 * 0.50).clamp(16.0, 28.0),
+        [0xff, 0xff, 0xff, 0xf0],
+    );
+
+    let visible = status.candidates.iter().take(5).collect::<Vec<_>>();
+    if visible.is_empty() {
+        return;
+    }
+
+    let gap = 8;
+    let row_y = header_h + 8;
+    let row_h = height as i32 - row_y - 12;
+    let box_w = ((width as i32 - 24 - gap * (visible.len() as i32 - 1))
+        / visible.len() as i32)
+        .max(34);
+
+    for (index, candidate) in visible.into_iter().enumerate() {
+        let rect = RectPx {
+            x: 12 + index as i32 * (box_w + gap),
+            y: row_y,
+            w: box_w,
+            h: row_h,
+        };
+        let highlighted = status.highlighted_candidate_index == Some(index);
+        let fill = if highlighted {
+            [0x10, 0xff, 0xb0, 0xa8]
+        } else {
+            [0x18, 0x38, 0x34, 0xc0]
+        };
+        fill_rect(buf, width, height, rect, fill);
+        draw_rect_frame(buf, width, height, rect, [0xb0, 0xff, 0xe0, 0xb8]);
+
+        let mut label = candidate.label.clone();
+        if !candidate.text.is_empty() {
+            label.push(' ');
+            label.push_str(&candidate.text);
+        }
+        if !candidate.comment.is_empty() {
+            label.push(' ');
+            label.push_str(&candidate.comment);
+        }
+        if label.trim().is_empty() {
+            label = format!("{}", index + 1);
+        }
+        renderer.draw_text(
+            buf,
+            width,
+            height,
+            RectPx {
+                x: rect.x + 7,
+                y: rect.y + 5,
+                w: rect.w - 14,
+                h: rect.h - 10,
+            },
+            &label,
+            (rect.h as f32 * 0.43).clamp(14.0, 24.0),
+            [0xff, 0xff, 0xff, 0xf0],
+        );
+    }
+}
+
+fn draw_rect_frame(buf: &mut [u8], width: u32, height: u32, rect: RectPx, color: [u8; 4]) {
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: 2,
+        },
+        color,
+    );
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: rect.x,
+            y: rect.y + rect.h - 2,
+            w: rect.w,
+            h: 2,
+        },
+        color,
+    );
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: rect.x,
+            y: rect.y,
+            w: 2,
+            h: rect.h,
+        },
+        color,
+    );
+    fill_rect(
+        buf,
+        width,
+        height,
+        RectPx {
+            x: rect.x + rect.w - 2,
+            y: rect.y,
+            w: 2,
+            h: rect.h,
+        },
+        color,
+    );
+}
+
+fn fill_rect(buf: &mut [u8], width: u32, height: u32, rect: RectPx, color: [u8; 4]) {
+    let x0 = rect.x.max(0).min(width as i32) as u32;
+    let y0 = rect.y.max(0).min(height as i32) as u32;
+    let x1 = (rect.x + rect.w).max(0).min(width as i32) as u32;
+    let y1 = (rect.y + rect.h).max(0).min(height as i32) as u32;
+
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = ((y * width + x) * 4) as usize;
+            buf[index..index + 4].copy_from_slice(&color);
+        }
+    }
+}
+
+fn blend_text_rect(buf: &mut [u8], width: u32, height: u32, rect: RectPx, color: Color) {
+    let x0 = rect.x.max(0).min(width as i32) as u32;
+    let y0 = rect.y.max(0).min(height as i32) as u32;
+    let x1 = (rect.x + rect.w).max(0).min(width as i32) as u32;
+    let y1 = (rect.y + rect.h).max(0).min(height as i32) as u32;
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+
+    let [src_r, src_g, src_b, src_a] = color.as_rgba();
+    if src_a == 0 {
+        return;
+    }
+
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = ((y * width + x) * 4) as usize;
+            let dst_b = buf[index];
+            let dst_g = buf[index + 1];
+            let dst_r = buf[index + 2];
+            let dst_a = buf[index + 3];
+            let out_a = src_a as u16 + ((dst_a as u16 * (255 - src_a as u16)) / 255);
+
+            buf[index] = alpha_over(src_b, src_a, dst_b);
+            buf[index + 1] = alpha_over(src_g, src_a, dst_g);
+            buf[index + 2] = alpha_over(src_r, src_a, dst_r);
+            buf[index + 3] = out_a.min(255) as u8;
+        }
+    }
+}
+
+fn alpha_over(src: u8, src_a: u8, dst: u8) -> u8 {
+    let src = src as u16;
+    let src_a = src_a as u16;
+    let dst = dst as u16;
+    ((src * src_a + dst * (255 - src_a)) / 255).min(255) as u8
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(default)
 }
 
 fn poll_fd(fd: RawFd, timeout: Option<Duration>) -> Result<bool> {
