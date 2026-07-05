@@ -138,6 +138,14 @@ enum KeyTranslationPolicy {
     Raw,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyRoute {
+    ImeKey,
+    ImeText,
+    AppKey,
+    ImeOnly,
+}
+
 #[derive(Clone, Debug)]
 struct PopupConfig {
     width: u32,
@@ -282,6 +290,8 @@ struct TouchDeckEvent {
     modifiers: u32,
     #[serde(default)]
     translation: Option<String>,
+    #[serde(default)]
+    route: Option<String>,
 }
 
 enum TouchDeckRequest {
@@ -667,46 +677,81 @@ impl ImeApp {
             return self.current_status_with_source("touchdeck");
         };
 
-        if !self.active {
-            eprintln!(
-                "touchdeck-ime: ignored key {} because input method is inactive",
-                event.key
-            );
-            return self.current_status_with_source("touchdeck");
-        }
-
         let Some(keysym) = evdev_key_to_keysym(event.key) else {
             eprintln!("touchdeck-ime: ignored unknown evdev key {}", event.key);
             return self.current_status_with_source("touchdeck");
         };
-        let rime_was_empty = self.rime_state_is_empty();
-        if rime_was_empty && is_direct_passthrough_key(keysym) {
-            self.passthrough_touchdeck_key(event.time, event.key, state);
-            self.hide_popup(qh);
+
+        let route = match event.route.as_deref() {
+            Some(value) => match parse_key_route(value) {
+                Ok(route) => route,
+                Err(err) => {
+                    eprintln!("touchdeck-ime: ignored invalid key route: {err:?}");
+                    KeyRoute::ImeKey
+                }
+            },
+            None => KeyRoute::ImeKey,
+        };
+
+        let translation = match event.translation.as_deref() {
+            Some(value) => match parse_key_translation_policy(value) {
+                Ok(policy) => Some(policy),
+                Err(err) => {
+                    eprintln!("touchdeck-ime: ignored invalid key translation policy: {err:?}");
+                    None
+                }
+            },
+            None => None,
+        };
+
+        if !self.active {
+            if route == KeyRoute::AppKey {
+                self.passthrough_touchdeck_key(event.time, event.key, state);
+            } else {
+                eprintln!(
+                    "touchdeck-ime: ignored key {} because input method is inactive",
+                    event.key
+                );
+            }
             return self.current_status_with_source("touchdeck");
+        }
+
+        match route {
+            KeyRoute::AppKey => {
+                self.passthrough_touchdeck_key(event.time, event.key, state);
+                self.hide_popup(qh);
+                return self.current_status_with_source("touchdeck");
+            }
+            KeyRoute::ImeText => {
+                self.commit_touchdeck_text_or_forward(
+                    event.time,
+                    event.key,
+                    keysym,
+                    state,
+                    event.modifiers,
+                );
+                self.hide_popup(qh);
+                return self.current_status_with_source("touchdeck");
+            }
+            KeyRoute::ImeKey | KeyRoute::ImeOnly => {}
         }
 
         let output = {
             let Some(rime) = self.rime.as_mut() else {
                 eprintln!("touchdeck-ime: rime engine unavailable");
+                if route == KeyRoute::ImeKey {
+                    self.passthrough_touchdeck_key(event.time, event.key, state);
+                }
                 return self.current_status_with_source("touchdeck");
-            };
-
-            let translation = match event.translation.as_deref() {
-                Some(value) => match parse_key_translation_policy(value) {
-                    Ok(policy) => Some(policy),
-                    Err(err) => {
-                        eprintln!("touchdeck-ime: ignored invalid key translation policy: {err:?}");
-                        None
-                    }
-                },
-                None => None,
             };
 
             match rime.process_key(keysym, state, event.modifiers, translation) {
                 Ok(output) => output,
                 Err(err) => {
                     eprintln!("touchdeck-ime: rime error for key {}: {err:?}", event.key);
+                    if route == KeyRoute::ImeKey {
+                        self.passthrough_touchdeck_key(event.time, event.key, state);
+                    }
                     return self.current_status_with_source("touchdeck");
                 }
             }
@@ -715,20 +760,13 @@ impl ImeApp {
         let handled = output.handled;
         self.apply_rime_output(output);
 
-        if !handled {
-            self.fallback_unhandled_touchdeck_key(
-                event.time,
-                event.key,
-                keysym,
-                state,
-                event.modifiers,
-                rime_was_empty,
-            );
+        if !handled && route == KeyRoute::ImeKey {
+            self.passthrough_touchdeck_key(event.time, event.key, state);
         }
 
         eprintln!(
-            "touchdeck-ime: key={} state={:?} time={} modifiers={} handled={} preedit={:?}",
-            event.key, state, event.time, event.modifiers, handled, self.preedit
+            "touchdeck-ime: key={} state={:?} time={} modifiers={} route={:?} handled={} preedit={:?}",
+            event.key, state, event.time, event.modifiers, route, handled, self.preedit
         );
 
         self.hide_popup(qh);
@@ -788,42 +826,28 @@ impl ImeApp {
         input_method.commit(self.serial);
     }
 
-    fn fallback_unhandled_touchdeck_key(
+    fn commit_touchdeck_text_or_forward(
         &mut self,
         time: u32,
         key: u32,
         keysym: u32,
         state: KeyState,
         modifiers: u32,
-        rime_was_empty: bool,
     ) {
-        if is_direct_passthrough_key(keysym) {
-            if rime_was_empty {
-                self.passthrough_touchdeck_key(time, key, state);
-            }
-            return;
-        }
-
         if state != KeyState::Pressed {
             return;
         }
 
         let rime_mask = rime_modifier_mask(modifiers);
         if rime_mask & (RIME_CONTROL_MASK | RIME_ALT_MASK | RIME_SUPER_MASK) != 0 {
-            if rime_was_empty {
-                self.passthrough_touchdeck_key(time, key, state);
-            }
+            self.passthrough_touchdeck_key(time, key, state);
             return;
         }
 
-        match keysym {
-            _ => {
-                if let Some(text) = keysym_to_text(keysym, rime_mask) {
-                    self.commit_text(text);
-                } else {
-                    self.passthrough_touchdeck_key(time, key, state);
-                }
-            }
+        if let Some(text) = keysym_to_text(keysym, rime_mask) {
+            self.commit_text(text);
+        } else {
+            self.passthrough_touchdeck_key(time, key, state);
         }
     }
 
@@ -1552,6 +1576,16 @@ fn parse_key_translation_policy(value: &str) -> Result<KeyTranslationPolicy> {
     }
 }
 
+fn parse_key_route(value: &str) -> Result<KeyRoute> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "ime" | "ime_key" | "ime_first" | "rime" | "rime_first" => Ok(KeyRoute::ImeKey),
+        "ime_text" | "text" | "commit_text" => Ok(KeyRoute::ImeText),
+        "app" | "app_key" | "direct" | "passthrough" | "forward" => Ok(KeyRoute::AppKey),
+        "ime_only" | "rime_only" | "consume" | "filter" => Ok(KeyRoute::ImeOnly),
+        other => Err(anyhow!("unknown key route {other:?}")),
+    }
+}
+
 impl PopupConfig {
     fn apply(&mut self, value: PopupConfigFile) -> Result<()> {
         if let Some(width) = value.width {
@@ -2067,33 +2101,6 @@ fn status_is_empty(status: &ImeStatus) -> bool {
 
 fn is_empty_state_passthrough_key(keysym: u32) -> bool {
     matches!(keysym, XK_BACKSPACE | XK_DELETE)
-}
-
-fn is_direct_passthrough_key(keysym: u32) -> bool {
-    matches!(
-        keysym,
-        XK_ESCAPE
-            | XK_BACKSPACE
-            | XK_TAB
-            | XK_RETURN
-            | XK_DELETE
-            | XK_HOME
-            | XK_LEFT
-            | XK_UP
-            | XK_RIGHT
-            | XK_DOWN
-            | XK_PAGE_UP
-            | XK_PAGE_DOWN
-            | XK_END
-            | XK_SHIFT_L
-            | XK_SHIFT_R
-            | XK_CONTROL_L
-            | XK_CONTROL_R
-            | XK_ALT_L
-            | XK_ALT_R
-            | XK_SUPER_L
-            | XK_SUPER_R
-    )
 }
 
 fn draw_popup_status(

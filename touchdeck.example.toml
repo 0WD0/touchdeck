@@ -20,6 +20,10 @@ output = "ime"
 #   &kp KEY       tap a key sequence
 #   &kpe KEY      tap a key sequence and force effective Rime keysym translation
 #   &kpr KEY      tap a key sequence and force raw Rime keysym translation
+#   &ik KEY       tap through IME first; Rime handled keys are consumed, otherwise forwarded
+#   &ak KEY       bypass IME and forward directly to the focused app
+#   &it KEY       commit printable text through text-input instead of sending a key event
+#   &io KEY       send to IME only; unhandled keys are consumed
 #   &hold KEY     press on hold, release when the touch is released
 #   &key_repeat   repeat the previous key, like ZMK &key_repeat
 #   &hold_repeat KEY
@@ -51,6 +55,11 @@ morph = "&kpe QUESTION"
 #   effective  Physical Shift+/ is sent to Rime as "?"
 #   raw        Physical Shift+/ is sent to Rime as "/" with Shift modifier
 # Touch keyboard bindings can override this per behavior with &kpe / &kpr.
+# Touch keyboard route defaults to "ime-key". You can override per behavior:
+#   route = "ime-key"   Rime first, then forward unhandled keys to the app
+#   route = "app-key"   bypass Rime
+#   route = "ime-text"  commit printable text directly
+#   route = "ime-only"  Rime first, consume unhandled keys
 key_translation = "effective"
 
 [ime.popup]

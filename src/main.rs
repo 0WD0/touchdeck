@@ -508,6 +508,25 @@ impl KeyTranslationPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyRoute {
+    ImeKey,
+    ImeText,
+    AppKey,
+    ImeOnly,
+}
+
+impl KeyRoute {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ImeKey => "ime-key",
+            Self::ImeText => "ime-text",
+            Self::AppKey => "app-key",
+            Self::ImeOnly => "ime-only",
+        }
+    }
+}
+
 impl TextOutputBackend {
     fn uses_virtual_keyboard(self) -> bool {
         matches!(self, Self::VirtualKeyboard | Self::Both)
@@ -919,6 +938,7 @@ struct KeyChord {
 struct LastKeySequence {
     sequence: Vec<KeyChord>,
     translation: Option<KeyTranslationPolicy>,
+    route: Option<KeyRoute>,
 }
 
 #[derive(Clone, Debug)]
@@ -1413,10 +1433,12 @@ enum Behavior {
         sequence: Vec<KeyChord>,
         interval_ms: Option<u32>,
         translation: Option<KeyTranslationPolicy>,
+        route: Option<KeyRoute>,
     },
-    KeySequenceWithPolicy {
+    KeySequenceWithOptions {
         sequence: Vec<KeyChord>,
-        translation: KeyTranslationPolicy,
+        translation: Option<KeyTranslationPolicy>,
+        route: Option<KeyRoute>,
     },
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
@@ -1460,17 +1482,21 @@ impl Behavior {
                 sequence,
                 interval_ms,
                 translation,
+                route,
             } => GestureAction::HoldRepeat {
                 sequence,
                 interval_ms,
                 translation,
+                route,
             },
-            Self::KeySequenceWithPolicy {
+            Self::KeySequenceWithOptions {
                 sequence,
                 translation,
-            } => GestureAction::KeySequenceWithPolicy {
+                route,
+            } => GestureAction::KeySequenceWithOptions {
                 sequence,
                 translation,
+                route,
             },
             Self::Sequence(steps) => GestureAction::Sequence(steps),
             Self::ModeSet(mode) => GestureAction::ModeSet(mode),
@@ -1588,6 +1614,7 @@ struct BehaviorFileConfig {
     layer: Option<String>,
     interval_ms: Option<u32>,
     translation: Option<String>,
+    route: Option<String>,
     bindings: Option<Vec<String>>,
     mods: Option<Vec<String>>,
     #[serde(alias = "keep-mods")]
@@ -1612,6 +1639,7 @@ struct BehaviorDefinitionFileConfig {
     layer: Option<String>,
     interval_ms: Option<u32>,
     translation: Option<String>,
+    route: Option<String>,
     bindings: Option<Vec<String>>,
     mods: Option<Vec<String>>,
     #[serde(alias = "keep-mods")]
@@ -2058,6 +2086,7 @@ struct RepeatState {
     interval_ms: u32,
     sequence: Vec<KeyChord>,
     translation: Option<KeyTranslationPolicy>,
+    route: Option<KeyRoute>,
 }
 
 #[derive(Debug)]
@@ -2106,9 +2135,10 @@ enum EngineEffect {
 enum GestureAction {
     Niri(NiriAction),
     KeySequence(Vec<KeyChord>),
-    KeySequenceWithPolicy {
+    KeySequenceWithOptions {
         sequence: Vec<KeyChord>,
-        translation: KeyTranslationPolicy,
+        translation: Option<KeyTranslationPolicy>,
+        route: Option<KeyRoute>,
     },
     KeyHold(u32),
     ModMorph {
@@ -2122,6 +2152,7 @@ enum GestureAction {
         sequence: Vec<KeyChord>,
         interval_ms: Option<u32>,
         translation: Option<KeyTranslationPolicy>,
+        route: Option<KeyRoute>,
     },
     Sequence(Vec<ActionStep>),
     ModeSet(Mode),
@@ -2980,13 +3011,14 @@ impl App {
                 spawn_niri_action(action);
             }
             GestureAction::KeySequence(sequence) => {
-                self.send_key_sequence(&sequence, None);
+                self.send_key_sequence(&sequence, None, None);
             }
-            GestureAction::KeySequenceWithPolicy {
+            GestureAction::KeySequenceWithOptions {
                 sequence,
                 translation,
+                route,
             } => {
-                self.send_key_sequence(&sequence, Some(translation));
+                self.send_key_sequence(&sequence, translation, route);
             }
             GestureAction::ModMorph {
                 mods,
@@ -3008,9 +3040,10 @@ impl App {
             GestureAction::HoldRepeat {
                 sequence,
                 translation,
+                route,
                 ..
             } => {
-                self.send_key_sequence(&sequence, translation);
+                self.send_key_sequence(&sequence, translation, route);
             }
             GestureAction::KeyHold(key) => {
                 self.send_key_state(key, true);
@@ -3090,8 +3123,8 @@ impl App {
         let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
         let release_time = time.saturating_add(self.key_tap_gap_ms(key));
         eprintln!("touchdeck: key {key}");
-        self.emit_key_output(time, key, true, None);
-        self.emit_key_output(release_time, key, false, None);
+        self.emit_key_output(time, key, true, None, None);
+        self.emit_key_output(release_time, key, false, None, None);
         self.restore_held_modifiers();
     }
 
@@ -3099,6 +3132,7 @@ impl App {
         &mut self,
         sequence: &[KeyChord],
         translation: Option<KeyTranslationPolicy>,
+        route: Option<KeyRoute>,
     ) {
         let mut time = self.now_ms().min(u64::from(u32::MAX)) as u32;
         eprintln!("touchdeck: key sequence {sequence:?}");
@@ -3106,18 +3140,19 @@ impl App {
             self.last_key_sequence = Some(LastKeySequence {
                 sequence: sequence.to_vec(),
                 translation,
+                route,
             });
         }
         for chord in sequence {
             for key in &chord.keys {
-                self.emit_key_output(time, *key, true, translation);
+                self.emit_key_output(time, *key, true, translation, route);
                 time = time.saturating_add(1);
             }
             if chord.keys.len() == 1 {
                 time = time.saturating_add(self.key_tap_gap_ms(chord.keys[0]));
             }
             for key in chord.keys.iter().rev() {
-                self.emit_key_output(time, *key, false, translation);
+                self.emit_key_output(time, *key, false, translation, route);
                 time = time.saturating_add(1);
             }
         }
@@ -3130,7 +3165,7 @@ impl App {
             return;
         };
         eprintln!("touchdeck: repeat last key sequence {:?}", last.sequence);
-        self.send_key_sequence(&last.sequence, last.translation);
+        self.send_key_sequence(&last.sequence, last.translation, last.route);
     }
 
     fn run_action_steps(&mut self, steps: &[ActionStep]) {
@@ -3139,7 +3174,7 @@ impl App {
                 ActionStep::KeyDown(key) => self.send_key_state(*key, true),
                 ActionStep::KeyUp(key) => self.send_key_state(*key, false),
                 ActionStep::TapKey(key) => self.send_key(*key),
-                ActionStep::KeySequence(sequence) => self.send_key_sequence(sequence, None),
+                ActionStep::KeySequence(sequence) => self.send_key_sequence(sequence, None, None),
                 ActionStep::Niri(action) => spawn_niri_action(action.clone()),
                 ActionStep::DelayMs(ms) => {
                     std::thread::sleep(Duration::from_millis(u64::from(*ms)))
@@ -3150,7 +3185,7 @@ impl App {
 
     fn send_key_state(&mut self, key: u32, pressed: bool) {
         let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
-        self.emit_key_output(time, key, pressed, None);
+        self.emit_key_output(time, key, pressed, None, None);
     }
 
     fn emit_key_output(
@@ -3159,6 +3194,7 @@ impl App {
         key: u32,
         pressed: bool,
         translation: Option<KeyTranslationPolicy>,
+        route: Option<KeyRoute>,
     ) {
         let keyboard = if self.config.text_output.backend.uses_virtual_keyboard() {
             self.virtual_keyboard.clone()
@@ -3175,7 +3211,7 @@ impl App {
         }
 
         let Some(mask) = modifier_mask_for_key(key) else {
-            self.emit_ime_key_state(time, key, pressed, translation);
+            self.emit_ime_key_state(time, key, pressed, translation, route);
             return;
         };
 
@@ -3184,7 +3220,7 @@ impl App {
         } else {
             self.set_modifier_mask(self.modifier_mask & !mask);
         }
-        self.emit_ime_key_state(time, key, pressed, translation);
+        self.emit_ime_key_state(time, key, pressed, translation, route);
     }
 
     fn set_modifier_mask(&mut self, modifier_mask: u32) {
@@ -3233,6 +3269,7 @@ impl App {
         key: u32,
         pressed: bool,
         translation: Option<KeyTranslationPolicy>,
+        route: Option<KeyRoute>,
     ) {
         if !self.config.text_output.backend.uses_ime() {
             return;
@@ -3247,6 +3284,7 @@ impl App {
             "state": if pressed { "pressed" } else { "released" },
             "modifiers": self.modifier_mask,
             "translation": translation.map(KeyTranslationPolicy::as_str),
+            "route": route.map(KeyRoute::as_str),
         });
 
         let mut stream = match UnixStream::connect(&self.config.text_output.ime_socket) {
@@ -3443,6 +3481,7 @@ impl Engine {
                         sequence,
                         interval_ms,
                         translation,
+                        route,
                     } => {
                         self.start_hold_repeat(
                             candidate.id,
@@ -3450,6 +3489,7 @@ impl Engine {
                             sequence,
                             interval_ms,
                             translation,
+                            route,
                             config,
                             &mut effects,
                         );
@@ -3468,9 +3508,18 @@ impl Engine {
             }
             if let Some(translation) = repeater.translation {
                 effects.push(EngineEffect::Dispatch(
-                    GestureAction::KeySequenceWithPolicy {
+                    GestureAction::KeySequenceWithOptions {
                         sequence: repeater.sequence.clone(),
-                        translation,
+                        translation: Some(translation),
+                        route: repeater.route,
+                    },
+                ));
+            } else if let Some(route) = repeater.route {
+                effects.push(EngineEffect::Dispatch(
+                    GestureAction::KeySequenceWithOptions {
+                        sequence: repeater.sequence.clone(),
+                        translation: None,
+                        route: Some(route),
                     },
                 ));
             } else {
@@ -3829,7 +3878,7 @@ impl Engine {
         match action {
             GestureAction::Niri(_)
             | GestureAction::KeySequence(_)
-            | GestureAction::KeySequenceWithPolicy { .. }
+            | GestureAction::KeySequenceWithOptions { .. }
             | GestureAction::ModMorph { .. }
             | GestureAction::KeyRepeat
             | GestureAction::HoldRepeat { .. }
@@ -3905,12 +3954,14 @@ impl Engine {
                 sequence,
                 interval_ms,
                 translation,
+                route,
             } => self.start_hold_repeat(
                 hold_id,
                 now_ms,
                 sequence,
                 interval_ms,
                 translation,
+                route,
                 config,
                 effects,
             ),
@@ -3925,15 +3976,17 @@ impl Engine {
         sequence: Vec<KeyChord>,
         interval_ms: Option<u32>,
         translation: Option<KeyTranslationPolicy>,
+        route: Option<KeyRoute>,
         config: &Config,
         effects: &mut Vec<EngineEffect>,
     ) {
         let interval_ms = interval_ms.unwrap_or(config.repeat_interval_ms).max(1);
-        if let Some(translation) = translation {
+        if translation.is_some() || route.is_some() {
             effects.push(EngineEffect::Dispatch(
-                GestureAction::KeySequenceWithPolicy {
+                GestureAction::KeySequenceWithOptions {
                     sequence: sequence.clone(),
                     translation,
+                    route,
                 },
             ));
         } else {
@@ -3950,6 +4003,7 @@ impl Engine {
             interval_ms,
             sequence,
             translation,
+            route,
         });
     }
 
@@ -4412,10 +4466,21 @@ fn parse_behavior(
                 .or(value.keys)
                 .ok_or_else(|| anyhow!("key behavior is missing key/keys"))?;
             let sequence = parse_key_sequence(&keys)?;
-            if let Some(translation) = value.translation {
-                Ok(Behavior::KeySequenceWithPolicy {
+            let translation = value
+                .translation
+                .as_deref()
+                .map(parse_key_translation_policy)
+                .transpose()?;
+            let route = value
+                .route
+                .as_deref()
+                .map(parse_key_route)
+                .transpose()?;
+            if translation.is_some() || route.is_some() {
+                Ok(Behavior::KeySequenceWithOptions {
                     sequence,
-                    translation: parse_key_translation_policy(&translation)?,
+                    translation,
+                    route,
                 })
             } else {
                 Ok(Behavior::KeySequence(sequence))
@@ -4460,6 +4525,7 @@ fn parse_behavior(
                     .as_deref()
                     .map(parse_key_translation_policy)
                     .transpose()?,
+                route: value.route.as_deref().map(parse_key_route).transpose()?,
             })
         }
         "sequence" => Ok(Behavior::Sequence(parse_action_steps(
@@ -4597,6 +4663,7 @@ fn parse_defined_behavior_invocation(
             layer: definition.layer.as_deref(),
             interval_ms: definition.interval_ms,
             translation: definition.translation.as_deref(),
+            route: definition.route.as_deref(),
         },
         macros,
     )
@@ -4684,6 +4751,7 @@ struct BehaviorFields<'a> {
     layer: Option<&'a str>,
     interval_ms: Option<u32>,
     translation: Option<&'a str>,
+    route: Option<&'a str>,
 }
 
 fn parse_behavior_invocation_kind(
@@ -4702,32 +4770,68 @@ fn parse_behavior_invocation_kind(
         .translation
         .map(parse_key_translation_policy)
         .transpose()?;
+    let route = fields.route.map(parse_key_route).transpose()?;
 
     match normalize_name(kind).as_str() {
         "kp" | "key" | "key_sequence" | "keys" => {
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
             let sequence = parse_key_sequence(&keys)?;
-            if let Some(translation) = translation {
-                Ok(Behavior::KeySequenceWithPolicy {
+            if translation.is_some() || route.is_some() {
+                Ok(Behavior::KeySequenceWithOptions {
                     sequence,
                     translation,
+                    route,
                 })
             } else {
                 Ok(Behavior::KeySequence(sequence))
             }
         }
+        "ime_key" | "ik" => {
+            let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
+            Ok(Behavior::KeySequenceWithOptions {
+                sequence: parse_key_sequence(&keys)?,
+                translation,
+                route: Some(KeyRoute::ImeKey),
+            })
+        }
+        "ime_text" | "it" => {
+            let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
+            Ok(Behavior::KeySequenceWithOptions {
+                sequence: parse_key_sequence(&keys)?,
+                translation,
+                route: Some(KeyRoute::ImeText),
+            })
+        }
+        "app_key" | "ak" => {
+            let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
+            Ok(Behavior::KeySequenceWithOptions {
+                sequence: parse_key_sequence(&keys)?,
+                translation,
+                route: Some(KeyRoute::AppKey),
+            })
+        }
+        "ime_only" | "io" => {
+            let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
+            Ok(Behavior::KeySequenceWithOptions {
+                sequence: parse_key_sequence(&keys)?,
+                translation,
+                route: Some(KeyRoute::ImeOnly),
+            })
+        }
         "kpe" | "key_effective" | "effective_key" => {
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
-            Ok(Behavior::KeySequenceWithPolicy {
+            Ok(Behavior::KeySequenceWithOptions {
                 sequence: parse_key_sequence(&keys)?,
-                translation: KeyTranslationPolicy::Effective,
+                translation: Some(KeyTranslationPolicy::Effective),
+                route,
             })
         }
         "kpr" | "key_raw" | "raw_key" => {
             let keys = key_arg.ok_or_else(|| anyhow!("&{kind} is missing key/keys"))?;
-            Ok(Behavior::KeySequenceWithPolicy {
+            Ok(Behavior::KeySequenceWithOptions {
                 sequence: parse_key_sequence(&keys)?,
-                translation: KeyTranslationPolicy::Raw,
+                translation: Some(KeyTranslationPolicy::Raw),
+                route,
             })
         }
         "hold" | "kh" | "key_hold" | "hold_key" | "modifier" => {
@@ -4748,6 +4852,7 @@ fn parse_behavior_invocation_kind(
                 sequence: parse_key_sequence(&keys)?,
                 interval_ms: fields.interval_ms,
                 translation,
+                route,
             })
         }
         "macro" => {
@@ -4840,6 +4945,16 @@ fn parse_key_translation_policy(value: &str) -> Result<KeyTranslationPolicy> {
         "effective" | "effective_keysym" | "translated" => Ok(KeyTranslationPolicy::Effective),
         "raw" | "raw_keysym" | "base" => Ok(KeyTranslationPolicy::Raw),
         other => Err(anyhow!("unknown key translation policy {other:?}")),
+    }
+}
+
+fn parse_key_route(value: &str) -> Result<KeyRoute> {
+    match normalize_name(value).as_str() {
+        "ime" | "ime_key" | "ime_first" | "rime" | "rime_first" => Ok(KeyRoute::ImeKey),
+        "ime_text" | "text" | "commit_text" => Ok(KeyRoute::ImeText),
+        "app" | "app_key" | "direct" | "passthrough" | "forward" => Ok(KeyRoute::AppKey),
+        "ime_only" | "rime_only" | "consume" | "filter" => Ok(KeyRoute::ImeOnly),
+        other => Err(anyhow!("unknown key route {other:?}")),
     }
 }
 
@@ -5088,10 +5203,22 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
         Behavior::Niri(action) => Some(action.as_str().to_string()),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),
-        Behavior::KeySequenceWithPolicy {
+        Behavior::KeySequenceWithOptions {
             sequence,
             translation,
-        } => key_sequence_label(sequence).map(|label| format!("{label}/{}", translation.as_str())),
+            route,
+        } => key_sequence_label(sequence).map(|label| {
+            let mut label = label;
+            if let Some(translation) = translation {
+                label.push('/');
+                label.push_str(translation.as_str());
+            }
+            if let Some(route) = route {
+                label.push('@');
+                label.push_str(route.as_str());
+            }
+            label
+        }),
         Behavior::KeyHold(key) => key_code_label(*key).map(|label| format!("{}+", label)),
         Behavior::ModMorph { .. } => Some("morph".to_string()),
         Behavior::KeyRepeat => Some("repeat".to_string()),
@@ -6503,11 +6630,12 @@ behavior = { type = "mod_morph", mods = ["MOD_LSFT"], keep-mods = [], bindings =
                 normal: Box::new(Behavior::KeySequence(vec![KeyChord {
                     keys: vec![KEY_SLASH],
                 }])),
-                morph: Box::new(Behavior::KeySequenceWithPolicy {
+                morph: Box::new(Behavior::KeySequenceWithOptions {
                     sequence: vec![KeyChord {
                         keys: vec![KEY_LEFTSHIFT, KEY_SLASH],
                     }],
-                    translation: KeyTranslationPolicy::Effective,
+                    translation: Some(KeyTranslationPolicy::Effective),
+                    route: None,
                 }),
             }
         );
