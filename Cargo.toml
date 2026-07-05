@@ -17,3 +17,6 @@ toml = "0.8"
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+x11rb = { version = "0.13", default-features = false }
+xim = { version = "0.5", default-features = false, features = ["x11rb-server"] }
+zbus = { version = "5.14", features = ["blocking-api"] }

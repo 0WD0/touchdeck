@@ -9,7 +9,11 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    mpsc::{self, Receiver, Sender},
+    Arc,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +27,13 @@ use wayland_client::protocol::{
     wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
+use x11rb::connection::Connection as X11Connection;
+use x11rb::protocol::xproto::{KeyPressEvent, KEY_PRESS_EVENT};
+use xim::x11rb::HasConnection;
+use xim::{InputStyle, Server, ServerHandler, UserInputContext, XimConnections};
+use zbus::{interface, message::Header, ObjectServer};
+use zbus::names::OwnedBusName;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Structure, Value};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_keyboard_grab_v2::{self, ZwpInputMethodKeyboardGrabV2},
     zwp_input_method_manager_v2::{self, ZwpInputMethodManagerV2},
@@ -35,6 +46,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 
 const RIME_FALSE: c_int = 0;
+const RIME_TRUE: c_int = 1;
 const RIME_SHIFT_MASK: u32 = 1 << 0;
 const RIME_CONTROL_MASK: u32 = 1 << 2;
 const RIME_ALT_MASK: u32 = 1 << 3;
@@ -42,11 +54,14 @@ const RIME_SUPER_MASK: u32 = 1 << 26;
 const RIME_RELEASE_MASK: u32 = 1 << 30;
 const RIME_MODULE_DEFAULT: &[u8] = b"default\0";
 const RIME_MODULE_PLUGINS: &[u8] = b"plugins\0";
+const RIME_ASCII_MODE: &[u8] = b"ascii_mode\0";
 
 const XKB_SHIFT_MASK: u32 = 1 << 0;
 const XKB_CONTROL_MASK: u32 = 1 << 2;
 const XKB_ALT_MASK: u32 = 1 << 3;
 const XKB_SUPER_MASK: u32 = 1 << 6;
+
+const FCITX_INPUT_CONTEXT_INTERFACE: &str = "org.fcitx.Fcitx.InputContext1";
 
 const XK_BACKSPACE: u32 = 0xff08;
 const XK_TAB: u32 = 0xff09;
@@ -91,6 +106,9 @@ struct ImeApp {
     preedit: String,
     status: ImeStatus,
     status_subscribers: Vec<Sender<ImeStatus>>,
+    fcitx_output_tx: Option<Sender<FcitxDbusOutput>>,
+    fcitx_focus: Option<FcitxDbusTarget>,
+    fcitx_cursor_rect: Option<FcitxCursorRect>,
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
     running: bool,
@@ -304,6 +322,124 @@ enum TouchDeckRequest {
     },
 }
 
+enum XimRequest {
+    Key {
+        time: u32,
+        hardware_keycode: u8,
+        state_mask: u16,
+        state: KeyState,
+        response: Sender<XimKeyResponse>,
+    },
+    Reset {
+        response: Sender<String>,
+    },
+}
+
+#[derive(Debug, Default)]
+struct XimKeyResponse {
+    consumed: bool,
+    preedit: String,
+    commit: Option<String>,
+}
+
+enum FcitxDbusRequest {
+    FocusIn {
+        target: FcitxDbusTarget,
+        response: Sender<()>,
+    },
+    FocusOut {
+        target: FcitxDbusTarget,
+        response: Sender<()>,
+    },
+    Reset {
+        response: Sender<()>,
+    },
+    Key {
+        keyval: u32,
+        keycode: u32,
+        state: u32,
+        is_release: bool,
+        time: u32,
+        response: Sender<FcitxDbusKeyResponse>,
+    },
+    SetCursorRect {
+        target: FcitxDbusTarget,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        scale: f64,
+    },
+    SetSurroundingText {
+        text: String,
+        cursor: u32,
+        anchor: u32,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct FcitxDbusTarget {
+    path: OwnedObjectPath,
+    client: OwnedBusName,
+}
+
+impl FcitxDbusTarget {
+    fn matches(&self, other: &Self) -> bool {
+        self.path.as_str() == other.path.as_str() && self.client.as_str() == other.client.as_str()
+    }
+}
+
+#[derive(Debug)]
+struct FcitxDbusOutput {
+    target: FcitxDbusTarget,
+    preedit: Option<String>,
+    commit: Option<String>,
+    status: ImeStatus,
+    cursor_rect: Option<FcitxCursorRect>,
+}
+
+#[derive(Clone, Debug)]
+struct FcitxCursorRect {
+    target: FcitxDbusTarget,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    scale: f64,
+}
+
+#[derive(Debug, Default)]
+struct FcitxDbusKeyResponse {
+    handled: bool,
+    preedit: String,
+    commit: Option<String>,
+    status: ImeStatus,
+}
+
+const FCITX_BATCHED_COMMIT_STRING: u32 = 0;
+const FCITX_BATCHED_PREEDIT: u32 = 1;
+
+type FcitxFormattedText = Vec<(String, i32)>;
+type FcitxCandidateList = Vec<(String, String)>;
+type FcitxClientSideUiBody = (
+    FcitxFormattedText,
+    i32,
+    FcitxFormattedText,
+    FcitxFormattedText,
+    FcitxCandidateList,
+    i32,
+    i32,
+    bool,
+    bool,
+);
+
+#[derive(Clone, Copy, Debug)]
+enum FcitxDbusUnitKind {
+    FocusIn,
+    FocusOut,
+    Reset,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyState {
     Pressed,
@@ -362,6 +498,16 @@ fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(default_socket_path);
     let event_rx = spawn_socket_listener(socket_path)?;
+    let (xim_tx, xim_rx) = mpsc::channel();
+    if env::var("TOUCHDECK_IME_XIM").ok().as_deref() != Some("0") {
+        spawn_xim_server(xim_tx);
+    }
+    let (fcitx_tx, fcitx_rx) = mpsc::channel();
+    let fcitx_output_tx = if env::var("TOUCHDECK_IME_FCITX_DBUS").ok().as_deref() != Some("0") {
+        Some(spawn_fcitx_dbus_server(fcitx_tx))
+    } else {
+        None
+    };
 
     let conn = Connection::connect_to_env().context("connect to Wayland display")?;
     let display = conn.display();
@@ -372,6 +518,7 @@ fn main() -> Result<()> {
     let mut app = ImeApp {
         config,
         rime: Some(RimeEngine::new(key_translation).context("initialize librime")?),
+        fcitx_output_tx,
         running: true,
         ..Default::default()
     };
@@ -400,6 +547,14 @@ fn main() -> Result<()> {
                     app.add_status_subscriber(response);
                 }
             }
+        }
+
+        while let Ok(request) = xim_rx.try_recv() {
+            app.handle_xim_request(request);
+        }
+
+        while let Ok(request) = fcitx_rx.try_recv() {
+            app.handle_fcitx_dbus_request(request);
         }
 
         event_queue.flush().context("flush Wayland requests")?;
@@ -666,6 +821,253 @@ impl ImeApp {
         }
     }
 
+    fn handle_xim_request(&mut self, request: XimRequest) {
+        match request {
+            XimRequest::Key {
+                time,
+                hardware_keycode,
+                state_mask,
+                state,
+                response,
+            } => {
+                let result = self.handle_xim_key(time, hardware_keycode, state_mask, state);
+                let _ = response.send(result);
+            }
+            XimRequest::Reset { response } => {
+                if let Some(rime) = self.rime.as_mut() {
+                    rime.clear();
+                }
+                self.preedit.clear();
+                self.status = ImeStatus::default();
+                self.broadcast_status("xim");
+                let _ = response.send(String::new());
+            }
+        }
+    }
+
+    fn handle_fcitx_dbus_request(&mut self, request: FcitxDbusRequest) {
+        match request {
+            FcitxDbusRequest::FocusIn { target, response } => {
+                self.active = true;
+                self.status.active = true;
+                self.status.source = "fcitx-dbus".to_string();
+                eprintln!(
+                    "touchdeck-ime: fcitx dbus focus in path={} client={}",
+                    target.path.as_str(),
+                    target.client.as_str()
+                );
+                self.fcitx_focus = Some(target);
+                if let Some(rime) = self.rime.as_mut() {
+                    rime.set_ascii_mode(false);
+                }
+                self.broadcast_status("fcitx-dbus");
+                let _ = response.send(());
+            }
+            FcitxDbusRequest::FocusOut { target, response } => {
+                self.active = false;
+                eprintln!(
+                    "touchdeck-ime: fcitx dbus focus out path={} client={}",
+                    target.path.as_str(),
+                    target.client.as_str()
+                );
+                if self
+                    .fcitx_focus
+                    .as_ref()
+                    .map(|focus| focus.matches(&target))
+                    .unwrap_or(false)
+                {
+                    self.fcitx_focus = None;
+                    self.fcitx_cursor_rect = None;
+                }
+                if let Some(rime) = self.rime.as_mut() {
+                    rime.clear();
+                }
+                self.clear_preedit();
+                self.status.active = false;
+                self.broadcast_status("fcitx-dbus");
+                let _ = response.send(());
+            }
+            FcitxDbusRequest::Reset { response } => {
+                if let Some(rime) = self.rime.as_mut() {
+                    rime.clear();
+                }
+                self.clear_preedit();
+                self.broadcast_status("fcitx-dbus");
+                let _ = response.send(());
+            }
+            FcitxDbusRequest::Key {
+                keyval,
+                keycode,
+                state,
+                is_release,
+                time,
+                response,
+            } => {
+                let result = self.handle_fcitx_dbus_key(keyval, keycode, state, is_release, time);
+                let _ = response.send(result);
+            }
+            FcitxDbusRequest::SetCursorRect {
+                target,
+                x,
+                y,
+                w,
+                h,
+                scale,
+            } => {
+                eprintln!(
+                    "touchdeck-ime: fcitx dbus cursor rect path={} client={} x={x} y={y} w={w} h={h} scale={scale}",
+                    target.path.as_str(),
+                    target.client.as_str(),
+                );
+                if self
+                    .fcitx_focus
+                    .as_ref()
+                    .map(|focus| focus.matches(&target))
+                    .unwrap_or(false)
+                {
+                    self.fcitx_cursor_rect = Some(FcitxCursorRect {
+                        target,
+                        x,
+                        y,
+                        w,
+                        h,
+                        scale,
+                    });
+                }
+            }
+            FcitxDbusRequest::SetSurroundingText {
+                text,
+                cursor,
+                anchor,
+            } => {
+                eprintln!(
+                    "touchdeck-ime: fcitx dbus surrounding text len={} cursor={} anchor={}",
+                    text.len(),
+                    cursor,
+                    anchor
+                );
+            }
+        }
+    }
+
+    fn handle_fcitx_dbus_key(
+        &mut self,
+        keyval: u32,
+        keycode: u32,
+        state: u32,
+        is_release: bool,
+        time: u32,
+    ) -> FcitxDbusKeyResponse {
+        let key_state = if is_release {
+            KeyState::Released
+        } else {
+            KeyState::Pressed
+        };
+
+        if self.rime_state_is_empty() && is_empty_state_passthrough_key(keyval) {
+            return FcitxDbusKeyResponse::default();
+        }
+
+        let output = {
+            let Some(rime) = self.rime.as_mut() else {
+                eprintln!("touchdeck-ime: rime engine unavailable for fcitx dbus key");
+                return FcitxDbusKeyResponse::default();
+            };
+
+            match rime.process_key(keyval, key_state, state, Some(KeyTranslationPolicy::Raw)) {
+                Ok(output) => output,
+                Err(err) => {
+                    eprintln!(
+                        "touchdeck-ime: rime error for fcitx dbus keyval={keyval} keycode={keycode}: {err:?}"
+                    );
+                    return FcitxDbusKeyResponse::default();
+                }
+            }
+        };
+
+        let handled = output.handled;
+        let preedit = output.status.preedit.clone();
+        let commit = output.commit;
+
+        self.status = output.status;
+        self.status.active = true;
+        self.status.source = "fcitx-dbus".to_string();
+        self.preedit = preedit.clone();
+        let status = self.status.clone();
+        self.broadcast_status("fcitx-dbus");
+
+        eprintln!(
+            "touchdeck-ime: fcitx dbus keyval={keyval} keycode={keycode} state={state} release={is_release} time={time} handled={handled} preedit={:?}",
+            self.preedit
+        );
+
+        FcitxDbusKeyResponse {
+            handled,
+            preedit,
+            commit,
+            status,
+        }
+    }
+
+    fn handle_xim_key(
+        &mut self,
+        time: u32,
+        hardware_keycode: u8,
+        state_mask: u16,
+        state: KeyState,
+    ) -> XimKeyResponse {
+        let Some(keysym) = x_keycode_to_keysym(hardware_keycode) else {
+            eprintln!(
+                "touchdeck-ime: xim forward unknown hardware keycode {}",
+                hardware_keycode
+            );
+            return XimKeyResponse::default();
+        };
+
+        if self.rime_state_is_empty() && is_empty_state_passthrough_key(keysym) {
+            return XimKeyResponse::default();
+        }
+
+        let output = {
+            let Some(rime) = self.rime.as_mut() else {
+                eprintln!("touchdeck-ime: rime engine unavailable for xim key");
+                return XimKeyResponse::default();
+            };
+
+            match rime.process_key(keysym, state, u32::from(state_mask), None) {
+                Ok(output) => output,
+                Err(err) => {
+                    eprintln!(
+                        "touchdeck-ime: rime error for xim keycode {}: {err:?}",
+                        hardware_keycode
+                    );
+                    return XimKeyResponse::default();
+                }
+            }
+        };
+
+        let consumed = output.handled;
+        let preedit = output.status.preedit.clone();
+        let commit = output.commit;
+
+        self.status = output.status;
+        self.status.active = true;
+        self.status.source = "xim".to_string();
+        self.preedit = preedit.clone();
+        self.broadcast_status("xim");
+
+        eprintln!(
+            "touchdeck-ime: xim keycode={} keysym={} state={:?} time={} modifiers={} consumed={} preedit={:?}",
+            hardware_keycode, keysym, state, time, state_mask, consumed, self.preedit
+        );
+
+        XimKeyResponse {
+            consumed,
+            preedit,
+            commit,
+        }
+    }
+
     fn handle_touchdeck_event(&mut self, qh: &QueueHandle<Self>, event: TouchDeckEvent) -> ImeStatus {
         if event.protocol != "touchdeck-ime-v1" || event.kind != "key" || event.source != "touchdeck" {
             eprintln!("touchdeck-ime: ignored unsupported event {event:?}");
@@ -778,15 +1180,56 @@ impl ImeApp {
 
     fn apply_rime_output(&mut self, output: RimeOutput) {
         let preedit = output.status.preedit.clone();
+        let commit = output.commit;
+        let status = output.status.clone();
         self.status = output.status;
         self.status.active = self.active;
+
+        if self.fcitx_focus.is_some() {
+            self.emit_fcitx_output(preedit, commit, status);
+            return;
+        }
 
         if preedit != self.preedit {
             self.set_preedit(preedit);
         }
 
-        if let Some(text) = output.commit {
+        if let Some(text) = commit {
             self.commit_text(text);
+        }
+    }
+
+    fn emit_fcitx_output(&mut self, preedit: String, commit: Option<String>, status: ImeStatus) {
+        let target = match self.fcitx_focus.clone() {
+            Some(target) => target,
+            None => return,
+        };
+
+        let preedit_changed = preedit != self.preedit;
+        self.preedit = preedit.clone();
+
+        if preedit_changed || commit.is_some() {
+            if let Some(tx) = &self.fcitx_output_tx {
+                let cursor_rect = self
+                    .fcitx_cursor_rect
+                    .as_ref()
+                    .filter(|rect| rect.target.matches(&target))
+                    .cloned();
+                eprintln!(
+                    "touchdeck-ime: fcitx dbus output path={} commit={:?} preedit={:?} cursor_rect={:?}",
+                    target.path.as_str(),
+                    commit,
+                    preedit,
+                    cursor_rect
+                );
+                let _ = tx.send(FcitxDbusOutput {
+                    target,
+                    preedit: Some(preedit),
+                    commit,
+                    status,
+                    cursor_rect,
+                });
+            }
         }
     }
 
@@ -1381,6 +1824,18 @@ impl RimeEngine {
         }
     }
 
+    fn set_ascii_mode(&mut self, ascii: bool) {
+        unsafe {
+            if let Some(set_option) = self.api().set_option {
+                set_option(
+                    self.session,
+                    RIME_ASCII_MODE.as_ptr() as *const c_char,
+                    if ascii { RIME_TRUE } else { RIME_FALSE },
+                );
+            }
+        }
+    }
+
     fn api(&self) -> &RimeApi {
         unsafe { self.api.as_ref() }
     }
@@ -1468,6 +1923,783 @@ impl Drop for RimeEngine {
             }
         }
     }
+}
+
+
+const XIM_EVENT_MASK: u32 = 3;
+
+struct TouchDeckXimHandler {
+    tx: Sender<XimRequest>,
+}
+
+impl TouchDeckXimHandler {
+    fn new(tx: Sender<XimRequest>) -> Self {
+        Self { tx }
+    }
+
+    fn request_reset(&self) -> String {
+        let (response_tx, response_rx) = mpsc::channel();
+        if self.tx.send(XimRequest::Reset { response: response_tx }).is_err() {
+            return String::new();
+        }
+        response_rx
+            .recv_timeout(Duration::from_millis(500))
+            .unwrap_or_default()
+    }
+}
+
+impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
+    for TouchDeckXimHandler
+{
+    type InputContextData = ();
+    type InputStyleArray = [InputStyle; 6];
+
+    fn new_ic_data(
+        &mut self,
+        _server: &mut xim::x11rb::X11rbServer<C>,
+        _input_style: InputStyle,
+    ) -> std::result::Result<Self::InputContextData, xim::ServerError> {
+        Ok(())
+    }
+
+    fn input_styles(&self) -> Self::InputStyleArray {
+        [
+            InputStyle::PREEDIT_NOTHING | InputStyle::STATUS_NOTHING,
+            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_NONE,
+            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_NOTHING,
+            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_CALLBACKS,
+            InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_NOTHING,
+            InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_CALLBACKS,
+        ]
+    }
+
+    fn filter_events(&self) -> u32 {
+        XIM_EVENT_MASK
+    }
+
+    fn handle_connect(
+        &mut self,
+        _server: &mut xim::x11rb::X11rbServer<C>,
+    ) -> std::result::Result<(), xim::ServerError> {
+        eprintln!("touchdeck-ime: xim client connected");
+        Ok(())
+    }
+
+    fn handle_create_ic(
+        &mut self,
+        server: &mut xim::x11rb::X11rbServer<C>,
+        user_ic: &mut UserInputContext<Self::InputContextData>,
+    ) -> std::result::Result<(), xim::ServerError> {
+        eprintln!("touchdeck-ime: xim create input context");
+        server.set_event_mask(&user_ic.ic, XIM_EVENT_MASK, 0)
+    }
+
+    fn handle_destroy_ic(
+        &mut self,
+        _server: &mut xim::x11rb::X11rbServer<C>,
+        _user_ic: UserInputContext<Self::InputContextData>,
+    ) -> std::result::Result<(), xim::ServerError> {
+        eprintln!("touchdeck-ime: xim destroy input context");
+        Ok(())
+    }
+
+    fn handle_reset_ic(
+        &mut self,
+        _server: &mut xim::x11rb::X11rbServer<C>,
+        _user_ic: &mut UserInputContext<Self::InputContextData>,
+    ) -> std::result::Result<String, xim::ServerError> {
+        eprintln!("touchdeck-ime: xim reset input context");
+        Ok(self.request_reset())
+    }
+
+    fn handle_set_focus(
+        &mut self,
+        _server: &mut xim::x11rb::X11rbServer<C>,
+        _user_ic: &mut UserInputContext<Self::InputContextData>,
+    ) -> std::result::Result<(), xim::ServerError> {
+        eprintln!("touchdeck-ime: xim focus in");
+        Ok(())
+    }
+
+    fn handle_unset_focus(
+        &mut self,
+        _server: &mut xim::x11rb::X11rbServer<C>,
+        _user_ic: &mut UserInputContext<Self::InputContextData>,
+    ) -> std::result::Result<(), xim::ServerError> {
+        eprintln!("touchdeck-ime: xim focus out");
+        self.request_reset();
+        Ok(())
+    }
+
+    fn handle_set_ic_values(
+        &mut self,
+        server: &mut xim::x11rb::X11rbServer<C>,
+        user_ic: &mut UserInputContext<Self::InputContextData>,
+    ) -> std::result::Result<(), xim::ServerError> {
+        eprintln!("touchdeck-ime: xim set input context values");
+        server.preedit_draw(&mut user_ic.ic, "")
+    }
+
+    fn handle_forward_event(
+        &mut self,
+        server: &mut xim::x11rb::X11rbServer<C>,
+        user_ic: &mut UserInputContext<Self::InputContextData>,
+        xev: &KeyPressEvent,
+    ) -> std::result::Result<bool, xim::ServerError> {
+        let state = if xev.response_type == KEY_PRESS_EVENT {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        eprintln!(
+            "touchdeck-ime: xim forward key detail={} state={state:?} mask={} time={}",
+            xev.detail,
+            u16::from(xev.state),
+            xev.time
+        );
+        let (response_tx, response_rx) = mpsc::channel();
+        if self
+            .tx
+            .send(XimRequest::Key {
+                time: xev.time,
+                hardware_keycode: xev.detail,
+                state_mask: u16::from(xev.state),
+                state,
+                response: response_tx,
+            })
+            .is_err()
+        {
+            return Ok(false);
+        }
+
+        let response = match response_rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(response) => response,
+            Err(_) => return Ok(false),
+        };
+
+        server.preedit_draw(&mut user_ic.ic, &response.preedit)?;
+        if let Some(commit) = response.commit {
+            eprintln!("touchdeck-ime: xim commit {commit:?}");
+            server.commit(&user_ic.ic, &commit)?;
+        }
+        eprintln!(
+            "touchdeck-ime: xim key consumed={} preedit={:?}",
+            response.consumed, response.preedit
+        );
+        Ok(response.consumed)
+    }
+}
+
+fn spawn_xim_server(tx: Sender<XimRequest>) {
+    thread::spawn(move || {
+        if let Err(err) = run_xim_server(tx) {
+            eprintln!("touchdeck-ime: xim server stopped: {err:?}");
+        }
+    });
+}
+
+fn run_xim_server(tx: Sender<XimRequest>) -> Result<()> {
+    let (conn, screen_num) = x11rb::rust_connection::RustConnection::connect(None)
+        .context("connect to X display for XIM")?;
+    let mut server = xim::x11rb::X11rbServer::init(conn, screen_num, "touchdeck", xim::ALL_LOCALES)
+        .context("initialize XIM server")?;
+    let mut connections = XimConnections::new();
+    let mut handler = TouchDeckXimHandler::new(tx);
+
+    eprintln!("touchdeck-ime: xim server initialized");
+    loop {
+        let event = server.conn().wait_for_event().context("wait for X event")?;
+        match server.filter_event(&event, &mut connections, &mut handler) {
+            Ok(_) => {
+                if let Err(err) = server.conn().flush() {
+                    eprintln!("touchdeck-ime: xim flush error: {err}");
+                }
+            }
+            Err(err) => eprintln!("touchdeck-ime: xim event error: {err}"),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct FcitxInputMethod {
+    tx: Sender<FcitxDbusRequest>,
+    next_id: Arc<AtomicU32>,
+}
+
+#[interface(name = "org.fcitx.Fcitx.InputMethod1")]
+impl FcitxInputMethod {
+    #[zbus(name = "CreateInputContext")]
+    async fn create_input_context(
+        &self,
+        args: Vec<(String, String)>,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(object_server)] server: &ObjectServer,
+    ) -> zbus::fdo::Result<(OwnedObjectPath, Vec<u8>)> {
+        let sender = dbus_sender(&header)?;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let path_string = format!("/org/freedesktop/portal/inputcontext/{id}");
+        let path = OwnedObjectPath::try_from(path_string.clone())
+            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+        let ic = FcitxInputContext {
+            tx: self.tx.clone(),
+            path: path.clone(),
+            client: sender.clone(),
+        };
+
+        server
+            .at(path_string.as_str(), ic)
+            .await
+            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+
+        eprintln!(
+            "touchdeck-ime: fcitx dbus create input context id={id} sender={} args={args:?}",
+            sender.as_str()
+        );
+
+        Ok((path, fcitx_uuid_bytes(id)))
+    }
+
+    #[zbus(name = "Version")]
+    fn version(&self) -> u32 {
+        1
+    }
+}
+
+struct FcitxInputContext {
+    tx: Sender<FcitxDbusRequest>,
+    path: OwnedObjectPath,
+    client: OwnedBusName,
+}
+
+impl FcitxInputContext {
+    fn check_sender(&self, header: &Header<'_>) -> bool {
+        header
+            .sender()
+            .map(|sender| sender.to_string() == self.client.to_string())
+            .unwrap_or(false)
+    }
+
+    fn send_unit(&self, kind: FcitxDbusUnitKind, what: &str) -> zbus::fdo::Result<()> {
+        let (response_tx, response_rx) = mpsc::channel();
+        let target = FcitxDbusTarget {
+            path: self.path.clone(),
+            client: self.client.clone(),
+        };
+        let request = match kind {
+            FcitxDbusUnitKind::FocusIn => FcitxDbusRequest::FocusIn {
+                target,
+                response: response_tx,
+            },
+            FcitxDbusUnitKind::FocusOut => FcitxDbusRequest::FocusOut {
+                target,
+                response: response_tx,
+            },
+            FcitxDbusUnitKind::Reset => FcitxDbusRequest::Reset {
+                response: response_tx,
+            },
+        };
+        self.tx
+            .send(request)
+            .map_err(|err| zbus::fdo::Error::Failed(format!("{what}: {err}")))?;
+        response_rx
+            .recv_timeout(Duration::from_millis(500))
+            .map_err(|err| zbus::fdo::Error::Failed(format!("{what}: {err}")))
+    }
+
+    fn request_key(
+        &self,
+        keyval: u32,
+        keycode: u32,
+        state: u32,
+        is_release: bool,
+        time: u32,
+    ) -> zbus::fdo::Result<FcitxDbusKeyResponse> {
+        let (response_tx, response_rx) = mpsc::channel();
+        self.tx
+            .send(FcitxDbusRequest::Key {
+                keyval,
+                keycode,
+                state,
+                is_release,
+                time,
+                response: response_tx,
+            })
+            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+        response_rx
+            .recv_timeout(Duration::from_millis(500))
+            .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
+    }
+
+    fn send_cursor_rect(&self, x: i32, y: i32, w: i32, h: i32, scale: f64) {
+        let _ = self.tx.send(FcitxDbusRequest::SetCursorRect {
+            target: FcitxDbusTarget {
+                path: self.path.clone(),
+                client: self.client.clone(),
+            },
+            x,
+            y,
+            w,
+            h,
+            scale,
+        });
+    }
+
+    fn send_surrounding_text(&self, text: String, cursor: u32, anchor: u32) {
+        let _ = self.tx.send(FcitxDbusRequest::SetSurroundingText {
+            text,
+            cursor,
+            anchor,
+        });
+    }
+
+    async fn emit_commit_string(
+        &self,
+        conn: &zbus::Connection,
+        text: &str,
+    ) -> zbus::fdo::Result<()> {
+        conn.emit_signal(
+            Some(&self.client),
+            &self.path,
+            FCITX_INPUT_CONTEXT_INTERFACE,
+            "CommitString",
+            &text,
+        )
+        .await
+        .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
+    }
+
+    async fn emit_current_im(&self, conn: &zbus::Connection) -> zbus::fdo::Result<()> {
+        conn.emit_signal(
+            Some(&self.client),
+            &self.path,
+            FCITX_INPUT_CONTEXT_INTERFACE,
+            "CurrentIM",
+            &("rime".to_string(), "Rime".to_string(), "zh".to_string()),
+        )
+        .await
+        .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
+    }
+
+    async fn emit_update_formatted_preedit(
+        &self,
+        conn: &zbus::Connection,
+        preedit: &str,
+    ) -> zbus::fdo::Result<()> {
+        let body = fcitx_formatted_preedit_body(preedit);
+        conn.emit_signal(
+            Some(&self.client),
+            &self.path,
+            FCITX_INPUT_CONTEXT_INTERFACE,
+            "UpdateFormattedPreedit",
+            &body,
+        )
+        .await
+        .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
+    }
+
+    async fn emit_update_client_side_ui(
+        &self,
+        conn: &zbus::Connection,
+        status: &ImeStatus,
+    ) -> zbus::fdo::Result<()> {
+        let body = fcitx_client_side_ui_body(status);
+        conn.emit_signal(
+            Some(&self.client),
+            &self.path,
+            FCITX_INPUT_CONTEXT_INTERFACE,
+            "UpdateClientSideUI",
+            &body,
+        )
+        .await
+        .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
+    }
+
+    fn batched_events(
+        &self,
+        response: &FcitxDbusKeyResponse,
+    ) -> zbus::fdo::Result<Vec<(u32, OwnedValue)>> {
+        let mut events = Vec::new();
+
+        if let Some(commit) = &response.commit {
+            events.push((
+                FCITX_BATCHED_COMMIT_STRING,
+                owned_value(Value::from(commit.clone()))?,
+            ));
+        }
+
+        if response.handled || response.commit.is_some() || !response.preedit.is_empty() {
+            events.push((
+                FCITX_BATCHED_PREEDIT,
+                owned_value(fcitx_formatted_preedit_value(&response.preedit))?,
+            ));
+        }
+
+        Ok(events)
+    }
+}
+
+fn fcitx_formatted_preedit_value(preedit: &str) -> Value<'static> {
+    Value::Structure(Structure::from(fcitx_formatted_preedit_body(preedit)))
+}
+
+fn fcitx_formatted_preedit_body(preedit: &str) -> (Vec<(String, i32)>, i32) {
+    let formatted = fcitx_formatted_text(preedit);
+    let cursor = preedit.len().min(i32::MAX as usize) as i32;
+    (formatted, cursor)
+}
+
+fn fcitx_formatted_text(text: &str) -> FcitxFormattedText {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![(text.to_string(), 0_i32)]
+    }
+}
+
+fn fcitx_client_side_ui_body(status: &ImeStatus) -> FcitxClientSideUiBody {
+    let preedit = fcitx_formatted_text(&status.preedit);
+    let preedit_cursor = status.preedit.len().min(i32::MAX as usize) as i32;
+    let aux_up = FcitxFormattedText::new();
+    let aux_down = if status.commit_preview.is_empty() {
+        FcitxFormattedText::new()
+    } else {
+        fcitx_formatted_text(&status.commit_preview)
+    };
+    let candidates = status
+        .candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let label = if candidate.label.is_empty() {
+                (index + 1).to_string()
+            } else {
+                candidate.label.clone()
+            };
+            let text = if candidate.comment.is_empty() {
+                candidate.text.clone()
+            } else {
+                format!("{} {}", candidate.text, candidate.comment)
+            };
+            (label, text)
+        })
+        .collect::<Vec<_>>();
+    let cursor_index = if candidates.is_empty() {
+        -1
+    } else {
+        status
+            .highlighted_candidate_index
+            .unwrap_or(0)
+            .min(i32::MAX as usize) as i32
+    };
+    let layout_hint = 0;
+    let has_prev = status.page_no > 0;
+    let has_next = !status.is_last_page && !candidates.is_empty();
+
+    (
+        preedit,
+        preedit_cursor,
+        aux_up,
+        aux_down,
+        candidates,
+        cursor_index,
+        layout_hint,
+        has_prev,
+        has_next,
+    )
+}
+
+fn owned_value(value: Value<'static>) -> zbus::fdo::Result<OwnedValue> {
+    OwnedValue::try_from(value).map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
+}
+
+#[interface(name = "org.fcitx.Fcitx.InputContext1")]
+impl FcitxInputContext {
+    #[zbus(name = "FocusIn")]
+    async fn focus_in(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        if !self.check_sender(&header) {
+            return Ok(());
+        }
+        self.send_unit(FcitxDbusUnitKind::FocusIn, "FocusIn")?;
+        self.emit_current_im(conn).await
+    }
+
+    #[zbus(name = "FocusOut")]
+    fn focus_out(&self, #[zbus(header)] header: Header<'_>) -> zbus::fdo::Result<()> {
+        if !self.check_sender(&header) {
+            return Ok(());
+        }
+        self.send_unit(FcitxDbusUnitKind::FocusOut, "FocusOut")
+    }
+
+    #[zbus(name = "Reset")]
+    fn reset(&self, #[zbus(header)] header: Header<'_>) -> zbus::fdo::Result<()> {
+        if !self.check_sender(&header) {
+            return Ok(());
+        }
+        self.send_unit(FcitxDbusUnitKind::Reset, "Reset")
+    }
+
+    #[zbus(name = "SetCursorRect")]
+    fn set_cursor_rect(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        #[zbus(header)] header: Header<'_>,
+    ) {
+        if self.check_sender(&header) {
+            self.send_cursor_rect(x, y, w, h, 1.0);
+        }
+    }
+
+    #[zbus(name = "SetCursorRectV2")]
+    fn set_cursor_rect_v2(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        scale: f64,
+        #[zbus(header)] header: Header<'_>,
+    ) {
+        if self.check_sender(&header) {
+            self.send_cursor_rect(x, y, w, h, scale);
+        }
+    }
+
+    #[zbus(name = "SetCapability")]
+    fn set_capability(&self, _capability: u64, #[zbus(header)] _header: Header<'_>) {}
+
+    #[zbus(name = "SetSupportedCapability")]
+    fn set_supported_capability(&self, _capability: u64, #[zbus(header)] _header: Header<'_>) {}
+
+    #[zbus(name = "SetSurroundingText")]
+    fn set_surrounding_text(
+        &self,
+        text: String,
+        cursor: u32,
+        anchor: u32,
+        #[zbus(header)] header: Header<'_>,
+    ) {
+        if self.check_sender(&header) {
+            self.send_surrounding_text(text, cursor, anchor);
+        }
+    }
+
+    #[zbus(name = "SetSurroundingTextPosition")]
+    fn set_surrounding_text_position(
+        &self,
+        cursor: u32,
+        anchor: u32,
+        #[zbus(header)] header: Header<'_>,
+    ) {
+        if self.check_sender(&header) {
+            self.send_surrounding_text(String::new(), cursor, anchor);
+        }
+    }
+
+    #[zbus(name = "DestroyIC")]
+    fn destroy_ic(&self, #[zbus(header)] header: Header<'_>) -> zbus::fdo::Result<()> {
+        if !self.check_sender(&header) {
+            return Ok(());
+        }
+        self.send_unit(FcitxDbusUnitKind::FocusOut, "DestroyIC")
+    }
+
+    #[zbus(name = "ProcessKeyEvent")]
+    async fn process_key_event(
+        &self,
+        keyval: u32,
+        keycode: u32,
+        state: u32,
+        is_release: bool,
+        time: u32,
+        #[zbus(connection)] conn: &zbus::Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> zbus::fdo::Result<bool> {
+        if !self.check_sender(&header) {
+            return Ok(false);
+        }
+        let response = self.request_key(keyval, keycode, state, is_release, time)?;
+        if let Some(commit) = &response.commit {
+            self.emit_commit_string(conn, commit).await?;
+        }
+        self.emit_update_formatted_preedit(conn, &response.preedit)
+            .await?;
+        self.emit_update_client_side_ui(conn, &response.status)
+            .await?;
+        Ok(response.handled)
+    }
+
+    #[zbus(name = "ProcessKeyEventBatch")]
+    async fn process_key_event_batch(
+        &self,
+        keyval: u32,
+        keycode: u32,
+        state: u32,
+        is_release: bool,
+        time: u32,
+        #[zbus(connection)] conn: &zbus::Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> zbus::fdo::Result<(Vec<(u32, OwnedValue)>, bool)> {
+        if !self.check_sender(&header) {
+            return Ok((Vec::new(), false));
+        }
+        let response = self.request_key(keyval, keycode, state, is_release, time)?;
+        let events = self.batched_events(&response)?;
+        self.emit_update_client_side_ui(conn, &response.status)
+            .await?;
+        Ok((events, response.handled))
+    }
+
+    #[zbus(name = "PrevPage")]
+    fn prev_page(&self, #[zbus(header)] _header: Header<'_>) {}
+
+    #[zbus(name = "NextPage")]
+    fn next_page(&self, #[zbus(header)] _header: Header<'_>) {}
+
+    #[zbus(name = "SelectCandidate")]
+    fn select_candidate(&self, _idx: i32, #[zbus(header)] _header: Header<'_>) {}
+
+    #[zbus(name = "InvokeAction")]
+    fn invoke_action(&self, _action: u32, _cursor: i32, #[zbus(header)] _header: Header<'_>) {}
+
+    #[zbus(name = "IsVirtualKeyboardVisible")]
+    fn is_virtual_keyboard_visible(&self, #[zbus(header)] _header: Header<'_>) -> bool {
+        false
+    }
+
+    #[zbus(name = "ShowVirtualKeyboard")]
+    fn show_virtual_keyboard(&self, #[zbus(header)] _header: Header<'_>) {}
+
+    #[zbus(name = "HideVirtualKeyboard")]
+    fn hide_virtual_keyboard(&self, #[zbus(header)] _header: Header<'_>) {}
+}
+
+fn dbus_sender(header: &Header<'_>) -> zbus::fdo::Result<OwnedBusName> {
+    let sender = header
+        .sender()
+        .ok_or_else(|| zbus::fdo::Error::Failed("D-Bus message has no sender".to_string()))?;
+    OwnedBusName::try_from(sender.to_string())
+        .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))
+}
+
+fn fcitx_uuid_bytes(id: u32) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 16];
+    bytes[0..4].copy_from_slice(&id.to_le_bytes());
+    bytes[4..8].copy_from_slice(b"TDIM");
+    bytes[8..12].copy_from_slice(&id.wrapping_mul(1103515245).to_le_bytes());
+    bytes[12..16].copy_from_slice(b"RIME");
+    bytes
+}
+
+fn spawn_fcitx_dbus_server(tx: Sender<FcitxDbusRequest>) -> Sender<FcitxDbusOutput> {
+    let (output_tx, output_rx) = mpsc::channel();
+    thread::spawn(move || {
+        if let Err(err) = zbus::block_on(run_fcitx_dbus_server(tx, output_rx)) {
+            eprintln!("touchdeck-ime: fcitx dbus server stopped: {err:?}");
+        }
+    });
+    output_tx
+}
+
+async fn run_fcitx_dbus_server(
+    tx: Sender<FcitxDbusRequest>,
+    output_rx: Receiver<FcitxDbusOutput>,
+) -> Result<()> {
+    let next_id = Arc::new(AtomicU32::new(1));
+    let input_method = FcitxInputMethod { tx, next_id };
+    let conn = zbus::connection::Builder::session()
+        .context("connect to session D-Bus for fcitx frontend")?
+        .serve_at(
+            "/org/freedesktop/portal/inputmethod",
+            input_method.clone(),
+        )
+        .context("serve fcitx input method object")?
+        .serve_at("/inputmethod", input_method)
+        .context("serve compatible fcitx input method object")?
+        .name("org.fcitx.Fcitx5")
+        .context("request org.fcitx.Fcitx5")?
+        .name("org.freedesktop.portal.Fcitx")
+        .context("request org.freedesktop.portal.Fcitx")?
+        .build()
+        .await
+        .context("build fcitx D-Bus service")?;
+
+    let output_conn = conn.clone();
+    thread::spawn(move || {
+        while let Ok(output) = output_rx.recv() {
+            if let Err(err) = zbus::block_on(emit_fcitx_dbus_output(&output_conn, output)) {
+                eprintln!("touchdeck-ime: fcitx dbus output error: {err:?}");
+            }
+        }
+    });
+
+    eprintln!(
+        "touchdeck-ime: fcitx dbus frontend initialized as org.fcitx.Fcitx5 and org.freedesktop.portal.Fcitx"
+    );
+    std::future::pending::<()>().await;
+    Ok(())
+}
+
+async fn emit_fcitx_dbus_output(
+    conn: &zbus::Connection,
+    output: FcitxDbusOutput,
+) -> zbus::fdo::Result<()> {
+    if let Some(rect) = &output.cursor_rect {
+        eprintln!(
+            "touchdeck-ime: fcitx dbus ui anchor path={} x={} y={} w={} h={} scale={}",
+            rect.target.path.as_str(),
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            rect.scale
+        );
+    }
+
+    if let Some(commit) = output.commit {
+        conn.emit_signal(
+            Some(&output.target.client),
+            &output.target.path,
+            FCITX_INPUT_CONTEXT_INTERFACE,
+            "CommitString",
+            &commit,
+        )
+        .await
+        .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+    }
+
+    if let Some(preedit) = output.preedit {
+        let formatted = fcitx_formatted_preedit_body(&preedit);
+        conn.emit_signal(
+            Some(&output.target.client),
+            &output.target.path,
+            FCITX_INPUT_CONTEXT_INTERFACE,
+            "UpdateFormattedPreedit",
+            &formatted,
+        )
+        .await
+        .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+    }
+
+    let client_side_ui = fcitx_client_side_ui_body(&output.status);
+    conn.emit_signal(
+        Some(&output.target.client),
+        &output.target.path,
+        FCITX_INPUT_CONTEXT_INTERFACE,
+        "UpdateClientSideUI",
+        &client_side_ui,
+    )
+    .await
+    .map_err(|err| zbus::fdo::Error::Failed(err.to_string()))?;
+
+    Ok(())
 }
 
 fn spawn_socket_listener(socket_path: PathBuf) -> Result<Receiver<TouchDeckRequest>> {
@@ -1827,6 +3059,11 @@ fn parse_wayland_key_state(state: &WEnum<wl_keyboard::KeyState>) -> Option<KeySt
         WEnum::Unknown(2) => Some(KeyState::Pressed),
         _ => None,
     }
+}
+
+fn x_keycode_to_keysym(keycode: u8) -> Option<u32> {
+    let evdev_key = u32::from(keycode).checked_sub(8)?;
+    evdev_key_to_keysym(evdev_key)
 }
 
 fn evdev_key_to_keysym(key: u32) -> Option<u32> {
@@ -2462,6 +3699,10 @@ struct RimeApi {
     free_commit: Option<unsafe extern "C" fn(*mut RimeCommit) -> Bool>,
     get_context: Option<unsafe extern "C" fn(RimeSessionId, *mut RimeContext) -> Bool>,
     free_context: Option<unsafe extern "C" fn(*mut RimeContext) -> Bool>,
+    get_status: Option<unsafe extern "C" fn(RimeSessionId, *mut c_void) -> Bool>,
+    free_status: Option<unsafe extern "C" fn(*mut c_void) -> Bool>,
+    set_option: Option<unsafe extern "C" fn(RimeSessionId, *const c_char, Bool)>,
+    get_option: Option<unsafe extern "C" fn(RimeSessionId, *const c_char) -> Bool>,
 }
 
 #[link(name = "rime")]
