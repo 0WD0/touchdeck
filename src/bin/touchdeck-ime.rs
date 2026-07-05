@@ -571,6 +571,10 @@ impl ImeApp {
             self.passthrough_physical_key(time, key, state);
             return;
         };
+        if self.rime_state_is_empty() && is_empty_state_passthrough_key(keysym) {
+            self.passthrough_physical_key(time, key, state);
+            return;
+        }
 
         let output = {
             let Some(rime) = self.rime.as_mut() else {
@@ -628,6 +632,19 @@ impl ImeApp {
         }
     }
 
+    fn passthrough_touchdeck_key(&self, time: u32, key: u32, state: KeyState) {
+        if let Some(virtual_keyboard) = &self.virtual_keyboard {
+            virtual_keyboard.key(
+                time,
+                key,
+                match state {
+                    KeyState::Pressed => 1,
+                    KeyState::Released => 0,
+                },
+            );
+        }
+    }
+
     fn handle_touchdeck_event(&mut self, qh: &QueueHandle<Self>, event: TouchDeckEvent) -> ImeStatus {
         if event.protocol != "touchdeck-ime-v1" || event.kind != "key" || event.source != "touchdeck" {
             eprintln!("touchdeck-ime: ignored unsupported event {event:?}");
@@ -651,6 +668,11 @@ impl ImeApp {
             eprintln!("touchdeck-ime: ignored unknown evdev key {}", event.key);
             return self.current_status_with_source("touchdeck");
         };
+        if self.rime_state_is_empty() && is_empty_state_passthrough_key(keysym) {
+            self.passthrough_touchdeck_key(event.time, event.key, state);
+            self.hide_popup(qh);
+            return self.current_status_with_source("touchdeck");
+        }
 
         let output = {
             let Some(rime) = self.rime.as_mut() else {
@@ -695,6 +717,10 @@ impl ImeApp {
         if let Some(text) = output.commit {
             self.commit_text(text);
         }
+    }
+
+    fn rime_state_is_empty(&self) -> bool {
+        self.preedit.is_empty() && status_is_empty(&self.status)
     }
 
     fn set_preedit(&mut self, text: String) {
@@ -1978,6 +2004,10 @@ fn keysym_to_text(keysym: u32, rime_mask: u32) -> Option<String> {
 
 fn status_is_empty(status: &ImeStatus) -> bool {
     status.preedit.is_empty() && status.commit_preview.is_empty() && status.candidates.is_empty()
+}
+
+fn is_empty_state_passthrough_key(keysym: u32) -> bool {
+    matches!(keysym, XK_BACKSPACE | XK_DELETE)
 }
 
 fn draw_popup_status(
