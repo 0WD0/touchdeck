@@ -679,7 +679,7 @@ impl ImeApp {
             eprintln!("touchdeck-ime: ignored unknown evdev key {}", event.key);
             return self.current_status_with_source("touchdeck");
         };
-        if self.rime_state_is_empty() && is_empty_state_passthrough_key(keysym) {
+        if self.rime_state_is_empty() && is_direct_passthrough_key(keysym) {
             self.passthrough_touchdeck_key(event.time, event.key, state);
             self.hide_popup(qh);
             return self.current_status_with_source("touchdeck");
@@ -715,7 +715,13 @@ impl ImeApp {
         self.apply_rime_output(output);
 
         if !handled {
-            self.fallback_unhandled_key(keysym, state, event.modifiers);
+            self.fallback_unhandled_touchdeck_key(
+                event.time,
+                event.key,
+                keysym,
+                state,
+                event.modifiers,
+            );
         }
 
         eprintln!(
@@ -780,40 +786,35 @@ impl ImeApp {
         input_method.commit(self.serial);
     }
 
-    fn fallback_unhandled_key(&mut self, keysym: u32, state: KeyState, modifiers: u32) {
+    fn fallback_unhandled_touchdeck_key(
+        &mut self,
+        time: u32,
+        key: u32,
+        keysym: u32,
+        state: KeyState,
+        modifiers: u32,
+    ) {
+        if is_direct_passthrough_key(keysym) {
+            self.passthrough_touchdeck_key(time, key, state);
+            return;
+        }
+
         if state != KeyState::Pressed {
             return;
         }
 
         let rime_mask = rime_modifier_mask(modifiers);
         if rime_mask & (RIME_CONTROL_MASK | RIME_ALT_MASK | RIME_SUPER_MASK) != 0 {
+            self.passthrough_touchdeck_key(time, key, state);
             return;
         }
 
         match keysym {
-            XK_ESCAPE => {
-                if let Some(rime) = self.rime.as_mut() {
-                    rime.clear();
-                }
-                self.clear_preedit();
-            }
-            XK_BACKSPACE => {
-                if let Some(input_method) = &self.input_method {
-                    input_method.delete_surrounding_text(1, 0);
-                    input_method.commit(self.serial);
-                }
-            }
-            XK_DELETE => {
-                if let Some(input_method) = &self.input_method {
-                    input_method.delete_surrounding_text(0, 1);
-                    input_method.commit(self.serial);
-                }
-            }
-            XK_RETURN => self.commit_text("\n".to_string()),
-            XK_TAB => self.commit_text("\t".to_string()),
             _ => {
                 if let Some(text) = keysym_to_text(keysym, rime_mask) {
                     self.commit_text(text);
+                } else {
+                    self.passthrough_touchdeck_key(time, key, state);
                 }
             }
         }
@@ -2059,6 +2060,33 @@ fn status_is_empty(status: &ImeStatus) -> bool {
 
 fn is_empty_state_passthrough_key(keysym: u32) -> bool {
     matches!(keysym, XK_BACKSPACE | XK_DELETE)
+}
+
+fn is_direct_passthrough_key(keysym: u32) -> bool {
+    matches!(
+        keysym,
+        XK_ESCAPE
+            | XK_BACKSPACE
+            | XK_TAB
+            | XK_RETURN
+            | XK_DELETE
+            | XK_HOME
+            | XK_LEFT
+            | XK_UP
+            | XK_RIGHT
+            | XK_DOWN
+            | XK_PAGE_UP
+            | XK_PAGE_DOWN
+            | XK_END
+            | XK_SHIFT_L
+            | XK_SHIFT_R
+            | XK_CONTROL_L
+            | XK_CONTROL_R
+            | XK_ALT_L
+            | XK_ALT_R
+            | XK_SUPER_L
+            | XK_SUPER_R
+    )
 }
 
 fn draw_popup_status(
