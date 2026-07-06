@@ -379,8 +379,9 @@ impl ImeApp {
         }
     }
 
-    fn passthrough_touchdeck_key(&self, time: u32, key: u32, state: KeyState) {
+    fn passthrough_touchdeck_key(&self, time: u32, key: u32, state: KeyState, modifiers: u32) {
         if let Some(virtual_keyboard) = &self.virtual_keyboard {
+            virtual_keyboard.modifiers(modifiers, 0, 0, 0);
             virtual_keyboard.key(
                 time,
                 key,
@@ -770,7 +771,7 @@ impl ImeApp {
                     );
                 }
                 KeyRoute::ImeKey | KeyRoute::ImeText | KeyRoute::AppKey => {
-                    self.passthrough_touchdeck_key(event.time, event.key, state);
+                    self.passthrough_touchdeck_key(event.time, event.key, state, event.modifiers);
                 }
             }
             return self.current_status_with_source("touchdeck");
@@ -778,7 +779,7 @@ impl ImeApp {
 
         match route {
             KeyRoute::AppKey => {
-                self.passthrough_touchdeck_key(event.time, event.key, state);
+                self.passthrough_touchdeck_key(event.time, event.key, state, event.modifiers);
                 self.hide_popup(qh);
                 return self.current_status_with_source("touchdeck");
             }
@@ -804,7 +805,7 @@ impl ImeApp {
             translation,
         ) else {
             if route == KeyRoute::ImeKey {
-                self.passthrough_touchdeck_key(event.time, event.key, state);
+                self.passthrough_touchdeck_key(event.time, event.key, state, event.modifiers);
             }
             return self.current_status_with_source("touchdeck");
         };
@@ -813,7 +814,7 @@ impl ImeApp {
         self.apply_local_effects(ImeSource::Touchdeck, effects);
 
         if !handled && route == KeyRoute::ImeKey {
-            self.passthrough_touchdeck_key(event.time, event.key, state);
+            self.passthrough_touchdeck_key(event.time, event.key, state, event.modifiers);
         }
 
         eprintln!(
@@ -839,14 +840,14 @@ impl ImeApp {
 
         let rime_mask = rime_modifier_mask(modifiers);
         if rime_mask & (RIME_CONTROL_MASK | RIME_ALT_MASK | RIME_SUPER_MASK) != 0 {
-            self.passthrough_touchdeck_key(time, key, state);
+            self.passthrough_touchdeck_key(time, key, state, modifiers);
             return;
         }
 
         if let Some(text) = keysym_to_text(keysym, rime_mask) {
             self.commit_text(text);
         } else {
-            self.passthrough_touchdeck_key(time, key, state);
+            self.passthrough_touchdeck_key(time, key, state, modifiers);
         }
     }
 
