@@ -5984,7 +5984,7 @@ mod tests {
     use super::*;
 
     fn test_config() -> Config {
-        Config {
+        let mut config = Config {
             action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
             action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
             action_swipe_up: Some(NiriAction::FocusColumnRight),
@@ -6017,13 +6017,15 @@ mod tests {
             exit_corner_enabled: true,
             exit_corner_ratio: 0.12,
             exit_corner_tap_ms: 350,
-        }
+        };
+        apply_example_keymap(&mut config);
+        config
     }
 
     fn test_size() -> SurfaceSize {
         SurfaceSize {
             width: 1000,
-            height: 2000,
+            height: 2400,
         }
     }
 
@@ -6033,6 +6035,73 @@ mod tests {
 
     fn test_target(name: &str) -> SlotTarget {
         test_slots().get(name).unwrap()
+    }
+
+    fn test_slot_center(name: &str) -> (f64, f64) {
+        let rect = test_target(name).rect.to_px(test_size());
+        (
+            f64::from(rect.x) + f64::from(rect.w) / 2.0,
+            f64::from(rect.y) + f64::from(rect.h) / 2.0,
+        )
+    }
+
+    fn apply_example_keymap(config: &mut Config) {
+        let mut file_config: FileConfig =
+            toml::from_str(include_str!("../touchdeck.example.toml")).unwrap();
+
+        if let Some(macros) = file_config.macros.take() {
+            config.macros.clear();
+            for (name, macro_config) in macros {
+                config
+                    .macros
+                    .insert(&name, parse_action_steps(macro_config.steps).unwrap());
+            }
+        }
+
+        let mut behavior_registry = BehaviorRegistry::default();
+        if let Some(behaviors) = file_config.behaviors.take() {
+            behavior_registry.extend(behaviors);
+        }
+        if let Some(keyboard) = &file_config.keyboard {
+            if let Some(behaviors) = &keyboard.behaviors {
+                behavior_registry.extend(behaviors.clone());
+            }
+        }
+
+        config.keymap.bindings.clear();
+        if let Some(bindings) = file_config.bindings.take() {
+            for binding in bindings {
+                config
+                    .keymap
+                    .bindings
+                    .push(
+                        Binding::from_file_config(
+                            binding,
+                            &config.slots,
+                            &config.macros,
+                            &behavior_registry,
+                        )
+                        .unwrap(),
+                    );
+            }
+        }
+
+        if let Some(keyboard) = file_config.keyboard {
+            if let Some(maps) = keyboard.layers {
+                config
+                    .keymap
+                    .bindings
+                    .extend(
+                        expand_keyboard_maps(
+                            maps,
+                            &config.slots,
+                            &config.macros,
+                            &behavior_registry,
+                        )
+                        .unwrap(),
+                    );
+            }
+        }
     }
 
 
@@ -6168,9 +6237,10 @@ mod tests {
         let config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
+        let (x, y) = test_slot_center("bottom_edge");
 
-        engine.handle_down(0, 0, 1, 500.0, 1950.0, &config, size);
-        engine.handle_motion(80, 1, 80, 500.0, 1700.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
+        engine.handle_motion(80, 1, 80, x, y - 300.0, &config, size);
         let effects = engine.handle_up(100, 100, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Text);
@@ -6184,8 +6254,9 @@ mod tests {
         let mut engine = Engine::default();
         let mut effects = Vec::new();
         engine.set_mode(Mode::Text, &mut effects, &config);
+        let (x, y) = test_slot_center("key_q");
 
-        engine.handle_down(0, 0, 1, 65.0, 1340.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
@@ -6425,7 +6496,8 @@ key_c = "&kp LEFT"
 
     #[test]
     fn default_keyboard_label_uses_tap_binding() {
-        let keymap = Keymap::default();
+        let config = test_config();
+        let keymap = &config.keymap;
 
         assert_eq!(
             keymap.slot_label(Mode::Text, &[Layer::Base], "key_q"),
@@ -6439,10 +6511,10 @@ key_c = "&kp LEFT"
             keymap.slot_gesture_label(
                 Mode::Text,
                 &[Layer::Base],
-                "key_q",
+                "key_n1",
                 SlotGestureKind::SwipeUp
             ),
-            Some("N1".to_string())
+            Some("EXCLAMATION".to_string())
         );
         assert_eq!(
             keymap.slot_gesture_label(
@@ -6451,7 +6523,7 @@ key_c = "&kp LEFT"
                 "key_h",
                 SlotGestureKind::SwipeLeft
             ),
-            Some("LEFT".to_string())
+            Some("LEFT...".to_string())
         );
     }
 
@@ -6462,14 +6534,15 @@ key_c = "&kp LEFT"
         let mut engine = Engine::default();
         let mut effects = Vec::new();
         engine.set_mode(Mode::Text, &mut effects, &config);
+        let (x, y) = test_slot_center("key_n1");
 
-        engine.handle_down(0, 0, 1, 65.0, 1340.0, &config, size);
-        engine.handle_motion(60, 1, 60, 65.0, 1140.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
+        engine.handle_motion(60, 1, 60, x, y - 220.0, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
             dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![KeyChord {
-                keys: vec![KEY_1]
+                keys: vec![KEY_LEFTSHIFT, KEY_1]
             },]))
         );
     }
@@ -6481,10 +6554,11 @@ key_c = "&kp LEFT"
         let mut engine = Engine::default();
         let mut effects = Vec::new();
         engine.set_mode(Mode::Text, &mut effects, &config);
+        let (x, y) = test_slot_center("key_h");
 
-        engine.handle_down(0, 0, 1, 550.0, 1470.0, &config, size);
-        engine.handle_motion(60, 1, 60, 350.0, 1470.0, &config, size);
-        let effects = engine.handle_up(80, 80, 1, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
+        let mut effects = engine.handle_motion(60, 1, 60, x - 220.0, y, &config, size);
+        effects.extend(engine.handle_up(80, 80, 1, &config, size));
 
         assert!(
             dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![KeyChord {
@@ -6605,7 +6679,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 .unwrap()
                 .get("key_h")
                 .map(String::as_str),
-            Some("&kp LEFT")
+            Some("&hold_repeat LEFT")
         );
     }
 
@@ -6614,6 +6688,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
         let mut config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
+        let (x, y) = test_slot_center("left_bottom");
         config.keymap.bindings = vec![
             Binding {
                 mode: Mode::Base,
@@ -6651,7 +6726,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
             &config,
             None,
         );
-        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
@@ -6671,6 +6746,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
         let mut config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
+        let (x, y) = test_slot_center("left_bottom");
         config.keymap.bindings = vec![
             Binding {
                 mode: Mode::Base,
@@ -6706,7 +6782,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
             &config,
             None,
         );
-        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
@@ -6791,6 +6867,7 @@ behavior = { type = "macro", macro = "copy" }
         let mut config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
+        let (x, y) = test_slot_center("left_bottom");
         config.keymap.bindings = vec![Binding {
             mode: Mode::Base,
             layer: Layer::Base,
@@ -6804,7 +6881,7 @@ behavior = { type = "macro", macro = "copy" }
             consume: true,
         }];
 
-        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
         engine.process_timers(181, &config, size);
         assert_eq!(engine.current_layer(), Layer::Niri);
         assert_eq!(engine.layer_stack, vec![Layer::Base, Layer::Niri]);
@@ -6819,8 +6896,9 @@ behavior = { type = "macro", macro = "copy" }
         let config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
+        let (x, y) = test_slot_center("left_bottom");
 
-        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
         let effects = engine.process_timers(181, &config, size);
         assert_eq!(engine.mode, Mode::NiriMomentary);
         assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
@@ -6835,18 +6913,19 @@ behavior = { type = "macro", macro = "copy" }
         let config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
+        let (x, y) = test_slot_center("left_bottom");
 
-        engine.handle_down(0, 0, 1, 100.0, 1800.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
         engine.handle_up(80, 80, 1, &config, size);
-        engine.handle_down(160, 160, 1, 104.0, 1804.0, &config, size);
+        engine.handle_down(160, 160, 1, x + 4.0, y + 4.0, &config, size);
         let effects = engine.handle_up(220, 220, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::NiriLocked);
         assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
 
-        engine.handle_down(400, 400, 1, 100.0, 1800.0, &config, size);
+        engine.handle_down(400, 400, 1, x, y, &config, size);
         engine.handle_up(460, 460, 1, &config, size);
-        engine.handle_down(540, 540, 1, 102.0, 1802.0, &config, size);
+        engine.handle_down(540, 540, 1, x + 2.0, y + 2.0, &config, size);
         let effects = engine.handle_up(600, 600, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Base);
@@ -6858,10 +6937,11 @@ behavior = { type = "macro", macro = "copy" }
         let config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
+        let (x, y) = test_slot_center("bottom_edge");
 
-        engine.handle_down(0, 0, 1, 500.0, 1950.0, &config, size);
+        engine.handle_down(0, 0, 1, x, y, &config, size);
         engine.handle_up(60, 60, 1, &config, size);
-        engine.handle_down(140, 140, 1, 504.0, 1952.0, &config, size);
+        engine.handle_down(140, 140, 1, x + 4.0, y + 2.0, &config, size);
         let effects = engine.handle_up(200, 200, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Passthrough);
@@ -6881,9 +6961,9 @@ behavior = { type = "macro", macro = "copy" }
         assert!(rects.contains(&test_target("top_left").rect));
         assert!(!rects.contains(&test_target("center").rect));
 
-        engine.handle_down(380, 380, 1, 500.0, 1950.0, &config, size);
+        engine.handle_down(380, 380, 1, x, y, &config, size);
         engine.handle_up(430, 430, 1, &config, size);
-        engine.handle_down(500, 500, 1, 504.0, 1952.0, &config, size);
+        engine.handle_down(500, 500, 1, x + 4.0, y + 2.0, &config, size);
         let effects = engine.handle_up(550, 550, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Base);
@@ -6895,14 +6975,16 @@ behavior = { type = "macro", macro = "copy" }
         let config = test_config();
         let size = test_size();
         let mut engine = Engine::default();
+        let (bottom_x, bottom_y) = test_slot_center("bottom_edge");
+        let (left_x, left_y) = test_slot_center("left_bottom");
 
-        engine.handle_down(0, 0, 1, 500.0, 1950.0, &config, size);
+        engine.handle_down(0, 0, 1, bottom_x, bottom_y, &config, size);
         engine.handle_up(60, 60, 1, &config, size);
-        engine.handle_down(140, 140, 1, 504.0, 1952.0, &config, size);
+        engine.handle_down(140, 140, 1, bottom_x + 4.0, bottom_y + 2.0, &config, size);
         engine.handle_up(200, 200, 1, &config, size);
         assert_eq!(engine.mode, Mode::Passthrough);
 
-        engine.handle_down(300, 300, 1, 100.0, 1800.0, &config, size);
+        engine.handle_down(300, 300, 1, left_x, left_y, &config, size);
         engine.process_timers(481, &config, size);
         assert_eq!(engine.mode, Mode::NiriMomentary);
 
@@ -6922,8 +7004,8 @@ behavior = { type = "macro", macro = "copy" }
     fn replay_hold_then_same_finger_swipe_dispatches_niri_action() {
         let config = test_config();
         let trace = r#"
-{"type":"down","t":0,"wl_time":0,"id":1,"x":100.0,"y":1800.0}
-{"type":"motion","t":220,"wl_time":220,"id":1,"x":100.0,"y":1500.0}
+{"type":"down","t":0,"wl_time":0,"id":1,"x":90.0,"y":2184.0}
+{"type":"motion","t":220,"wl_time":220,"id":1,"x":90.0,"y":1880.0}
 {"type":"up","t":260,"wl_time":260,"id":1}
 "#;
 
@@ -6936,7 +7018,7 @@ behavior = { type = "macro", macro = "copy" }
     fn replay_hold_plus_second_finger_swipe_dispatches_niri_action() {
         let config = test_config();
         let trace = r#"
-{"type":"down","t":0,"wl_time":0,"id":1,"x":100.0,"y":1800.0}
+{"type":"down","t":0,"wl_time":0,"id":1,"x":90.0,"y":2184.0}
 {"type":"down","t":220,"wl_time":220,"id":2,"x":800.0,"y":900.0}
 {"type":"motion","t":240,"wl_time":240,"id":2,"x":800.0,"y":1200.0}
 {"type":"up","t":260,"wl_time":260,"id":2}
