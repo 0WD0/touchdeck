@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::action::{NiriCommand, NiriResizeEdge};
+use crate::action::NiriResizeEdge;
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{contact_movement, is_tap_like, Contact, Gesture, TapRecord};
@@ -1459,54 +1459,11 @@ fn push_dispatch_effect(effects: &mut Vec<EngineEffect>, action: GestureAction) 
 }
 
 pub(crate) fn resolve_niri_gesture(
-    gesture: &Gesture,
-    config: &Config,
-    size: SurfaceSize,
+    _gesture: &Gesture,
+    _config: &Config,
+    _size: SurfaceSize,
 ) -> GestureAction {
-    if gesture.finished.is_empty() {
-        return GestureAction::None;
-    }
-
-    let min_dim = f64::from(size.width.min(size.height).max(1));
-    let swipe_threshold_min = config.swipe_threshold_min.min(config.swipe_threshold_max);
-    let swipe_threshold_max = config.swipe_threshold_min.max(config.swipe_threshold_max);
-    let swipe_threshold =
-        (min_dim * config.swipe_threshold_ratio).clamp(swipe_threshold_min, swipe_threshold_max);
-
-    if gesture.max_active == 2 && is_tap_like(gesture, config.tap_radius, config.two_finger_tap_ms)
-    {
-        return niri_action(config.action_two_finger_tap.clone());
-    }
-
-    if gesture.max_active != 1 || gesture.finished.len() != 1 {
-        return GestureAction::None;
-    }
-
-    let contact = &gesture.finished[0];
-    let dx = contact.last_x - contact.start_x;
-    let dy = contact.last_y - contact.start_y;
-    let abs_dx = dx.abs();
-    let abs_dy = dy.abs();
-
-    if abs_dx.max(abs_dy) < swipe_threshold {
-        return GestureAction::None;
-    }
-
-    if abs_dx >= abs_dy * 1.25 {
-        if dx < 0.0 {
-            niri_action(config.action_swipe_left.clone())
-        } else {
-            niri_action(config.action_swipe_right.clone())
-        }
-    } else if abs_dy >= abs_dx * 1.25 {
-        if dy < 0.0 {
-            niri_action(config.action_swipe_up.clone())
-        } else {
-            niri_action(config.action_swipe_down.clone())
-        }
-    } else {
-        GestureAction::None
-    }
+    GestureAction::None
 }
 
 pub(crate) fn is_exit_gesture(gesture: &Gesture, config: &Config, size: SurfaceSize) -> bool {
@@ -1523,12 +1480,6 @@ pub(crate) fn is_exit_gesture(gesture: &Gesture, config: &Config, size: SurfaceS
         && gesture.finished.len() == 1
         && is_tap_like(gesture, config.tap_radius, config.exit_corner_tap_ms)
         && is_top_left_corner(&gesture.finished[0], config, size)
-}
-
-fn niri_action(action: Option<NiriCommand>) -> GestureAction {
-    action
-        .map(GestureAction::Niri)
-        .unwrap_or(GestureAction::None)
 }
 
 fn is_top_left_corner(contact: &Contact, config: &Config, size: SurfaceSize) -> bool {
@@ -1569,11 +1520,6 @@ mod tests {
                 sunshine_router_socket: std::path::PathBuf::from("/tmp/touchdeck-test.sock"),
                 evdev_grab: true,
             },
-            action_swipe_left: Some(niri("focus-workspace-down")),
-            action_swipe_right: Some(niri("focus-workspace-up")),
-            action_swipe_up: Some(niri("focus-column-right")),
-            action_swipe_down: Some(niri("focus-column-left")),
-            action_two_finger_tap: Some(niri("toggle-overview")),
             tap_radius: 48.0,
             two_finger_tap_ms: 350,
             exit_tap_ms: 450,
@@ -1759,29 +1705,18 @@ mod tests {
     }
 
     #[test]
-    fn one_finger_swipe_down_maps_to_focus_column_left() {
+    fn hardcoded_niri_swipe_fallback_is_disabled() {
         let config = test_config();
         let gesture = gesture(1, vec![contact(500.0, 900.0, 500.0, 1200.0)]);
 
         assert_eq!(
             resolve_niri_gesture(&gesture, &config, test_size()),
-            GestureAction::Niri(niri("focus-column-left"))
+            GestureAction::None
         );
     }
 
     #[test]
-    fn one_finger_swipe_up_maps_to_focus_column_right() {
-        let config = test_config();
-        let gesture = gesture(1, vec![contact(500.0, 1200.0, 500.0, 900.0)]);
-
-        assert_eq!(
-            resolve_niri_gesture(&gesture, &config, test_size()),
-            GestureAction::Niri(niri("focus-column-right"))
-        );
-    }
-
-    #[test]
-    fn two_finger_tap_maps_to_toggle_overview() {
+    fn hardcoded_niri_two_finger_tap_fallback_is_disabled() {
         let config = test_config();
         let mut a = contact(400.0, 900.0, 404.0, 904.0);
         a.id = 1;
@@ -1791,7 +1726,7 @@ mod tests {
 
         assert_eq!(
             resolve_niri_gesture(&gesture, &config, test_size()),
-            GestureAction::Niri(niri("toggle-overview"))
+            GestureAction::None
         );
     }
 
@@ -1804,14 +1739,19 @@ mod tests {
     }
 
     #[test]
-    fn empty_action_disables_gesture() {
-        let mut config = test_config();
-        config.action_swipe_left = None;
-        let gesture = gesture(1, vec![contact(800.0, 1000.0, 600.0, 1000.0)]);
+    fn niri_gesture_bindings_come_from_keymap() {
+        let config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        let mut effects = Vec::new();
+        engine.set_mode(Mode::NiriLocked, &mut effects, &config);
 
-        assert_eq!(
-            resolve_niri_gesture(&gesture, &config, test_size()),
-            GestureAction::None
+        handle_down(&mut engine, sample(0, 0, 1, 500.0, 500.0), &config, size);
+        handle_motion(&mut engine, sample(80, 80, 1, 500.0, 760.0), &config, size);
+        let effects = engine.handle_up(100, 100, 1, &config, size);
+
+        assert!(
+            dispatched_actions(&effects).contains(&GestureAction::Niri(niri("focus-column-left")))
         );
     }
 

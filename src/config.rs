@@ -19,11 +19,6 @@ use crate::mode::{parse_layer, parse_mode, Layer, Mode};
 #[derive(Clone)]
 pub(crate) struct Config {
     pub(crate) input: InputConfig,
-    pub(crate) action_swipe_left: Option<NiriCommand>,
-    pub(crate) action_swipe_right: Option<NiriCommand>,
-    pub(crate) action_swipe_up: Option<NiriCommand>,
-    pub(crate) action_swipe_down: Option<NiriCommand>,
-    pub(crate) action_two_finger_tap: Option<NiriCommand>,
     pub(crate) tap_radius: f64,
     pub(crate) two_finger_tap_ms: u32,
     pub(crate) exit_tap_ms: u32,
@@ -54,20 +49,6 @@ impl Default for Config {
     fn default() -> Self {
         let mut config = Self {
             input: InputConfig::from_env(),
-            action_swipe_left: env_niri_action(
-                "TOUCHDECK_ACTION_SWIPE_LEFT",
-                "focus-workspace-down",
-            ),
-            action_swipe_right: env_niri_action(
-                "TOUCHDECK_ACTION_SWIPE_RIGHT",
-                "focus-workspace-up",
-            ),
-            action_swipe_up: env_niri_action("TOUCHDECK_ACTION_SWIPE_UP", "focus-column-right"),
-            action_swipe_down: env_niri_action("TOUCHDECK_ACTION_SWIPE_DOWN", "focus-column-left"),
-            action_two_finger_tap: env_niri_action(
-                "TOUCHDECK_ACTION_TWO_FINGER_TAP",
-                "toggle-overview",
-            ),
             tap_radius: env_f64("TOUCHDECK_TAP_RADIUS", 48.0),
             two_finger_tap_ms: env_u32("TOUCHDECK_TWO_FINGER_TAP_MS", 350),
             exit_tap_ms: env_u32("TOUCHDECK_EXIT_TAP_MS", 450),
@@ -617,21 +598,6 @@ pub(crate) fn env_bool(name: &str, default: bool) -> bool {
         .ok()
         .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(default)
-}
-
-fn env_niri_action(name: &str, default: &str) -> Option<NiriCommand> {
-    let value = env::var(name).unwrap_or_else(|_| default.to_string());
-    if value.trim().is_empty() {
-        return None;
-    }
-
-    match parse_niri_action(&value) {
-        Ok(action) => Some(action),
-        Err(err) => {
-            eprintln!("touchdeck: invalid {name}: {err:?}");
-            None
-        }
-    }
 }
 
 impl Binding {

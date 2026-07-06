@@ -303,6 +303,96 @@ trigger = { type = "double_tap", target = "left_bottom", max_ms = 280 }
 behavior = { type = "mode", mode = "base" }
 
 [[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "left", fingers = 1 }
+behavior = { type = "niri", action = "focus-workspace-down" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "right", fingers = 1 }
+behavior = { type = "niri", action = "focus-workspace-up" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "up", fingers = 1 }
+behavior = { type = "niri", action = "focus-column-right" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "down", fingers = 1 }
+behavior = { type = "niri", action = "focus-column-left" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "tap", target = "full", fingers = 2, max_ms = 350 }
+behavior = { type = "niri", action = "toggle-overview" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "left", fingers = 2 }
+behavior = { type = "niri", action = "focus-workspace-down" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "right", fingers = 2 }
+behavior = { type = "niri", action = "focus-workspace-up" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "up", fingers = 2 }
+behavior = { type = "niri", action = "focus-column-right" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "down", fingers = 2 }
+behavior = { type = "niri", action = "focus-column-left" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "tap", target = "full", fingers = 3, max_ms = 350 }
+behavior = { type = "niri", action = "toggle-overview" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "left", fingers = 1 }
+behavior = { type = "niri", action = "focus-workspace-down" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "right", fingers = 1 }
+behavior = { type = "niri", action = "focus-workspace-up" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "up", fingers = 1 }
+behavior = { type = "niri", action = "focus-column-right" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", direction = "down", fingers = 1 }
+behavior = { type = "niri", action = "focus-column-left" }
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "tap", target = "full", fingers = 2, max_ms = 350 }
+behavior = { type = "niri", action = "toggle-overview" }
+
+[[bindings]]
 mode = "base"
 layer = "base"
 trigger = { type = "double_tap", target = "bottom_edge", max_ms = 280 }
