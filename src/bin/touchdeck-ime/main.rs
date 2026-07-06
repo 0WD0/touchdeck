@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::raw::c_int;
@@ -84,6 +85,7 @@ struct ImeApp {
     fcitx_supported_capability: u64,
     x11_geometry: Option<X11GeometryProbe>,
     xim_cursor_rect: Option<ImeCursorRect>,
+    xim_consumed_keys: HashSet<u8>,
     physical_keyboard: Option<PhysicalKeyboard>,
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
@@ -672,7 +674,13 @@ impl ImeApp {
             return XimKeyResponse::default();
         };
 
-        if self.rime_state_is_empty() && is_empty_state_passthrough_key(keysym) {
+        let consumed_press_release =
+            state == KeyState::Released && self.xim_consumed_keys.remove(&hardware_keycode);
+
+        if !consumed_press_release
+            && self.rime_state_is_empty()
+            && is_empty_state_passthrough_key(keysym)
+        {
             return XimKeyResponse::default();
         }
 
@@ -686,8 +694,12 @@ impl ImeApp {
             return XimKeyResponse::default();
         };
 
-        let consumed = effects.handled;
+        let consumed = effects.handled || consumed_press_release;
         let effects = self.apply_response_effects(ImeSource::Xim, effects);
+
+        if state == KeyState::Pressed && consumed {
+            self.xim_consumed_keys.insert(hardware_keycode);
+        }
 
         eprintln!(
             "touchdeck-ime: xim keycode={} keysym={} state={:?} time={} modifiers={} consumed={} preedit={:?}",
