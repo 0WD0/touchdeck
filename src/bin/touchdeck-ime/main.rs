@@ -34,15 +34,25 @@ mod rime_engine;
 mod touchdeck_socket;
 mod xim_frontend;
 
-use app_state::*;
-use fcitx_dbus::*;
-use config::*;
-use key::*;
-use physical_keyboard::*;
-use popup::*;
-use rime_engine::*;
-use touchdeck_socket::*;
-use xim_frontend::*;
+use app_state::ImeSource;
+use config::{
+    load_ime_config, parse_key_route, parse_key_translation_policy, ImeRuntimeConfig, KeyRoute,
+    KeyTranslationPolicy,
+};
+use fcitx_dbus::{
+    spawn_fcitx_dbus_server, FcitxCursorRect, FcitxDbusKeyResponse, FcitxDbusOutput,
+    FcitxDbusRequest, FcitxDbusTarget, FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL,
+};
+use key::{
+    evdev_key_to_keysym, is_empty_state_passthrough_key, keysym_to_text, parse_key_state,
+    parse_wayland_key_state, rime_modifier_mask, x_keycode_to_keysym, KeyState,
+    RIME_ALT_MASK, RIME_CONTROL_MASK, RIME_SUPER_MASK,
+};
+use physical_keyboard::PhysicalKeyboard;
+use popup::PopupRenderer;
+use rime_engine::RimeEngine;
+use touchdeck_socket::{default_socket_path, spawn_socket_listener, TouchDeckEvent, TouchDeckRequest};
+use xim_frontend::{spawn_xim_server, XimKeyResponse, XimRequest};
 
 #[derive(Default)]
 struct ImeApp {

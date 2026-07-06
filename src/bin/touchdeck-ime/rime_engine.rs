@@ -8,7 +8,11 @@ use std::ptr::{self, NonNull};
 
 use anyhow::{anyhow, Context, Result};
 use touchdeck::protocol::{ImeCandidate, ImeStatus};
-use touchdeck::rime::*;
+use touchdeck::rime::{
+    call_ret, call_void, empty_rime_context, rime_commit_data_size, rime_get_api,
+    rime_traits_data_size, RimeApi, RimeCommit, RimeContext, RimeSessionId,
+    RimeTraits,
+};
 
 use super::config::KeyTranslationPolicy;
 use super::key::{
