@@ -85,7 +85,9 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         _server: &mut xim::x11rb::X11rbServer<C>,
         input_style: InputStyle,
     ) -> std::result::Result<Self::InputContextData, xim::ServerError> {
-        eprintln!("touchdeck-ime: xim new input context data style={input_style:?}");
+        log_xim_debug(|| {
+            eprintln!("touchdeck-ime: xim new input context data style={input_style:?}");
+        });
         Ok(())
     }
 
@@ -108,7 +110,9 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         &mut self,
         _server: &mut xim::x11rb::X11rbServer<C>,
     ) -> std::result::Result<(), xim::ServerError> {
-        eprintln!("touchdeck-ime: xim client connected");
+        log_xim_debug(|| {
+            eprintln!("touchdeck-ime: xim client connected");
+        });
         Ok(())
     }
 
@@ -117,10 +121,12 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         server: &mut xim::x11rb::X11rbServer<C>,
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> std::result::Result<(), xim::ServerError> {
-        eprintln!(
-            "touchdeck-ime: xim create input context style={:?}",
-            user_ic.ic.input_style()
-        );
+        log_xim_debug(|| {
+            eprintln!(
+                "touchdeck-ime: xim create input context style={:?}",
+                user_ic.ic.input_style()
+            );
+        });
         server.set_event_mask(&user_ic.ic, XIM_EVENT_MASK, 0)
     }
 
@@ -129,7 +135,9 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         _server: &mut xim::x11rb::X11rbServer<C>,
         _user_ic: UserInputContext<Self::InputContextData>,
     ) -> std::result::Result<(), xim::ServerError> {
-        eprintln!("touchdeck-ime: xim destroy input context");
+        log_xim_debug(|| {
+            eprintln!("touchdeck-ime: xim destroy input context");
+        });
         Ok(())
     }
 
@@ -138,7 +146,9 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         _server: &mut xim::x11rb::X11rbServer<C>,
         _user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> std::result::Result<String, xim::ServerError> {
-        eprintln!("touchdeck-ime: xim reset input context");
+        log_xim_debug(|| {
+            eprintln!("touchdeck-ime: xim reset input context");
+        });
         Ok(self.request_reset())
     }
 
@@ -147,7 +157,9 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         _server: &mut xim::x11rb::X11rbServer<C>,
         _user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> std::result::Result<(), xim::ServerError> {
-        eprintln!("touchdeck-ime: xim focus in");
+        log_xim_debug(|| {
+            eprintln!("touchdeck-ime: xim focus in");
+        });
         Ok(())
     }
 
@@ -156,7 +168,9 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         _server: &mut xim::x11rb::X11rbServer<C>,
         _user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> std::result::Result<(), xim::ServerError> {
-        eprintln!("touchdeck-ime: xim focus out");
+        log_xim_debug(|| {
+            eprintln!("touchdeck-ime: xim focus out");
+        });
         self.request_reset();
         Ok(())
     }
@@ -166,15 +180,17 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         _server: &mut xim::x11rb::X11rbServer<C>,
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> std::result::Result<(), xim::ServerError> {
-        eprintln!(
-            "touchdeck-ime: xim set input context values style={:?} spot=({},{}) area={} area_needed={} line_space={:?}",
-            user_ic.ic.input_style(),
-            user_ic.ic.preedit_spot().x,
-            user_ic.ic.preedit_spot().y,
-            format_preedit_area(user_ic.ic.preedit_area()),
-            format_preedit_area(user_ic.ic.preedit_area_needed()),
-            user_ic.ic.preedit_line_space()
-        );
+        log_xim_debug(|| {
+            eprintln!(
+                "touchdeck-ime: xim set input context values style={:?} spot=({},{}) area={} area_needed={} line_space={:?}",
+                user_ic.ic.input_style(),
+                user_ic.ic.preedit_spot().x,
+                user_ic.ic.preedit_spot().y,
+                format_preedit_area(user_ic.ic.preedit_area()),
+                format_preedit_area(user_ic.ic.preedit_area_needed()),
+                user_ic.ic.preedit_line_space()
+            );
+        });
         Ok(())
     }
 
@@ -189,12 +205,14 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         } else {
             KeyState::Released
         };
-        eprintln!(
-            "touchdeck-ime: xim forward key detail={} state={state:?} mask={} time={}",
-            xev.detail,
-            u16::from(xev.state),
-            xev.time
-        );
+        log_xim_debug(|| {
+            eprintln!(
+                "touchdeck-ime: xim forward key detail={} state={state:?} mask={} time={}",
+                xev.detail,
+                u16::from(xev.state),
+                xev.time
+            );
+        });
         let (response_tx, response_rx) = mpsc::channel();
         if self
             .tx
@@ -235,14 +253,24 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
 
         server.preedit_draw(&mut user_ic.ic, &response.preedit)?;
         if let Some(commit) = response.commit {
-            eprintln!("touchdeck-ime: xim commit {commit:?}");
+            log_xim_debug(|| {
+                eprintln!("touchdeck-ime: xim commit {commit:?}");
+            });
             server.commit(&user_ic.ic, &commit)?;
         }
-        eprintln!(
-            "touchdeck-ime: xim key consumed={} preedit={:?}",
-            response.consumed, response.preedit
-        );
+        log_xim_debug(|| {
+            eprintln!(
+                "touchdeck-ime: xim key consumed={} preedit={:?}",
+                response.consumed, response.preedit
+            );
+        });
         Ok(response.consumed)
+    }
+}
+
+fn log_xim_debug(log: impl FnOnce()) {
+    if std::env::var_os("TOUCHDECK_LOG_XIM").is_some() {
+        log();
     }
 }
 
