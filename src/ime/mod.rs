@@ -3,13 +3,14 @@ use std::env;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::raw::c_int;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use touchdeck::niri;
-use touchdeck::protocol::{ImeCursorRect, ImeStatus};
-use touchdeck::x11_geometry::{X11GeometryProbe, X11WindowGeometry};
+use crate::niri;
+use crate::protocol::{ImeCursorRect, ImeStatus};
+use crate::x11_geometry::{X11GeometryProbe, X11WindowGeometry};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool,
     wl_surface,
@@ -53,9 +54,8 @@ use key::{
 use physical_keyboard::PhysicalKeyboard;
 use popup::PopupRenderer;
 use rime_engine::RimeEngine;
-use touchdeck_socket::{
-    default_socket_path, spawn_socket_listener, TouchDeckEvent, TouchDeckRequest,
-};
+pub use touchdeck_socket::TouchDeckEvent;
+use touchdeck_socket::{default_socket_path, spawn_socket_listener, TouchDeckRequest};
 use xim_frontend::{spawn_xim_server, XimKeyResponse, XimPreeditArea, XimRequest};
 
 #[derive(Default)]
@@ -92,12 +92,34 @@ struct ImeApp {
     running: bool,
 }
 
-fn main() -> Result<()> {
+pub fn run() -> Result<()> {
     let config = load_ime_config().context("load touchdeck-ime config")?;
     let socket_path = env::var_os("TOUCHDECK_IME_SOCKET")
         .map(PathBuf::from)
         .unwrap_or_else(default_socket_path);
-    let event_rx = spawn_socket_listener(socket_path)?;
+    let socket_rx = spawn_socket_listener(socket_path)?;
+    run_with_sources(config, None, Some(socket_rx), None)
+}
+
+pub fn spawn_embedded(status_tx: Sender<ImeStatus>) -> Sender<TouchDeckEvent> {
+    let (event_tx, event_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = load_ime_config()
+            .context("load embedded touchdeck-ime config")
+            .and_then(|config| run_with_sources(config, Some(event_rx), None, Some(status_tx)));
+        if let Err(err) = result {
+            eprintln!("touchdeck-ime: embedded runtime stopped: {err:?}");
+        }
+    });
+    event_tx
+}
+
+fn run_with_sources(
+    config: ImeRuntimeConfig,
+    touchdeck_event_rx: Option<Receiver<TouchDeckEvent>>,
+    socket_rx: Option<Receiver<TouchDeckRequest>>,
+    status_tx: Option<Sender<ImeStatus>>,
+) -> Result<()> {
     let (xim_tx, xim_rx) = mpsc::channel();
     if env::var("TOUCHDECK_IME_XIM").ok().as_deref() != Some("0") {
         spawn_xim_server(xim_tx);
@@ -123,6 +145,9 @@ fn main() -> Result<()> {
         running: true,
         ..Default::default()
     };
+    if let Some(status_tx) = status_tx {
+        app.add_status_subscriber(status_tx);
+    }
 
     display.get_registry(&qh, ());
     event_queue
@@ -140,15 +165,24 @@ fn main() -> Result<()> {
             .flush()
             .context("flush Wayland configure acknowledgements")?;
 
-        while let Ok(request) = event_rx.try_recv() {
-            match request {
-                TouchDeckRequest::Event { event, response } => {
-                    let status = app.handle_touchdeck_event(&qh, event);
-                    app.broadcast_status("touchdeck");
-                    let _ = response.send(status);
-                }
-                TouchDeckRequest::Subscribe { response } => {
-                    app.add_status_subscriber(response);
+        if let Some(event_rx) = &touchdeck_event_rx {
+            while let Ok(event) = event_rx.try_recv() {
+                app.handle_touchdeck_event(&qh, event);
+                app.broadcast_status("touchdeck");
+            }
+        }
+
+        if let Some(socket_rx) = &socket_rx {
+            while let Ok(request) = socket_rx.try_recv() {
+                match request {
+                    TouchDeckRequest::Event { event, response } => {
+                        let status = app.handle_touchdeck_event(&qh, event);
+                        app.broadcast_status("touchdeck");
+                        let _ = response.send(status);
+                    }
+                    TouchDeckRequest::Subscribe { response } => {
+                        app.add_status_subscriber(response);
+                    }
                 }
             }
         }

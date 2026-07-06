@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
 
 use anyhow::{anyhow, Context, Result};
-use touchdeck::protocol::{ImeCandidate, ImeStatus};
-use touchdeck::rime::{
+use crate::protocol::{ImeCandidate, ImeStatus};
+use crate::rime::{
     call_ret, call_void, empty_rime_context, rime_commit_data_size, rime_get_api,
     rime_traits_data_size, RimeApi, RimeCommit, RimeContext, RimeSessionId, RimeTraits,
 };

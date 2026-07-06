@@ -1080,8 +1080,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        default_ime_socket_path, expand_keyboard_maps, parse_action_steps, BehaviorRegistry,
-        Config, FileConfig, TextOutputBackend, TextOutputConfig,
+        expand_keyboard_maps, parse_action_steps, BehaviorRegistry, Config, FileConfig,
+        TextOutputBackend, TextOutputConfig,
     };
     use crate::key::*;
     use crate::keymap::{Behavior, Binding, Keymap, MacroRegistry, Trigger};
@@ -1114,7 +1114,6 @@ mod tests {
             xkb_keymap_path: None,
             text_output: TextOutputConfig {
                 backend: TextOutputBackend::VirtualKeyboard,
-                ime_socket: default_ime_socket_path(),
             },
             slots: test_slots(),
             keymap: Keymap::default(),

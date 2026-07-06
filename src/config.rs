@@ -106,9 +106,6 @@ impl Config {
         if let Some(backend) = env_text_output_backend() {
             self.text_output.backend = backend;
         }
-        if let Some(socket) = env::var_os("TOUCHDECK_IME_SOCKET") {
-            self.text_output.ime_socket = PathBuf::from(socket);
-        }
     }
 
     fn load_file_overrides(&mut self) -> Result<()> {
@@ -132,18 +129,12 @@ impl Config {
             if let Some(output) = &keyboard.output {
                 self.text_output.backend = parse_text_output_backend(output)?;
             }
-            if let Some(socket) = &keyboard.ime_socket {
-                self.text_output.ime_socket = resolve_config_relative(&path, socket);
-            }
             if let Some(path) = &keyboard.xkb_keymap {
                 self.xkb_keymap_path = Some(PathBuf::from(path));
             }
         }
 
         if let Some(ime) = &file_config.ime {
-            if let Some(socket) = &ime.socket {
-                self.text_output.ime_socket = resolve_config_relative(&path, socket);
-            }
             if let Some(output) = &ime.output {
                 self.text_output.backend = parse_text_output_backend(output)?;
             }
@@ -204,21 +195,12 @@ impl Config {
 #[derive(Clone, Debug)]
 pub(crate) struct TextOutputConfig {
     pub(crate) backend: TextOutputBackend,
-    pub(crate) ime_socket: PathBuf,
 }
 
 impl TextOutputConfig {
     fn from_env() -> Self {
         let backend = env_text_output_backend().unwrap_or(TextOutputBackend::VirtualKeyboard);
-
-        let ime_socket = env::var_os("TOUCHDECK_IME_SOCKET")
-            .map(PathBuf::from)
-            .unwrap_or_else(default_ime_socket_path);
-
-        Self {
-            backend,
-            ime_socket,
-        }
+        Self { backend }
     }
 }
 
@@ -286,13 +268,6 @@ impl TextOutputBackend {
     }
 }
 
-pub(crate) fn default_ime_socket_path() -> PathBuf {
-    env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("touchdeck-ime.sock")
-}
-
 pub(crate) fn parse_text_output_backend(value: &str) -> Result<TextOutputBackend> {
     match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
         "virtual" | "virtual_keyboard" | "wayland_virtual_keyboard" => {
@@ -324,7 +299,6 @@ pub(crate) struct LayoutFileConfig {
 #[derive(Deserialize)]
 pub(crate) struct KeyboardFileConfig {
     pub(crate) output: Option<String>,
-    pub(crate) ime_socket: Option<String>,
     pub(crate) xkb_keymap: Option<String>,
     pub(crate) behaviors: Option<HashMap<String, BehaviorDefinitionFileConfig>>,
     pub(crate) layers: Option<Vec<KeyboardMapFileConfig>>,
@@ -333,7 +307,6 @@ pub(crate) struct KeyboardFileConfig {
 #[derive(Deserialize)]
 pub(crate) struct ImeFileConfig {
     pub(crate) output: Option<String>,
-    pub(crate) socket: Option<String>,
 }
 
 #[derive(Deserialize)]

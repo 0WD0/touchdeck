@@ -8,10 +8,9 @@ svg = "layouts/phone-portrait.svg"
 [keyboard]
 # Text output backend:
 #   virtual-keyboard  Send Wayland zwp_virtual_keyboard_v1 events to the focused app.
-#   ime               Send key events to touchdeck-ime over a Unix socket.
+#   ime               Send key events to the embedded touchdeck-ime runtime.
 #   both              Send to both while developing the IME path.
 output = "ime"
-# ime_socket = "/run/user/1000/touchdeck-ime.sock"
 
 # Optional raw XKB keymap file. If omitted, touchdeck uses a built-in us/pc105 keymap.
 # xkb_keymap = "/path/to/keymap.xkb"
@@ -47,10 +46,8 @@ normal = "&kp SLASH"
 morph = "&kpe QUESTION"
 
 [ime]
-# touchdeck-ime listens here by default when XDG_RUNTIME_DIR is set.
 # output can also be set here and overrides [keyboard].output.
 # output = "ime"
-# socket = "/run/user/1000/touchdeck-ime.sock"
 # Rime key translation:
 #   effective  Physical Shift+/ is sent to Rime as "?"
 #   raw        Physical Shift+/ is sent to Rime as "/" with Shift modifier

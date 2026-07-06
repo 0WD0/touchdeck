@@ -9,8 +9,8 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use touchdeck::protocol::ImeStatus;
-use touchdeck::x11_geometry::X11WindowGeometry;
+use crate::protocol::ImeStatus;
+use crate::x11_geometry::X11WindowGeometry;
 use zbus::names::OwnedBusName;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Structure, Value};
 use zbus::{interface, message::Header, object_server::SignalEmitter, ObjectServer};

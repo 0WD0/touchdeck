@@ -1,10 +1,7 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -111,62 +108,6 @@ struct ModeHint {
     until_ms: u64,
 }
 
-fn spawn_ime_status_subscriber(socket_path: PathBuf) -> Receiver<ImeStatus> {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || loop {
-        match UnixStream::connect(&socket_path) {
-            Ok(mut stream) => {
-                let message = serde_json::json!({
-                    "protocol": "touchdeck-ime-v1",
-                    "type": "subscribe_status",
-                    "source": "touchdeck",
-                });
-
-                if let Err(err) = serde_json::to_writer(&mut stream, &message)
-                    .and_then(|()| stream.write_all(b"\n").map_err(serde_json::Error::io))
-                {
-                    eprintln!("touchdeck: failed to subscribe touchdeck-ime status: {err}");
-                    thread::sleep(Duration::from_millis(500));
-                    continue;
-                }
-
-                eprintln!(
-                    "touchdeck: subscribed to touchdeck-ime status at {}",
-                    socket_path.display()
-                );
-                let reader = BufReader::new(stream);
-                for line in reader.lines() {
-                    let Ok(line) = line else {
-                        break;
-                    };
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<ImeStatus>(line.trim()) {
-                        Ok(status) => {
-                            if tx.send(status).is_err() {
-                                return;
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("touchdeck: failed to parse subscribed IME status: {err}");
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                eprintln!(
-                    "touchdeck: waiting for touchdeck-ime status socket {}: {err}",
-                    socket_path.display()
-                );
-            }
-        }
-
-        thread::sleep(Duration::from_millis(500));
-    });
-    rx
-}
-
 fn main() -> Result<()> {
     let config = Config::default();
     let trace = if let Some(path) = &config.record_trace_path {
@@ -188,9 +129,10 @@ fn main() -> Result<()> {
         ..Default::default()
     };
     if app.config.text_output.backend.uses_ime() {
-        app.ime_status_rx = Some(spawn_ime_status_subscriber(
-            app.config.text_output.ime_socket.clone(),
-        ));
+        let (status_tx, status_rx) = mpsc::channel();
+        let event_tx = touchdeck::ime::spawn_embedded(status_tx);
+        app.executor.set_ime_event_sender(event_tx);
+        app.ime_status_rx = Some(status_rx);
     }
 
     display.get_registry(&qh, ());
@@ -681,36 +623,23 @@ impl App {
                     self.apply_input_region(qh, &policy)
                 }
                 EngineEffect::Dispatch(action) => {
-                    let outcome = self.executor.dispatch_action(
-                        action,
-                        self.now_ms(),
-                        &self.config,
-                        &mut self.ime_status,
-                        &mut self.ime_status_dirty,
-                    );
+                    let outcome =
+                        self.executor
+                            .dispatch_action(action, self.now_ms(), &self.config);
                     self.apply_executor_outcome(outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
                 EngineEffect::Press { hold_id, action } => {
-                    let outcome = self.executor.press_action(
-                        hold_id,
-                        action,
-                        self.now_ms(),
-                        &self.config,
-                        &mut self.ime_status,
-                        &mut self.ime_status_dirty,
-                    );
+                    let outcome =
+                        self.executor
+                            .press_action(hold_id, action, self.now_ms(), &self.config);
                     self.apply_executor_outcome(outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
                 EngineEffect::Release { hold_id } => {
-                    let outcome = self.executor.release_action(
-                        hold_id,
-                        self.now_ms(),
-                        &self.config,
-                        &mut self.ime_status,
-                        &mut self.ime_status_dirty,
-                    );
+                    let outcome =
+                        self.executor
+                            .release_action(hold_id, self.now_ms(), &self.config);
                     self.apply_executor_outcome(outcome);
                     self.redraw_ime_if_dirty(qh)
                 }

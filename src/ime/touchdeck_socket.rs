@@ -10,26 +10,26 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use touchdeck::protocol::ImeStatus;
+use crate::protocol::ImeStatus;
 
 #[derive(Debug, Deserialize)]
-pub(super) struct TouchDeckEvent {
-    pub(super) protocol: String,
+pub struct TouchDeckEvent {
+    pub protocol: String,
     #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) source: String,
+    pub kind: String,
+    pub source: String,
     #[serde(default)]
-    pub(super) time: u32,
+    pub time: u32,
     #[serde(default)]
-    pub(super) key: u32,
+    pub key: u32,
     #[serde(default)]
-    pub(super) state: String,
+    pub state: String,
     #[serde(default)]
-    pub(super) modifiers: u32,
+    pub modifiers: u32,
     #[serde(default)]
-    pub(super) translation: Option<String>,
+    pub translation: Option<String>,
     #[serde(default)]
-    pub(super) route: Option<String>,
+    pub route: Option<String>,
 }
 
 pub(super) enum TouchDeckRequest {

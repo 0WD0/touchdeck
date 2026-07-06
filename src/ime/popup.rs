@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache};
 use memmap2::MmapMut;
 use tempfile::tempfile;
-use touchdeck::protocol::ImeStatus;
+use crate::protocol::ImeStatus;
 use wayland_client::protocol::{wl_buffer, wl_shm, wl_shm_pool, wl_surface};
 use wayland_client::QueueHandle;
 

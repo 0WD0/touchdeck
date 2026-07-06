@@ -1,4 +1,4 @@
-use touchdeck::protocol::ImeStatus;
+use crate::protocol::ImeStatus;
 
 use super::config::KeyTranslationPolicy;
 use super::fcitx_dbus::{FcitxDbusOutput, FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL};

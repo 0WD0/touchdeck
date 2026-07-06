@@ -11,26 +11,21 @@ wl_touch events
   -> gesture recognition
   -> mode/layer keymap resolution
   -> behavior dispatch
-  -> niri IPC / virtual keyboard / touchdeck-ime
+  -> niri IPC / virtual keyboard / embedded touchdeck-ime runtime
 ```
 
-The current project has two binaries:
+The normal runtime is a single binary:
 
-- `touchdeck`: the fullscreen layer-shell overlay, gesture engine, keymap engine, niri dispatcher, and key sender.
-- `touchdeck-ime`: an input-method-v2 + librime frontend used when TouchDeck key events should pass through Rime.
+- `touchdeck`: the fullscreen layer-shell overlay, gesture engine, keymap engine, niri dispatcher, key sender, and embedded librime IME runtime.
+
+There is still a `touchdeck-ime` binary for focused protocol/debug work, but the
+default Rime path no longer requires starting it separately.
 
 For application-specific setup, see [Usage scenarios](docs/usage-scenarios.md).
 
 ## Quick start
 
-Run the IME frontend first if the config uses `output = "ime"`:
-
-```sh
-cd /home/disk/Projects/touchdeck
-TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml cargo run --release --bin touchdeck-ime
-```
-
-Then run TouchDeck:
+Run TouchDeck:
 
 ```sh
 cd /home/disk/Projects/touchdeck
@@ -85,7 +80,6 @@ Important environment overrides:
 
 - `TOUCHDECK_CONFIG`: path to TOML config.
 - `TOUCHDECK_TEXT_OUTPUT`: `virtual-keyboard`, `ime`, or `both`.
-- `TOUCHDECK_IME_SOCKET`: Unix socket path for `touchdeck-ime`.
 - `TOUCHDECK_XKB_KEYMAP`: raw XKB keymap file for virtual keyboard output.
 - `TOUCHDECK_DEBUG_DRAW=1`: draw overlay debug/keycap UI.
 - `TOUCHDECK_DEBUG_ALPHA=0..255`: overlay background alpha.
@@ -305,7 +299,7 @@ output = "ime"
 Supported values:
 
 - `virtual-keyboard`: send `zwp_virtual_keyboard_v1` events directly to the focused app.
-- `ime`: send key events to `touchdeck-ime` over a Unix socket.
+- `ime`: send key events to the embedded touchdeck-ime runtime.
 - `both`: send to both, useful only while debugging.
 
 `virtual-keyboard` is simple but may bypass input methods depending on compositor
@@ -313,22 +307,17 @@ routing. `ime` is the preferred path for Rime input.
 
 ## touchdeck-ime and Rime
 
-`touchdeck-ime` is a minimal Wayland input-method-v2 frontend backed by librime.
+The embedded touchdeck-ime runtime is a minimal Wayland input-method-v2 frontend
+backed by librime.
 It handles two input sources:
 
 - Physical keyboard events from input-method keyboard grab.
-- TouchDeck key events sent over `touchdeck-ime-v1` IPC.
+- TouchDeck key events sent over an in-process channel from the overlay.
 
 For native Wayland input-method usage, it can show preedit/candidates through
 `input_popup_surface_v2`. For fcitx-compatible Xwayland clients, it publishes
 cursor/candidate status and lets the main TouchDeck overlay render the
 server-side candidate popup.
-
-Run it before `touchdeck` when using `output = "ime"`:
-
-```sh
-TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml cargo run --release --bin touchdeck-ime
-```
 
 Rime directories:
 
@@ -342,7 +331,7 @@ Example using an existing fcitx5-rime user directory:
 ```sh
 TOUCHDECK_RIME_USER_DATA_DIR=/home/_WD_/.local/share/fcitx5/rime \
 TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
-cargo run --release --bin touchdeck-ime
+cargo run --release --bin touchdeck
 ```
 
 Useful Rime environment variables:
@@ -451,12 +440,12 @@ TOUCHDECK_LOG_TOUCH=1
 ```
 
 When diagnosing key behavior, prefer `TOUCHDECK_LOG_TOUCH=1` plus
-`touchdeck-ime` logs. The IME log line includes key, state, modifiers, route,
-handled, and current preedit.
+IME logs from the same `touchdeck` process. The IME log line includes key,
+state, modifiers, route, handled, and current preedit.
 
 Common issues:
 
-- Key reaches app but not Rime: use `output = "ime"`, start `touchdeck-ime`, and keep route as `ime-key`.
+- Key reaches app but not Rime: use `output = "ime"` and keep route as `ime-key`.
 - Emacs PGTK with `(setopt pgtk-use-im-context-on-new-connection nil)`: Emacs disables `GtkIMContext`, so it will not activate Wayland text-input/input-method. TouchDeck keys fall back to virtual-keyboard passthrough, but Rime commit/preedit cannot be delivered to Emacs through the standard Wayland IM path.
 - Cursor key edits app instead of candidate/preedit: keep route as `ime-key`; if Rime handles it, it will be consumed.
 - Cursor key must always bypass Rime: use `route = "app-key"` or `&ak KEY`.
@@ -469,5 +458,5 @@ Common issues:
 - SVG layout supports rect slots only.
 - Runtime has no built-in fallback slot/keymap defaults.
 - Modes and layers are intentionally small: `base`, `text`, `niri_momentary`, `niri_locked`, `passthrough`; layers `base`, `niri`.
-- `touchdeck-ime` is a focused Rime frontend, not a full fcitx replacement yet.
+- The embedded touchdeck-ime runtime is a focused Rime frontend, not a full fcitx replacement yet.
 - No graphical layout editor yet.

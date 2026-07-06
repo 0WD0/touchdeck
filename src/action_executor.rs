@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
-use touchdeck::protocol::ImeStatus;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1;
 
 use crate::action::ActionStep;
@@ -12,6 +10,7 @@ use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::key::{modifier_mask_for_key, KeyChord};
 use crate::keymap::{GestureAction, LastKeySequence};
 use crate::niri_backend::spawn_niri_action;
+use touchdeck::ime::TouchDeckEvent;
 
 #[derive(Default)]
 pub(crate) struct ActionExecutor {
@@ -22,6 +21,7 @@ pub(crate) struct ActionExecutor {
     modifier_mask_stack: Vec<u32>,
     last_key_sequence: Option<LastKeySequence>,
     active_actions: HashMap<i32, PressedAction>,
+    ime_event_tx: Option<Sender<TouchDeckEvent>>,
 }
 
 #[derive(Debug)]
@@ -52,11 +52,13 @@ impl ExecutorOutcome {
 struct ExecutionContext<'a> {
     now_ms: u64,
     config: &'a Config,
-    ime_status: &'a mut ImeStatus,
-    ime_status_dirty: &'a mut bool,
 }
 
 impl ActionExecutor {
+    pub(crate) fn set_ime_event_sender(&mut self, sender: Sender<TouchDeckEvent>) {
+        self.ime_event_tx = Some(sender);
+    }
+
     pub(crate) fn set_virtual_keyboard(
         &mut self,
         keyboard: zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
@@ -86,15 +88,8 @@ impl ActionExecutor {
         action: GestureAction,
         now_ms: u64,
         config: &Config,
-        ime_status: &mut ImeStatus,
-        ime_status_dirty: &mut bool,
     ) -> ExecutorOutcome {
-        let mut ctx = ExecutionContext {
-            now_ms,
-            config,
-            ime_status,
-            ime_status_dirty,
-        };
+        let mut ctx = ExecutionContext { now_ms, config };
         self.dispatch_action_inner(action, &mut ctx)
     }
 
@@ -104,15 +99,8 @@ impl ActionExecutor {
         action: GestureAction,
         now_ms: u64,
         config: &Config,
-        ime_status: &mut ImeStatus,
-        ime_status_dirty: &mut bool,
     ) -> ExecutorOutcome {
-        let mut ctx = ExecutionContext {
-            now_ms,
-            config,
-            ime_status,
-            ime_status_dirty,
-        };
+        let mut ctx = ExecutionContext { now_ms, config };
         let (pressed, outcome) = self.press_action_inner(action, &mut ctx);
         self.active_actions.insert(hold_id, pressed);
         outcome
@@ -123,18 +111,11 @@ impl ActionExecutor {
         hold_id: i32,
         now_ms: u64,
         config: &Config,
-        ime_status: &mut ImeStatus,
-        ime_status_dirty: &mut bool,
     ) -> ExecutorOutcome {
         let Some(pressed) = self.active_actions.remove(&hold_id) else {
             return ExecutorOutcome::default();
         };
-        let mut ctx = ExecutionContext {
-            now_ms,
-            config,
-            ime_status,
-            ime_status_dirty,
-        };
+        let mut ctx = ExecutionContext { now_ms, config };
         self.release_pressed_action(pressed, &mut ctx)
     }
 
@@ -451,58 +432,25 @@ impl ActionExecutor {
             return;
         }
 
-        let message = serde_json::json!({
-            "protocol": "touchdeck-ime-v1",
-            "type": "key",
-            "source": "touchdeck",
-            "time": time,
-            "key": key,
-            "state": if pressed { "pressed" } else { "released" },
-            "modifiers": self.modifier_mask,
-            "translation": translation.map(KeyTranslationPolicy::as_str),
-            "route": route.map(KeyRoute::as_str),
-        });
-
-        let mut stream = match UnixStream::connect(&ctx.config.text_output.ime_socket) {
-            Ok(stream) => stream,
-            Err(err) => {
-                eprintln!(
-                    "touchdeck: failed to connect touchdeck-ime socket {}: {err}",
-                    ctx.config.text_output.ime_socket.display()
-                );
-                return;
-            }
+        let Some(sender) = &self.ime_event_tx else {
+            eprintln!("touchdeck: embedded touchdeck-ime is unavailable; ignored IME key {key}");
+            return;
         };
 
-        if let Err(err) = serde_json::to_writer(&mut stream, &message)
-            .and_then(|()| stream.write_all(b"\n").map_err(serde_json::Error::io))
-        {
-            eprintln!("touchdeck: failed to write touchdeck-ime event: {err}");
-            return;
-        }
+        let event = TouchDeckEvent {
+            protocol: "touchdeck-ime-v1".to_string(),
+            kind: "key".to_string(),
+            source: "touchdeck".to_string(),
+            time,
+            key,
+            state: if pressed { "pressed" } else { "released" }.to_string(),
+            modifiers: self.modifier_mask,
+            translation: translation.map(|value| value.as_str().to_string()),
+            route: route.map(|value| value.as_str().to_string()),
+        };
 
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {}
-            Ok(_) => match serde_json::from_str::<ImeStatus>(line.trim()) {
-                Ok(status) if status.protocol == "touchdeck-ime-v1" && status.kind == "status" => {
-                    if status != *ctx.ime_status {
-                        *ctx.ime_status = status;
-                        *ctx.ime_status_dirty = true;
-                    }
-                }
-                Ok(status) => {
-                    eprintln!("touchdeck: ignored unsupported touchdeck-ime status {status:?}");
-                }
-                Err(err) => {
-                    eprintln!("touchdeck: failed to parse touchdeck-ime status: {err}");
-                }
-            },
-            Err(err) => {
-                eprintln!("touchdeck: failed to read touchdeck-ime status: {err}");
-            }
+        if sender.send(event).is_err() {
+            eprintln!("touchdeck: embedded touchdeck-ime event channel is closed");
         }
     }
 
@@ -519,7 +467,7 @@ impl ActionExecutor {
 mod tests {
     use super::*;
     use crate::action::NiriAction;
-    use crate::config::{default_ime_socket_path, TextOutputBackend, TextOutputConfig};
+    use crate::config::{TextOutputBackend, TextOutputConfig};
     use crate::key::*;
     use crate::keymap::MacroRegistry;
     use crate::layout::SlotRegistry;
@@ -550,7 +498,6 @@ mod tests {
             xkb_keymap_path: None,
             text_output: TextOutputConfig {
                 backend: TextOutputBackend::VirtualKeyboard,
-                ime_socket: default_ime_socket_path(),
             },
             slots: SlotRegistry::default(),
             keymap: crate::keymap::Keymap::default(),
@@ -566,39 +513,18 @@ mod tests {
         action: GestureAction,
         config: &Config,
     ) -> PressedAction {
-        let mut ime_status = ImeStatus::default();
-        let mut ime_dirty = false;
-        let mut ctx = ExecutionContext {
-            now_ms: 0,
-            config,
-            ime_status: &mut ime_status,
-            ime_status_dirty: &mut ime_dirty,
-        };
+        let mut ctx = ExecutionContext { now_ms: 0, config };
         let (pressed, _) = executor.press_action_inner(action, &mut ctx);
         pressed
     }
 
     fn dispatch_for_test(executor: &mut ActionExecutor, action: GestureAction, config: &Config) {
-        let mut ime_status = ImeStatus::default();
-        let mut ime_dirty = false;
-        let mut ctx = ExecutionContext {
-            now_ms: 0,
-            config,
-            ime_status: &mut ime_status,
-            ime_status_dirty: &mut ime_dirty,
-        };
+        let mut ctx = ExecutionContext { now_ms: 0, config };
         executor.dispatch_action_inner(action, &mut ctx);
     }
 
     fn release_for_test(executor: &mut ActionExecutor, pressed: PressedAction, config: &Config) {
-        let mut ime_status = ImeStatus::default();
-        let mut ime_dirty = false;
-        let mut ctx = ExecutionContext {
-            now_ms: 0,
-            config,
-            ime_status: &mut ime_status,
-            ime_status_dirty: &mut ime_dirty,
-        };
+        let mut ctx = ExecutionContext { now_ms: 0, config };
         executor.release_pressed_action(pressed, &mut ctx);
     }
 

@@ -9,31 +9,28 @@ frontend the focused application can actually talk to.
 TouchDeck currently has three relevant input paths:
 
 - `touchdeck` overlay: captures touch, resolves slots/gestures/modes, sends keys/actions.
-- `touchdeck-ime`: a librime-backed IME daemon for physical keyboard, TouchDeck keys, XIM, and fcitx D-Bus compatibility.
+- embedded touchdeck-ime runtime: librime-backed IME handling physical keyboard, TouchDeck keys, XIM, and fcitx D-Bus compatibility.
 - focused app frontend: Wayland text-input/input-method, XIM, fcitx D-Bus module, or raw key input.
 
-The usual Rime setup runs both daemons:
+The usual Rime setup runs one process:
 
 ```sh
 cd /home/disk/Projects/touchdeck
-
-TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
-cargo run --release --bin touchdeck-ime
 
 TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
 cargo run --release --bin touchdeck
 ```
 
 Do not run another service that owns the same IM frontend name at the same time.
-In particular, `touchdeck-ime`'s fcitx compatibility layer owns
+In particular, TouchDeck's fcitx compatibility layer owns
 `org.fcitx.Fcitx5` and `org.freedesktop.portal.Fcitx`.
 
 ## Decision table
 
 | Scenario | App frontend | TouchDeck config | Candidate/preedit UI |
 | --- | --- | --- | --- |
-| Phone portrait streaming, TouchDeck keyboard | TouchDeck IPC to `touchdeck-ime` | `[keyboard] output = "ime"` | TouchDeck overlay |
-| Native Wayland app with physical keyboard | Wayland text-input/input-method | run `touchdeck-ime` | native `input_popup_surface_v2` |
+| Phone portrait streaming, TouchDeck keyboard | in-process channel to embedded IME | `[keyboard] output = "ime"` | TouchDeck overlay |
+| Native Wayland app with physical keyboard | Wayland text-input/input-method | run `touchdeck` with `output = "ime"` | native `input_popup_surface_v2` |
 | Raw key passthrough only | focused app key events | `TOUCHDECK_TEXT_OUTPUT=virtual-keyboard` | app/toolkit only |
 | XWayland app with XIM support | XIM | `TOUCHDECK_IME_XIM=1`, `XMODIFIERS=@im=touchdeck` | TouchDeck server-side popup |
 | Qt/fcitx-compatible app such as some WeChat surfaces | fcitx D-Bus frontend | `TOUCHDECK_IME_FCITX_DBUS=1`, app uses `fcitx` IM module | client-side if app supports it, otherwise TouchDeck popup |
@@ -46,18 +43,13 @@ keyboard and niri gestures.
 
 ```sh
 TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
-cargo run --release --bin touchdeck-ime
-```
-
-```sh
-TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
 TOUCHDECK_TEXT_OUTPUT=ime \
 cargo run --release --bin touchdeck
 ```
 
 Expected behavior:
 
-- touch keys go to Rime through `touchdeck-ime`;
+- touch keys go to Rime through the embedded IME runtime;
 - niri actions use niri IPC directly;
 - candidate UI for touch input is drawn by the TouchDeck overlay;
 - `passthrough` mode is explicit, not assumed for every mode.
@@ -67,17 +59,17 @@ Use `route = "ime-key"` for normal text keys and cursor/candidate keys. Use
 
 ## Scenario: native Wayland apps and physical keyboard
 
-Use this when you want `touchdeck-ime` to replace fcitx5 for physical keyboard
+Use this when you want TouchDeck's embedded IME to replace fcitx5 for physical keyboard
 input in apps that support Wayland text-input/input-method.
 
 ```sh
 TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
-cargo run --release --bin touchdeck-ime
+cargo run --release --bin touchdeck
 ```
 
 Expected behavior:
 
-- physical keyboard events enter `touchdeck-ime` through input-method-v2 keyboard grab;
+- physical keyboard events enter the embedded IME through input-method-v2 keyboard grab;
 - Rime preedit/candidates use native `input_popup_surface_v2`;
 - commit/preedit are delivered through Wayland input-method protocol.
 
@@ -95,12 +87,12 @@ Known case:
 
 Use this for XWayland clients that use XIM directly.
 
-Start `touchdeck-ime` with XIM enabled:
+Start TouchDeck with XIM enabled:
 
 ```sh
 TOUCHDECK_IME_XIM=1 \
 TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
-cargo run --release --bin touchdeck-ime
+cargo run --release --bin touchdeck
 ```
 
 Start the target app with:
@@ -112,7 +104,7 @@ XMODIFIERS=@im=touchdeck app-command
 Expected behavior:
 
 - key events arrive through XIM `ForwardEvent`;
-- `touchdeck-ime` sends preedit/commit through XIM;
+- TouchDeck sends preedit/commit through XIM;
 - candidate status is published to `touchdeck`;
 - the main TouchDeck overlay draws the server-side candidate popup near the X11
   cursor rect mapped into niri output coordinates.
@@ -133,12 +125,12 @@ check which XIM style the app selected.
 Some Qt/XWayland surfaces do not use XIM for all text fields but do use the
 fcitx D-Bus frontend. This is common in mixed or embedded UI surfaces.
 
-Start `touchdeck-ime` with fcitx compatibility enabled:
+Start TouchDeck with fcitx compatibility enabled:
 
 ```sh
 TOUCHDECK_IME_FCITX_DBUS=1 \
 TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
-cargo run --release --bin touchdeck-ime
+cargo run --release --bin touchdeck
 ```
 
 Start the app with an fcitx IM module, for example:
@@ -172,7 +164,7 @@ cargo run --release --bin touchdeck
 
 Expected behavior:
 
-- no `touchdeck-ime` is required;
+- the embedded IME runtime is not started;
 - keys are sent through Wayland virtual-keyboard;
 - input methods may be bypassed depending on compositor/client routing;
 - Shift or other IM trigger keys are just key events, not Rime control.
@@ -193,7 +185,7 @@ To reuse an existing fcitx5-rime user config:
 ```sh
 TOUCHDECK_RIME_USER_DATA_DIR=/home/_WD_/.local/share/fcitx5/rime \
 TOUCHDECK_CONFIG=$PWD/touchdeck.example.toml \
-cargo run --release --bin touchdeck-ime
+cargo run --release --bin touchdeck
 ```
 
 TouchDeck intentionally uses `/usr/share/rime-data` as shared data. Do not copy

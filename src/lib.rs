@@ -1,3 +1,4 @@
+pub mod ime;
 pub mod niri;
 pub mod protocol;
 pub mod rime;
