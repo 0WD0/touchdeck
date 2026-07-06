@@ -352,6 +352,43 @@ pub(crate) fn niri_action_request_json(action: NiriAction) -> String {
     action.ipc_request_json().to_string()
 }
 
+pub(crate) fn niri_interactive_move_begin_request_json(output: &str, x: f64, y: f64) -> String {
+    action(
+        "InteractiveMoveBegin",
+        fields([
+            ("id", Value::Null),
+            ("output", Value::String(output.to_string())),
+            ("x", Value::from(x)),
+            ("y", Value::from(y)),
+        ]),
+    )
+    .to_string()
+}
+
+pub(crate) fn niri_interactive_move_update_request_json(
+    output: &str,
+    x: f64,
+    y: f64,
+    dx: f64,
+    dy: f64,
+) -> String {
+    action(
+        "InteractiveMoveUpdate",
+        fields([
+            ("output", Value::String(output.to_string())),
+            ("x", Value::from(x)),
+            ("y", Value::from(y)),
+            ("dx", Value::from(dx)),
+            ("dy", Value::from(dy)),
+        ]),
+    )
+    .to_string()
+}
+
+pub(crate) fn niri_interactive_move_end_request_json() -> String {
+    action("InteractiveMoveEnd", object()).to_string()
+}
+
 pub(crate) fn parse_niri_action(value: &str) -> Result<NiriAction> {
     let value = value.trim();
     let (name, arg) = split_action_arg(value);

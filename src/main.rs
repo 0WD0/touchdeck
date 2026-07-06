@@ -228,6 +228,11 @@ impl TouchSession {
             .as_deref()
             .or(config.input.sunshine_output.as_deref())
     }
+
+    fn niri_output_name<'a>(&'a self, config: &'a Config) -> Option<&'a str> {
+        self.output_name(config)
+            .or(self.overlay_output_name.as_deref())
+    }
 }
 
 impl Default for App {
@@ -919,6 +924,13 @@ impl App {
                     self.apply_executor_outcome(index, outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
+                EngineEffect::InteractiveMoveBegin { x, y } => {
+                    self.send_interactive_move_begin(index, x, y)
+                }
+                EngineEffect::InteractiveMoveUpdate { x, y, dx, dy } => {
+                    self.send_interactive_move_update(index, x, y, dx, dy)
+                }
+                EngineEffect::InteractiveMoveEnd => self.send_interactive_move_end(),
                 EngineEffect::Redraw => {
                     if let Some((width, height)) = self.sessions[index].overlay.dimensions() {
                         self.attach_overlay_buffer(qh, index, width, height)
@@ -934,6 +946,36 @@ impl App {
                 break;
             }
         }
+    }
+
+    fn niri_output_name_for_session(&self, index: usize) -> Result<String> {
+        self.sessions[index]
+            .niri_output_name(&self.config)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("interactive move requires a session output binding"))
+    }
+
+    fn send_interactive_move_begin(&self, index: usize, x: f64, y: f64) -> Result<()> {
+        let output = self.niri_output_name_for_session(index)?;
+        niri_backend::send_niri_interactive_move_begin(&output, x, y)
+            .with_context(|| format!("send niri interactive move begin to {output}"))
+    }
+
+    fn send_interactive_move_update(
+        &self,
+        index: usize,
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+    ) -> Result<()> {
+        let output = self.niri_output_name_for_session(index)?;
+        niri_backend::send_niri_interactive_move_update(&output, x, y, dx, dy)
+            .with_context(|| format!("send niri interactive move update to {output}"))
+    }
+
+    fn send_interactive_move_end(&self) -> Result<()> {
+        niri_backend::send_niri_interactive_move_end().context("send niri interactive move end")
     }
 
     fn apply_executor_outcome(&mut self, index: usize, outcome: ExecutorOutcome) {

@@ -3,7 +3,10 @@ use std::thread;
 use anyhow::Result;
 use touchdeck::niri;
 
-use crate::action::{niri_action_request_json, NiriAction};
+use crate::action::{
+    niri_action_request_json, niri_interactive_move_begin_request_json,
+    niri_interactive_move_end_request_json, niri_interactive_move_update_request_json, NiriAction,
+};
 
 pub(crate) fn spawn_niri_action(action: NiriAction) {
     thread::spawn(move || {
@@ -15,6 +18,30 @@ pub(crate) fn spawn_niri_action(action: NiriAction) {
 
 pub(crate) fn send_niri_action_socket(action: NiriAction) -> Result<()> {
     let request = niri_action_request_json(action);
+    let _ = niri::send_ipc_request_json(&request)?;
+    Ok(())
+}
+
+pub(crate) fn send_niri_interactive_move_begin(output: &str, x: f64, y: f64) -> Result<()> {
+    let request = niri_interactive_move_begin_request_json(output, x, y);
+    let _ = niri::send_ipc_request_json(&request)?;
+    Ok(())
+}
+
+pub(crate) fn send_niri_interactive_move_update(
+    output: &str,
+    x: f64,
+    y: f64,
+    dx: f64,
+    dy: f64,
+) -> Result<()> {
+    let request = niri_interactive_move_update_request_json(output, x, y, dx, dy);
+    let _ = niri::send_ipc_request_json(&request)?;
+    Ok(())
+}
+
+pub(crate) fn send_niri_interactive_move_end() -> Result<()> {
+    let request = niri_interactive_move_end_request_json();
     let _ = niri::send_ipc_request_json(&request)?;
     Ok(())
 }

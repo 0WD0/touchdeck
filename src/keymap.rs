@@ -48,6 +48,12 @@ pub(crate) struct ActiveSwipeQuery<'a> {
     pub(crate) config: &'a Config,
 }
 
+pub(crate) struct DragStartQuery<'a> {
+    pub(crate) context: KeymapContext<'a>,
+    pub(crate) gesture: &'a Gesture,
+    pub(crate) config: &'a Config,
+}
+
 impl Keymap {
     pub(crate) fn resolve_hold(&self, query: HoldQuery<'_>) -> Option<(GestureAction, u32)> {
         for layer in query.context.layers.iter().rev() {
@@ -171,6 +177,17 @@ impl Keymap {
         })
         .map(|binding| binding.behavior.clone().into_action())
         .filter(GestureAction::is_active_swipe_action)
+        .unwrap_or(GestureAction::None)
+    }
+
+    pub(crate) fn resolve_drag_start(&self, query: DragStartQuery<'_>) -> GestureAction {
+        self.find_release_binding(query.context.mode, query.context.layers, |binding| {
+            binding
+                .trigger
+                .matches_drag_start(query.gesture, query.config, query.context.size)
+        })
+        .map(|binding| binding.behavior.clone().into_action())
+        .filter(GestureAction::is_continuous_drag_action)
         .unwrap_or(GestureAction::None)
     }
 
@@ -368,6 +385,11 @@ pub(crate) enum Trigger {
         min_px: Option<f64>,
         max_ms: Option<u32>,
     },
+    Drag {
+        target: SlotTarget,
+        fingers: usize,
+        min_px: Option<f64>,
+    },
 }
 
 impl Trigger {
@@ -376,7 +398,8 @@ impl Trigger {
             Self::Tap { target, .. }
             | Self::DoubleTap { target, .. }
             | Self::Hold { target, .. }
-            | Self::Swipe { target, .. } => target,
+            | Self::Swipe { target, .. }
+            | Self::Drag { target, .. } => target,
         }
     }
 
@@ -434,7 +457,7 @@ impl Trigger {
             Self::Tap { max_ms, .. }
             | Self::DoubleTap { max_ms, .. }
             | Self::Swipe { max_ms, .. } => *max_ms,
-            Self::Hold { .. } => None,
+            Self::Hold { .. } | Self::Drag { .. } => None,
         }
     }
 
@@ -493,7 +516,7 @@ impl Trigger {
                         max_ms.unwrap_or(config.two_finger_tap_ms),
                     )
             }
-            Self::DoubleTap { .. } | Self::Hold { .. } => false,
+            Self::DoubleTap { .. } | Self::Hold { .. } | Self::Drag { .. } => false,
             Self::Swipe {
                 target,
                 fingers,
@@ -513,11 +536,70 @@ impl Trigger {
             }
         }
     }
+
+    fn matches_drag_start(&self, gesture: &Gesture, config: &Config, size: SurfaceSize) -> bool {
+        let Self::Drag {
+            target,
+            fingers,
+            min_px,
+        } = self
+        else {
+            return false;
+        };
+
+        if gesture.max_active != *fingers || gesture.finished.is_empty() {
+            return false;
+        }
+
+        let Some((start_x, start_y, last_x, last_y)) = gesture_centroid(gesture) else {
+            return false;
+        };
+        let movement = (last_x - start_x).hypot(last_y - start_y);
+        let threshold = min_px.unwrap_or(config.tap_radius.max(8.0));
+
+        movement >= threshold && target.rect.contains_px(size, start_x, start_y)
+    }
+}
+
+pub(crate) fn gesture_centroid(gesture: &Gesture) -> Option<(f64, f64, f64, f64)> {
+    let count = gesture.finished.len();
+    if count == 0 {
+        return None;
+    }
+
+    let count = count as f64;
+    let start_x = gesture
+        .finished
+        .iter()
+        .map(|contact| contact.start_x)
+        .sum::<f64>()
+        / count;
+    let start_y = gesture
+        .finished
+        .iter()
+        .map(|contact| contact.start_y)
+        .sum::<f64>()
+        / count;
+    let last_x = gesture
+        .finished
+        .iter()
+        .map(|contact| contact.last_x)
+        .sum::<f64>()
+        / count;
+    let last_y = gesture
+        .finished
+        .iter()
+        .map(|contact| contact.last_y)
+        .sum::<f64>()
+        / count;
+
+    Some((start_x, start_y, last_x, last_y))
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Behavior {
     Niri(NiriAction),
+    NiriInteractiveMove,
     KeySequence(Vec<KeyChord>),
     KeyHold(u32),
     ModMorph {
@@ -563,6 +645,7 @@ impl Behavior {
     fn into_action(self) -> GestureAction {
         match self {
             Self::Niri(action) => GestureAction::Niri(action),
+            Self::NiriInteractiveMove => GestureAction::NiriInteractiveMove,
             Self::KeySequence(sequence) => GestureAction::KeySequence(sequence),
             Self::KeyHold(key) => GestureAction::KeyHold(key),
             Self::ModMorph {
@@ -615,6 +698,7 @@ impl Behavior {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum GestureAction {
     Niri(NiriAction),
+    NiriInteractiveMove,
     KeySequence(Vec<KeyChord>),
     KeySequenceWithOptions {
         sequence: Vec<KeyChord>,
@@ -651,11 +735,16 @@ impl GestureAction {
     pub(crate) fn is_active_swipe_action(&self) -> bool {
         matches!(self, Self::KeyHold(_) | Self::HoldRepeat { .. })
     }
+
+    pub(crate) fn is_continuous_drag_action(&self) -> bool {
+        matches!(self, Self::NiriInteractiveMove)
+    }
 }
 
 fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
         Behavior::Niri(action) => Some(action.as_str().to_string()),
+        Behavior::NiriInteractiveMove => Some("drag".to_string()),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),
         Behavior::KeySequenceWithOptions {
             sequence,

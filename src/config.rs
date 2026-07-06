@@ -908,6 +908,11 @@ fn parse_trigger(value: TriggerFileConfig, slots: &SlotRegistry) -> Result<Trigg
             min_px: value.min_px,
             max_ms: value.max_ms,
         }),
+        "drag" => Ok(Trigger::Drag {
+            target,
+            fingers,
+            min_px: value.min_px,
+        }),
         other => Err(anyhow!("unknown trigger type {other}")),
     }
 }
@@ -1013,6 +1018,7 @@ fn parse_behavior(
                 .as_deref()
                 .ok_or_else(|| anyhow!("niri behavior is missing action"))?,
         )?)),
+        "niri_interactive_move" | "interactive_move" => Ok(Behavior::NiriInteractiveMove),
         "mode" | "mode_set" => Ok(Behavior::ModeSet(parse_mode(
             value
                 .mode
@@ -1361,6 +1367,7 @@ fn parse_behavior_invocation_kind(
                 .ok_or_else(|| anyhow!("&niri is missing action"))?;
             Ok(Behavior::Niri(parse_niri_action(&action)?))
         }
+        "niri_interactive_move" | "interactive_move" => Ok(Behavior::NiriInteractiveMove),
         "mode" | "mode_set" => {
             let mode = fields
                 .mode

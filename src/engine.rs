@@ -7,7 +7,10 @@ use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{contact_movement, is_tap_like, Contact, Gesture, TapRecord};
 use crate::key::KeyChord;
-use crate::keymap::{ActiveSwipeQuery, GestureAction, HoldQuery, KeymapContext, ReleaseQuery};
+use crate::keymap::{
+    gesture_centroid, ActiveSwipeQuery, DragStartQuery, GestureAction, HoldQuery, KeymapContext,
+    ReleaseQuery,
+};
 use crate::mode::{default_layer_stack_for_mode, layer_name, mode_name, Layer, Mode};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -86,6 +89,13 @@ struct RepeatState {
     route: Option<KeyRoute>,
 }
 
+#[derive(Clone, Debug)]
+struct ContinuousDragState {
+    contact_ids: Vec<i32>,
+    last_x: f64,
+    last_y: f64,
+}
+
 #[derive(Debug)]
 pub(crate) struct Engine {
     pub(crate) mode: Mode,
@@ -97,6 +107,7 @@ pub(crate) struct Engine {
     momentary: Option<MomentaryState>,
     held_actions: Vec<HeldActionState>,
     repeaters: Vec<RepeatState>,
+    continuous_drag: Option<ContinuousDragState>,
     last_tap: Option<TapRecord>,
     pub(crate) last_action: Option<String>,
 }
@@ -113,6 +124,7 @@ impl Default for Engine {
             momentary: None,
             held_actions: Vec::new(),
             repeaters: Vec::new(),
+            continuous_drag: None,
             last_tap: None,
             last_action: None,
         }
@@ -125,6 +137,9 @@ pub(crate) enum EngineEffect {
     Dispatch(GestureAction),
     Press { hold_id: i32, action: GestureAction },
     Release { hold_id: i32 },
+    InteractiveMoveBegin { x: f64, y: f64 },
+    InteractiveMoveUpdate { x: f64, y: f64, dx: f64, dy: f64 },
+    InteractiveMoveEnd,
     Redraw,
 }
 
@@ -332,6 +347,27 @@ impl Engine {
             moved_contact = Some(*contact);
         }
 
+        let mut effects = Vec::new();
+        if self.continuous_drag.is_some() {
+            self.update_continuous_drag(&mut effects);
+            effects.extend(redraw_if_debug(config));
+            return effects;
+        }
+
+        if matches!(self.mode, Mode::NiriMomentary | Mode::NiriLocked) {
+            let gesture = self.active_non_hold_gesture();
+            let action = config.keymap.resolve_drag_start(DragStartQuery {
+                context: self.keymap_context(size),
+                gesture: &gesture,
+                config,
+            });
+            if action == GestureAction::NiriInteractiveMove {
+                self.start_continuous_drag(gesture, &mut effects);
+                effects.extend(redraw_if_debug(config));
+                return effects;
+            }
+        }
+
         if let Some(contact) = moved_contact {
             if !self.hold_contact_ids().contains(&sample.id) && self.active_non_hold_count() == 1 {
                 action = config.keymap.resolve_active_swipe(ActiveSwipeQuery {
@@ -342,7 +378,6 @@ impl Engine {
             }
         }
 
-        let mut effects = Vec::new();
         if action != GestureAction::None {
             if self
                 .hold_candidate
@@ -382,6 +417,12 @@ impl Engine {
         let was_repeating = self.repeaters.iter().any(|repeater| repeater.hold_id == id);
         let mut held_action_effects = self.release_held_actions_for(id);
         self.stop_repeaters_for(id);
+        if self.drag_contains(id) {
+            let mut effects = std::mem::take(&mut held_action_effects);
+            self.finish_continuous_drag(&mut effects);
+            effects.extend(redraw_if_debug(config));
+            return effects;
+        }
         if was_held_action || was_repeating {
             held_action_effects.extend(redraw_if_debug(config));
             self.max_active = self.active.len();
@@ -444,6 +485,7 @@ impl Engine {
                     .is_some_and(|momentary| momentary.hold_id == id)
                 {
                     let mut effects = std::mem::take(&mut held_action_effects);
+                    self.finish_continuous_drag(&mut effects);
                     let gesture = Gesture {
                         finished: vec![contact],
                         max_active: 1,
@@ -474,6 +516,7 @@ impl Engine {
 
     pub(crate) fn handle_cancel(&mut self, config: &Config) -> Vec<EngineEffect> {
         let mut effects = self.release_all_held_actions();
+        self.finish_continuous_drag(&mut effects);
         self.set_mode(Mode::Base, &mut effects, config);
         self.reset_contacts();
         effects.push(EngineEffect::Redraw);
@@ -625,6 +668,7 @@ impl Engine {
     ) {
         match action {
             GestureAction::Niri(_)
+            | GestureAction::NiriInteractiveMove
             | GestureAction::KeySequence(_)
             | GestureAction::KeySequenceWithOptions { .. }
             | GestureAction::ModMorph { .. }
@@ -819,6 +863,7 @@ impl Engine {
             return;
         };
 
+        self.finish_continuous_drag(effects);
         self.mode = momentary.return_mode;
         self.layer_stack = momentary.return_layer_stack;
         self.hold_candidate = None;
@@ -921,6 +966,21 @@ impl Engine {
             .count()
     }
 
+    fn active_non_hold_gesture(&self) -> Gesture {
+        let hold_ids = self.hold_contact_ids();
+        let finished = self
+            .active
+            .values()
+            .filter(|contact| !hold_ids.contains(&contact.id))
+            .copied()
+            .collect::<Vec<_>>();
+
+        Gesture {
+            max_active: finished.len(),
+            finished,
+        }
+    }
+
     fn take_finished_non_hold_gesture(&mut self) -> Gesture {
         let hold_ids = self.hold_contact_ids();
         let mut finished = Vec::new();
@@ -937,6 +997,89 @@ impl Engine {
         Gesture {
             max_active: finished.len().max(1),
             finished,
+        }
+    }
+
+    fn drag_contains(&self, id: i32) -> bool {
+        self.continuous_drag
+            .as_ref()
+            .is_some_and(|drag| drag.contact_ids.contains(&id))
+    }
+
+    fn start_continuous_drag(&mut self, gesture: Gesture, effects: &mut Vec<EngineEffect>) {
+        let Some((start_x, start_y, last_x, last_y)) = gesture_centroid(&gesture) else {
+            return;
+        };
+
+        let contact_ids = gesture
+            .finished
+            .iter()
+            .map(|contact| contact.id)
+            .collect::<Vec<_>>();
+        self.continuous_drag = Some(ContinuousDragState {
+            contact_ids,
+            last_x,
+            last_y,
+        });
+        self.last_tap = None;
+
+        effects.push(EngineEffect::InteractiveMoveBegin {
+            x: start_x,
+            y: start_y,
+        });
+
+        let dx = last_x - start_x;
+        let dy = last_y - start_y;
+        if dx != 0.0 || dy != 0.0 {
+            effects.push(EngineEffect::InteractiveMoveUpdate {
+                x: last_x,
+                y: last_y,
+                dx,
+                dy,
+            });
+        }
+    }
+
+    fn update_continuous_drag(&mut self, effects: &mut Vec<EngineEffect>) {
+        let Some(drag) = &self.continuous_drag else {
+            return;
+        };
+        let contact_ids = drag.contact_ids.clone();
+        let last_x = drag.last_x;
+        let last_y = drag.last_y;
+
+        let contacts = contact_ids
+            .iter()
+            .filter_map(|id| self.active.get(id).copied())
+            .collect::<Vec<_>>();
+        if contacts.len() != contact_ids.len() {
+            self.finish_continuous_drag(effects);
+            return;
+        }
+
+        let gesture = Gesture {
+            max_active: contacts.len(),
+            finished: contacts,
+        };
+        let Some((_start_x, _start_y, x, y)) = gesture_centroid(&gesture) else {
+            return;
+        };
+        let dx = x - last_x;
+        let dy = y - last_y;
+
+        if let Some(drag) = &mut self.continuous_drag {
+            drag.last_x = x;
+            drag.last_y = y;
+        }
+
+        if dx != 0.0 || dy != 0.0 {
+            effects.push(EngineEffect::InteractiveMoveUpdate { x, y, dx, dy });
+        }
+    }
+
+    fn finish_continuous_drag(&mut self, effects: &mut Vec<EngineEffect>) {
+        if self.continuous_drag.take().is_some() {
+            effects.push(EngineEffect::InteractiveMoveEnd);
         }
     }
 
@@ -974,6 +1117,7 @@ impl Engine {
         self.max_active = 0;
         self.hold_candidate = None;
         self.repeaters.clear();
+        self.continuous_drag = None;
     }
 }
 
