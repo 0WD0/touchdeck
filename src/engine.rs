@@ -8,8 +8,8 @@ use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{contact_movement, is_tap_like, Contact, Gesture, TapRecord};
 use crate::key::KeyChord;
 use crate::keymap::{
-    gesture_centroid, ActiveSwipeQuery, DragStartQuery, GestureAction, HoldQuery, KeymapContext,
-    ReleaseQuery,
+    gesture_centroid, ActiveSwipeQuery, DragStartQuery, GestureAction, HoldQuery, HoldTapFlavor,
+    KeymapContext, ReleaseQuery,
 };
 use crate::mode::{default_layer_stack_for_mode, layer_name, mode_name, Layer, Mode};
 
@@ -65,6 +65,8 @@ pub(crate) struct HoldCandidate {
     pub(crate) id: i32,
     deadline_ms: u64,
     action: GestureAction,
+    flavor: Option<HoldTapFlavor>,
+    interrupted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -265,50 +267,14 @@ impl Engine {
 
         if let Some(candidate) = self.hold_candidate.clone() {
             if now_ms >= candidate.deadline_ms {
-                let Some(contact) = self.active.get_mut(&candidate.id) else {
-                    self.hold_candidate = None;
-                    return Vec::new();
-                };
-
-                if contact_movement(contact) > config.tap_radius {
-                    self.hold_candidate = None;
-                    return Vec::new();
-                }
-
-                contact.start_x = contact.last_x;
-                contact.start_y = contact.last_y;
-                contact.start_time = contact.last_time;
-                self.finished.clear();
-                self.max_active = 1;
-                let action = candidate.action.clone();
-                self.hold_candidate = None;
-                self.last_tap = None;
-
-                match action {
-                    GestureAction::HoldRepeat {
-                        sequence,
-                        start_ms,
-                        interval_ms,
-                        translation,
-                        route,
-                    } => {
-                        self.start_hold_repeat(
-                            HoldRepeatStart {
-                                hold_id: candidate.id,
-                                now_ms,
-                                sequence,
-                                start_ms,
-                                interval_ms,
-                                translation,
-                                route,
-                            },
-                            config,
-                            &mut effects,
-                        );
+                if candidate.flavor == Some(HoldTapFlavor::TapUnlessInterrupted)
+                    && !candidate.interrupted
+                {
+                    if let Some(candidate) = &mut self.hold_candidate {
+                        candidate.deadline_ms = u64::MAX;
                     }
-                    action => {
-                        self.perform_action(action, &mut effects, config, Some(candidate.id));
-                    }
+                } else {
+                    self.activate_hold_candidate(now_ms, config, &mut effects);
                 }
             }
         }
@@ -370,7 +336,10 @@ impl Engine {
         );
         self.max_active = self.max_active.max(self.active.len());
 
-        if let Some((action, min_ms)) = config.keymap.resolve_hold(HoldQuery {
+        let mut effects = Vec::new();
+        self.interrupt_hold_candidate_on_down(sample.id, sample.now_ms, config, &mut effects);
+
+        if let Some(hold) = config.keymap.resolve_hold(HoldQuery {
             context: self.keymap_context(size),
             x: sample.x,
             y: sample.y,
@@ -379,12 +348,15 @@ impl Engine {
         }) {
             self.hold_candidate = Some(HoldCandidate {
                 id: sample.id,
-                deadline_ms: sample.now_ms + u64::from(min_ms),
-                action,
+                deadline_ms: sample.now_ms + u64::from(hold.min_ms),
+                action: hold.action,
+                flavor: hold.flavor,
+                interrupted: false,
             });
         }
 
-        redraw_if_debug(config)
+        effects.extend(redraw_if_debug(config));
+        effects
     }
 
     pub(crate) fn handle_motion(
@@ -487,6 +459,9 @@ impl Engine {
         size: SurfaceSize,
     ) -> Vec<EngineEffect> {
         self.now_ms = now_ms;
+        let mut interrupt_effects = Vec::new();
+        self.interrupt_hold_candidate_on_up(id, now_ms, config, &mut interrupt_effects);
+
         if let Some(candidate) = &self.hold_candidate {
             if candidate.id == id {
                 self.hold_candidate = None;
@@ -500,7 +475,8 @@ impl Engine {
 
         let was_held_action = self.held_actions.iter().any(|held| held.hold_id == id);
         let was_repeating = self.repeaters.iter().any(|repeater| repeater.hold_id == id);
-        let mut held_action_effects = self.release_held_actions_for(id);
+        let mut held_action_effects = interrupt_effects;
+        held_action_effects.extend(self.release_held_actions_for(id));
         self.stop_repeaters_for(id);
         if self.drag_contains(id) {
             let mut effects = std::mem::take(&mut held_action_effects);
@@ -870,6 +846,105 @@ impl Engine {
             ),
             action => self.perform_action(action, effects, config, Some(hold_id)),
         }
+    }
+
+    fn interrupt_hold_candidate_on_down(
+        &mut self,
+        id: i32,
+        now_ms: u64,
+        config: &Config,
+        effects: &mut Vec<EngineEffect>,
+    ) {
+        let Some(candidate) = &mut self.hold_candidate else {
+            return;
+        };
+        if candidate.id == id {
+            return;
+        }
+
+        match candidate.flavor {
+            Some(HoldTapFlavor::HoldPreferred | HoldTapFlavor::TapUnlessInterrupted) => {
+                candidate.interrupted = true;
+                self.activate_hold_candidate(now_ms, config, effects);
+            }
+            Some(HoldTapFlavor::Balanced) => {
+                candidate.interrupted = true;
+            }
+            Some(HoldTapFlavor::TapPreferred) | None => {}
+        }
+    }
+
+    fn interrupt_hold_candidate_on_up(
+        &mut self,
+        id: i32,
+        now_ms: u64,
+        config: &Config,
+        effects: &mut Vec<EngineEffect>,
+    ) {
+        let should_activate = self.hold_candidate.as_ref().is_some_and(|candidate| {
+            candidate.id != id
+                && candidate.flavor == Some(HoldTapFlavor::Balanced)
+                && candidate.interrupted
+        });
+
+        if should_activate {
+            self.activate_hold_candidate(now_ms, config, effects);
+        }
+    }
+
+    fn activate_hold_candidate(
+        &mut self,
+        now_ms: u64,
+        config: &Config,
+        effects: &mut Vec<EngineEffect>,
+    ) -> bool {
+        let Some(candidate) = self.hold_candidate.take() else {
+            return false;
+        };
+
+        let Some(contact) = self.active.get_mut(&candidate.id) else {
+            return false;
+        };
+
+        if contact_movement(contact) > config.tap_radius {
+            return false;
+        }
+
+        contact.start_x = contact.last_x;
+        contact.start_y = contact.last_y;
+        contact.start_time = contact.last_time;
+        self.finished.clear();
+        self.last_tap = None;
+
+        match candidate.action {
+            GestureAction::HoldRepeat {
+                sequence,
+                start_ms,
+                interval_ms,
+                translation,
+                route,
+            } => {
+                self.start_hold_repeat(
+                    HoldRepeatStart {
+                        hold_id: candidate.id,
+                        now_ms,
+                        sequence,
+                        start_ms,
+                        interval_ms,
+                        translation,
+                        route,
+                    },
+                    config,
+                    effects,
+                );
+            }
+            action => {
+                self.perform_action(action, effects, config, Some(candidate.id));
+            }
+        }
+
+        self.max_active = self.active_non_hold_count().max(1);
+        true
     }
 
     fn start_hold_repeat(
@@ -1476,7 +1551,7 @@ mod tests {
         InputConfig, TextOutputBackend, TextOutputConfig, TouchInputBackend,
     };
     use crate::key::*;
-    use crate::keymap::{Behavior, Binding, Keymap, MacroRegistry, Trigger};
+    use crate::keymap::{Behavior, Binding, HoldTapFlavor, Keymap, MacroRegistry, Trigger};
     use crate::layout::{SlotRegistry, SlotTarget};
     use crate::mode::{Layer, Mode};
 
@@ -1918,6 +1993,99 @@ mod tests {
                 keys: vec![KEY_SPACE]
             }]))
         );
+    }
+
+    #[test]
+    fn hold_tap_hold_preferred_activates_hold_on_second_touch_down() {
+        let mut config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        let mut effects = Vec::new();
+        engine.set_mode(Mode::Text, &mut effects, &config);
+        config.keymap.bindings = vec![
+            Binding {
+                mode: Mode::Text,
+                layer: Layer::base(),
+                trigger: Trigger::Tap {
+                    target: test_target("thumb_super"),
+                    fingers: 1,
+                    max_ms: None,
+                },
+                behavior: Behavior::HoldTap {
+                    hold: Box::new(Behavior::LayerMomentary(Layer::new("niri_bind"))),
+                    tap: Box::new(Behavior::KeySequence(vec![KeyChord {
+                        keys: vec![KEY_A],
+                    }])),
+                    flavor: HoldTapFlavor::HoldPreferred,
+                    tapping_term_ms: Some(220),
+                },
+                priority: 0,
+                consume: true,
+            },
+            Binding {
+                mode: Mode::Text,
+                layer: Layer::new("niri_bind"),
+                trigger: Trigger::Tap {
+                    target: test_target("key_q"),
+                    fingers: 1,
+                    max_ms: None,
+                },
+                behavior: Behavior::Niri(NiriAction::ToggleOverview),
+                priority: 0,
+                consume: true,
+            },
+        ];
+        let (thumb_x, thumb_y) = test_slot_center("thumb_super");
+        let (q_x, q_y) = test_slot_center("key_q");
+
+        handle_down(&mut engine, sample(0, 0, 1, thumb_x, thumb_y), &config, size);
+        handle_down(&mut engine, sample(80, 80, 2, q_x, q_y), &config, size);
+        assert!(engine.layer_stack.contains(&Layer::new("niri_bind")));
+
+        let effects = engine.handle_up(120, 120, 2, &config, size);
+        assert!(
+            dispatched_actions(&effects).contains(&GestureAction::Niri(NiriAction::ToggleOverview))
+        );
+    }
+
+    #[test]
+    fn hold_tap_tap_unless_interrupted_stays_tap_after_tapping_term() {
+        let mut config = test_config();
+        let size = test_size();
+        let mut engine = Engine::default();
+        let mut effects = Vec::new();
+        engine.set_mode(Mode::Text, &mut effects, &config);
+        config.keymap.bindings = vec![Binding {
+            mode: Mode::Text,
+            layer: Layer::base(),
+            trigger: Trigger::Tap {
+                target: test_target("thumb_super"),
+                fingers: 1,
+                max_ms: None,
+            },
+            behavior: Behavior::HoldTap {
+                hold: Box::new(Behavior::LayerMomentary(Layer::new("niri_bind"))),
+                tap: Box::new(Behavior::KeySequence(vec![KeyChord {
+                    keys: vec![KEY_A],
+                }])),
+                flavor: HoldTapFlavor::TapUnlessInterrupted,
+                tapping_term_ms: Some(120),
+            },
+            priority: 0,
+            consume: true,
+        }];
+        let (thumb_x, thumb_y) = test_slot_center("thumb_super");
+
+        handle_down(&mut engine, sample(0, 0, 1, thumb_x, thumb_y), &config, size);
+        engine.process_timers(160, &config, size);
+        let effects = engine.handle_up(220, 220, 1, &config, size);
+
+        assert!(
+            dispatched_actions(&effects).contains(&GestureAction::KeySequence(vec![KeyChord {
+                keys: vec![KEY_A]
+            }]))
+        );
+        assert!(!engine.layer_stack.contains(&Layer::new("niri_bind")));
     }
 
     #[test]

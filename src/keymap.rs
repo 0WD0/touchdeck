@@ -34,6 +34,13 @@ pub(crate) struct HoldQuery<'a> {
     pub(crate) default_repeat_start_ms: u32,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct HoldResolution {
+    pub(crate) action: GestureAction,
+    pub(crate) min_ms: u32,
+    pub(crate) flavor: Option<HoldTapFlavor>,
+}
+
 pub(crate) struct ReleaseQuery<'a> {
     pub(crate) context: KeymapContext<'a>,
     pub(crate) gesture: &'a Gesture,
@@ -55,7 +62,7 @@ pub(crate) struct DragStartQuery<'a> {
 }
 
 impl Keymap {
-    pub(crate) fn resolve_hold(&self, query: HoldQuery<'_>) -> Option<(GestureAction, u32)> {
+    pub(crate) fn resolve_hold(&self, query: HoldQuery<'_>) -> Option<HoldResolution> {
         for layer in query.context.layers.iter().rev() {
             let mut matches = self
                 .bindings
@@ -81,20 +88,27 @@ impl Keymap {
                     continue;
                 }
 
-                if let Some((action, tapping_term_ms)) = binding.behavior.hold_tap_hold_action() {
-                    return Some((action, tapping_term_ms.unwrap_or(query.default_hold_ms)));
+                if let Some((action, tapping_term_ms, flavor)) =
+                    binding.behavior.hold_tap_hold_action()
+                {
+                    return Some(HoldResolution {
+                        action,
+                        min_ms: tapping_term_ms.unwrap_or(query.default_hold_ms),
+                        flavor: Some(flavor),
+                    });
                 }
 
-                return Some((
-                    binding.behavior.clone().into_action(),
-                    binding.trigger.hold_ms().unwrap_or_else(|| {
+                return Some(HoldResolution {
+                    action: binding.behavior.clone().into_action(),
+                    min_ms: binding.trigger.hold_ms().unwrap_or_else(|| {
                         if binding.behavior.is_repeat() {
                             query.default_repeat_start_ms
                         } else {
                             query.default_hold_ms
                         }
                     }),
-                ));
+                    flavor: None,
+                });
             }
         }
 
@@ -689,13 +703,14 @@ impl Behavior {
         matches!(self, Self::HoldTap { .. })
     }
 
-    fn hold_tap_hold_action(&self) -> Option<(GestureAction, Option<u32>)> {
+    fn hold_tap_hold_action(&self) -> Option<(GestureAction, Option<u32>, HoldTapFlavor)> {
         match self {
             Self::HoldTap {
                 hold,
+                flavor,
                 tapping_term_ms,
                 ..
-            } => Some(((**hold).clone().into_action(), *tapping_term_ms)),
+            } => Some(((**hold).clone().into_action(), *tapping_term_ms, *flavor)),
             _ => None,
         }
     }
