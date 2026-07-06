@@ -151,7 +151,7 @@ impl EvdevTouchBackend {
 
         loop {
             match self.file.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => return Err(anyhow!("touch device returned EOF")),
                 Ok(n) => {
                     for chunk in buf[..n - (n % event_size)].chunks_exact(event_size) {
                         let event = read_input_event(chunk);
@@ -292,10 +292,6 @@ struct CandidateDevice {
 }
 
 fn discover_touch_devices(config: &InputConfig) -> Result<Vec<CandidateDevice>> {
-    let name_filter = config
-        .evdev_device_name_contains
-        .as_deref()
-        .unwrap_or(DEFAULT_SUNSHINE_TOUCH_NAME);
     let output_tag = config
         .sunshine_output
         .as_ref()
@@ -316,7 +312,7 @@ fn discover_touch_devices(config: &InputConfig) -> Result<Vec<CandidateDevice>> 
         let Some(name) = input_device_name_from_event_path(&path) else {
             continue;
         };
-        if !name.contains(name_filter) {
+        if !device_matches(config, &path, &name) {
             continue;
         }
         if let Some(output_tag) = &output_tag {
@@ -330,6 +326,32 @@ fn discover_touch_devices(config: &InputConfig) -> Result<Vec<CandidateDevice>> 
 
     matches.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(matches)
+}
+
+fn device_matches(config: &InputConfig, path: &Path, name: &str) -> bool {
+    if let Some(filter) = &config.evdev_device_name_contains {
+        return name.contains(filter);
+    }
+
+    let lower = name.to_ascii_lowercase();
+    lower.contains(&DEFAULT_SUNSHINE_TOUCH_NAME.to_ascii_lowercase())
+        || lower.contains("wolf touch")
+        || (is_inputtino_device(path) && lower.contains("touch"))
+}
+
+fn is_inputtino_device(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let device_dir = Path::new("/sys/class/input").join(file_name).join("device");
+    let vendor = fs::read_to_string(device_dir.join("id/vendor"))
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase());
+    let product = fs::read_to_string(device_dir.join("id/product"))
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase());
+
+    vendor.as_deref() == Some("beef") && product.as_deref() == Some("dead")
 }
 
 fn input_device_name_from_event_path(path: &Path) -> Option<String> {

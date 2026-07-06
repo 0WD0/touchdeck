@@ -50,6 +50,7 @@ use trace::TraceRecorder;
 use wayland_overlay::Overlay;
 
 const NAMESPACE: &str = "touchdeck";
+const RAW_TOUCH_RETRY_MS: u64 = 500;
 
 struct App {
     compositor: Option<wl_compositor::WlCompositor>,
@@ -59,6 +60,8 @@ struct App {
     seat: Option<wl_seat::WlSeat>,
     touch: Option<wl_touch::WlTouch>,
     raw_touch: Option<EvdevTouchBackend>,
+    raw_touch_retry_at_ms: Option<u64>,
+    raw_touch_last_error: Option<String>,
     overlay: Overlay,
     config: Config,
     engine: Engine,
@@ -88,6 +91,8 @@ impl Default for App {
             seat: None,
             touch: None,
             raw_touch: None,
+            raw_touch_retry_at_ms: None,
+            raw_touch_last_error: None,
             overlay: Overlay::default(),
             config,
             capture_policy,
@@ -169,6 +174,7 @@ fn main() -> Result<()> {
         app.apply_effects_or_stop(&qh, effects);
         app.expire_mode_hint(&qh)
             .context("expire mode hint overlay")?;
+        app.maybe_connect_raw_touch();
 
         if !app.running {
             break;
@@ -201,6 +207,18 @@ fn main() -> Result<()> {
 
 impl App {
     fn init_overlay(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        match self.config.input.touch_backend {
+            TouchInputBackend::Wayland => {
+                self.touch
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("wl_touch is unavailable on this Wayland seat"))?;
+            }
+            TouchInputBackend::Evdev => {
+                self.raw_touch_retry_at_ms = Some(self.now_ms());
+                self.maybe_connect_raw_touch();
+            }
+        }
+
         let compositor = self
             .compositor
             .as_ref()
@@ -209,16 +227,6 @@ impl App {
             .layer_shell
             .as_ref()
             .ok_or_else(|| anyhow!("zwlr_layer_shell_v1 global is unavailable"))?;
-        match self.config.input.touch_backend {
-            TouchInputBackend::Wayland => {
-                self.touch
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("wl_touch is unavailable on this Wayland seat"))?;
-            }
-            TouchInputBackend::Evdev => {
-                self.raw_touch = Some(EvdevTouchBackend::open(&self.config.input)?);
-            }
-        }
 
         self.overlay.init(compositor, layer_shell, qh, NAMESPACE);
 
@@ -271,6 +279,9 @@ impl App {
             let refresh_deadline = self.now_ms().saturating_add(33);
             deadline =
                 Some(deadline.map_or(refresh_deadline, |deadline| deadline.min(refresh_deadline)));
+        }
+        if let Some(retry_at) = self.raw_touch_retry_at_ms {
+            deadline = Some(deadline.map_or(retry_at, |deadline| deadline.min(retry_at)));
         }
 
         deadline.map(|deadline_ms| {
@@ -828,7 +839,13 @@ impl App {
             let Some(raw_touch) = self.raw_touch.as_mut() else {
                 return Ok(());
             };
-            raw_touch.drain_events(size)?
+            match raw_touch.drain_events(size) {
+                Ok(events) => events,
+                Err(err) => {
+                    self.disconnect_raw_touch(qh, format!("read failed: {err:#}"));
+                    return Ok(());
+                }
+            }
         };
 
         for event in events {
@@ -846,6 +863,43 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn maybe_connect_raw_touch(&mut self) {
+        if self.config.input.touch_backend != TouchInputBackend::Evdev || self.raw_touch.is_some() {
+            return;
+        }
+        let now_ms = self.now_ms();
+        if self
+            .raw_touch_retry_at_ms
+            .is_some_and(|retry_at| now_ms < retry_at)
+        {
+            return;
+        }
+
+        match EvdevTouchBackend::open(&self.config.input) {
+            Ok(raw_touch) => {
+                self.raw_touch = Some(raw_touch);
+                self.raw_touch_retry_at_ms = None;
+                self.raw_touch_last_error = None;
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                if self.raw_touch_last_error.as_deref() != Some(message.as_str()) {
+                    eprintln!("touchdeck: waiting for evdev touch device: {message}");
+                    self.raw_touch_last_error = Some(message);
+                }
+                self.raw_touch_retry_at_ms = Some(now_ms + RAW_TOUCH_RETRY_MS);
+            }
+        }
+    }
+
+    fn disconnect_raw_touch(&mut self, qh: &QueueHandle<Self>, reason: String) {
+        eprintln!("touchdeck: evdev touch disconnected: {reason}");
+        self.raw_touch = None;
+        self.raw_touch_last_error = None;
+        self.raw_touch_retry_at_ms = Some(self.now_ms() + RAW_TOUCH_RETRY_MS);
+        self.touch_cancel(qh);
     }
 }
 

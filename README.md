@@ -322,6 +322,12 @@ devices to the correct output and to avoid applying output rotation twice.
 If there is only one matching Sunshine touch device, `touch_device` can be
 omitted. If there are several, set `sunshine_output` or `touch_device`.
 
+The evdev backend supports hotplug. If TouchDeck starts before Sunshine creates
+the per-client touchscreen, it will keep running and retry discovery until the
+device appears. If the streaming session ends and the event node disappears,
+TouchDeck releases its current touch state and waits for the next matching
+device.
+
 ## Text output backends
 
 Configured in `[keyboard]` or `[ime]`:
