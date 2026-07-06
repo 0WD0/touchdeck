@@ -8,7 +8,7 @@ use x11rb::protocol::xproto::{KeyPressEvent, KEY_PRESS_EVENT};
 use xim::x11rb::HasConnection;
 use xim::{InputStyle, Server, ServerHandler, UserInputContext, XimConnections};
 
-use super::ime_key::KeyState;
+use super::key::KeyState;
 
 const XIM_EVENT_MASK: u32 = 3;
 

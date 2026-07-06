@@ -11,7 +11,7 @@ use touchdeck::protocol::ImeStatus;
 use wayland_client::protocol::{wl_buffer, wl_shm, wl_shm_pool, wl_surface};
 use wayland_client::QueueHandle;
 
-use super::ime_config::PopupConfig;
+use super::config::PopupConfig;
 use super::ImeApp;
 
 pub(super) struct PopupRenderer {

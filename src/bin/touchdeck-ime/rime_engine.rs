@@ -10,8 +10,8 @@ use anyhow::{anyhow, Context, Result};
 use touchdeck::protocol::{ImeCandidate, ImeStatus};
 use touchdeck::rime::*;
 
-use super::ime_config::KeyTranslationPolicy;
-use super::ime_key::{
+use super::config::KeyTranslationPolicy;
+use super::key::{
     rime_effective_keysym, rime_modifier_mask, KeyState, RIME_RELEASE_MASK,
 };
 

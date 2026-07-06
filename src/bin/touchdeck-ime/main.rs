@@ -24,26 +24,18 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
 };
 
-#[path = "touchdeck-ime/app_state.rs"]
 mod app_state;
-#[path = "touchdeck-ime/fcitx_dbus.rs"]
 mod fcitx_dbus;
-#[path = "touchdeck-ime/config.rs"]
-mod ime_config;
-#[path = "touchdeck-ime/key.rs"]
-mod ime_key;
-#[path = "touchdeck-ime/popup.rs"]
+mod config;
+mod key;
 mod popup;
-#[path = "touchdeck-ime/rime_engine.rs"]
 mod rime_engine;
-#[path = "touchdeck-ime/touchdeck_socket.rs"]
 mod touchdeck_socket;
-#[path = "touchdeck-ime/xim_frontend.rs"]
 mod xim_frontend;
 
 use fcitx_dbus::*;
-use ime_config::*;
-use ime_key::*;
+use config::*;
+use key::*;
 use popup::*;
 use rime_engine::*;
 use touchdeck_socket::*;
