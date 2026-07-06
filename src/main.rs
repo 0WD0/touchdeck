@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -36,6 +36,7 @@ mod layout;
 mod mode;
 mod niri_backend;
 mod renderer;
+mod trace;
 
 
 use action_executor::*;
@@ -45,6 +46,7 @@ use geometry::*;
 use layout::*;
 use mode::*;
 use renderer::*;
+use trace::*;
 
 const NAMESPACE: &str = "touchdeck";
 
@@ -177,28 +179,6 @@ fn spawn_ime_status_subscriber(socket_path: PathBuf) -> Receiver<ImeStatus> {
         thread::sleep(Duration::from_millis(500));
     });
     rx
-}
-
-struct TraceRecorder {
-    file: File,
-}
-
-impl TraceRecorder {
-    fn new(path: &PathBuf) -> Result<Self> {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(path)
-            .with_context(|| format!("open trace file {}", path.display()))?;
-        Ok(Self { file })
-    }
-
-    fn record(&mut self, event: &TraceEvent) -> Result<()> {
-        serde_json::to_writer(&mut self.file, event).context("write trace event")?;
-        self.file.write_all(b"\n").context("write trace newline")?;
-        Ok(())
-    }
 }
 
 fn main() -> Result<()> {
