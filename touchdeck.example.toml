@@ -337,12 +337,14 @@ mode = "niri"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "left", fingers = 3 }
 behavior = { type = "niri", action = "focus-workspace-down" }
+priority = 30
 
 [[bindings]]
 mode = "niri"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "right", fingers = 3 }
 behavior = { type = "niri", action = "focus-workspace-up" }
+priority = 30
 
 [[bindings]]
 mode = "niri"
@@ -446,31 +448,6 @@ layer = "base"
 trigger = { type = "tap", target = "top_left" }
 behavior = { type = "exit" }
 
-# Niri locked bindings. These override the built-in default niri gestures when matched.
-
-[[bindings]]
-mode = "niri_locked"
-layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "left" }
-behavior = { type = "niri", action = "focus-workspace-down" }
-
-[[bindings]]
-mode = "niri_locked"
-layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "right" }
-behavior = { type = "niri", action = "focus-workspace-up" }
-
-[[bindings]]
-mode = "niri_locked"
-layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "up" }
-behavior = { type = "niri", action = "focus-column-right" }
-
-[[bindings]]
-mode = "niri_locked"
-layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "down" }
-behavior = { type = "niri", action = "focus-column-left" }
 
 # Niri mode continuous rearrange.
 # Two-finger drag mirrors niri's native interactive window move: tiled windows
@@ -478,13 +455,13 @@ behavior = { type = "niri", action = "focus-column-left" }
 [[bindings]]
 mode = "niri-momentary"
 layer = "niri"
-trigger = { type = "drag", target = "full", fingers = 2, min_px = 8 }
+trigger = { type = "drag", target = "full", fingers = 2, min_px = 500 }
 behavior = { type = "niri_interactive_move" }
 
 [[bindings]]
 mode = "niri-locked"
 layer = "niri"
-trigger = { type = "drag", target = "full", fingers = 2, min_px = 8 }
+trigger = { type = "drag", target = "full", fingers = 2, min_px = 500 }
 behavior = { type = "niri_interactive_move" }
 
 # Niri mode sticky resize.
