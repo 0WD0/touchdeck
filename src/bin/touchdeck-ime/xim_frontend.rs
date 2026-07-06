@@ -163,11 +163,19 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
 
     fn handle_set_ic_values(
         &mut self,
-        server: &mut xim::x11rb::X11rbServer<C>,
+        _server: &mut xim::x11rb::X11rbServer<C>,
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> std::result::Result<(), xim::ServerError> {
-        eprintln!("touchdeck-ime: xim set input context values");
-        server.preedit_draw(&mut user_ic.ic, "")
+        eprintln!(
+            "touchdeck-ime: xim set input context values style={:?} spot=({},{}) area={} area_needed={} line_space={:?}",
+            user_ic.ic.input_style(),
+            user_ic.ic.preedit_spot().x,
+            user_ic.ic.preedit_spot().y,
+            format_preedit_area(user_ic.ic.preedit_area()),
+            format_preedit_area(user_ic.ic.preedit_area_needed()),
+            user_ic.ic.preedit_line_space()
+        );
+        Ok(())
     }
 
     fn handle_forward_event(
@@ -235,6 +243,13 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
             response.consumed, response.preedit
         );
         Ok(response.consumed)
+    }
+}
+
+fn format_preedit_area(area: Option<xim::Rectangle>) -> String {
+    match area {
+        Some(area) => format!("({},{} {}x{})", area.x, area.y, area.width, area.height),
+        None => "none".to_string(),
     }
 }
 
