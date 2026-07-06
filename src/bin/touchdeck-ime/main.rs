@@ -837,9 +837,7 @@ impl ImeApp {
             };
         }
 
-        let Some(probe) = self.x11_geometry.as_ref() else {
-            return None;
-        };
+        let probe = self.x11_geometry.as_ref()?;
 
         let active = match probe.active_window_geometry() {
             Ok(geometry) => geometry,
@@ -1122,19 +1120,17 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for ImeApp {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
-        match event {
-            zwp_input_popup_surface_v2::Event::TextInputRectangle {
+        if let zwp_input_popup_surface_v2::Event::TextInputRectangle {
                 x,
                 y,
                 width,
                 height,
-            } => {
-                eprintln!(
-                    "touchdeck-ime: text input rectangle x={} y={} width={} height={}",
-                    x, y, width, height
-                );
-            }
-            _ => {}
+            } = event
+        {
+            eprintln!(
+                "touchdeck-ime: text input rectangle x={} y={} width={} height={}",
+                x, y, width, height
+            );
         }
     }
 }

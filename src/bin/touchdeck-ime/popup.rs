@@ -126,6 +126,12 @@ struct RectPx {
     h: i32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CanvasSize {
+    width: u32,
+    height: u32,
+}
+
 struct TextRenderer {
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -144,8 +150,7 @@ impl TextRenderer {
     fn draw_text(
         &mut self,
         buf: &mut [u8],
-        width: u32,
-        height: u32,
+        size: CanvasSize,
         rect: RectPx,
         text: &str,
         font_size: f32,
@@ -169,8 +174,8 @@ impl TextRenderer {
             |x, y, w, h, color| {
                 blend_text_rect(
                     buf,
-                    width,
-                    height,
+                    size.width,
+                    size.height,
                     RectPx {
                         x: rect.x + x,
                         y: rect.y + y,
@@ -204,6 +209,7 @@ fn draw_popup_status(
     status: &ImeStatus,
     popup: &PopupConfig,
 ) {
+    let size = CanvasSize { width, height };
     let panel = RectPx {
         x: 0,
         y: 0,
@@ -234,8 +240,7 @@ fn draw_popup_status(
 
     renderer.draw_text(
         buf,
-        width,
-        height,
+        size,
         RectPx {
             x: popup.padding_x + 2,
             y: popup.header_y,
@@ -320,8 +325,7 @@ fn draw_popup_status(
 
         renderer.draw_text(
             buf,
-            width,
-            height,
+            size,
             RectPx {
                 x: rect.x + 8,
                 y: rect.y + 4,

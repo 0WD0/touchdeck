@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     mpsc::{self, Receiver, Sender},
@@ -367,6 +369,7 @@ impl FcitxInputContext {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[interface(name = "org.fcitx.Fcitx.InputContext1")]
 impl FcitxInputContext {
     #[zbus(name = "FocusIn")]
