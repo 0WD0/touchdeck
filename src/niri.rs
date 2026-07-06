@@ -11,6 +11,25 @@ pub struct FocusedWindowLayout {
     pub working_area_in_output: (f64, f64, f64, f64),
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FocusedOutputLayout {
+    pub width: u32,
+    pub height: u32,
+    pub transform: OutputTransform,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputTransform {
+    Normal,
+    _90,
+    _180,
+    _270,
+    Flipped,
+    Flipped90,
+    Flipped180,
+    Flipped270,
+}
+
 pub fn focused_window_layout() -> Result<Option<FocusedWindowLayout>> {
     let value = send_ipc_request_json("\"FocusedWindow\"")?;
     let focused = value
@@ -40,6 +59,47 @@ pub fn focused_window_layout() -> Result<Option<FocusedWindowLayout>> {
     Ok(Some(FocusedWindowLayout {
         window_rect_in_output,
         working_area_in_output,
+    }))
+}
+
+pub fn focused_output_layout() -> Result<Option<FocusedOutputLayout>> {
+    let value = send_ipc_request_json("\"FocusedOutput\"")?;
+    let focused = value
+        .get("Ok")
+        .and_then(|ok| ok.get("FocusedOutput"))
+        .or_else(|| value.get("FocusedOutput"));
+    let Some(focused) = focused else {
+        return Ok(None);
+    };
+    if focused.is_null() {
+        return Ok(None);
+    }
+
+    let Some(logical) = focused.get("logical") else {
+        return Ok(None);
+    };
+    if logical.is_null() {
+        return Ok(None);
+    }
+
+    let width = logical
+        .get("width")
+        .and_then(|value| u32::try_from(value.as_u64()?).ok())
+        .ok_or_else(|| anyhow!("niri FocusedOutput logical missing width"))?;
+    let height = logical
+        .get("height")
+        .and_then(|value| u32::try_from(value.as_u64()?).ok())
+        .ok_or_else(|| anyhow!("niri FocusedOutput logical missing height"))?;
+    let transform = logical
+        .get("transform")
+        .and_then(|value| value.as_str())
+        .and_then(parse_transform)
+        .ok_or_else(|| anyhow!("niri FocusedOutput logical missing transform"))?;
+
+    Ok(Some(FocusedOutputLayout {
+        width,
+        height,
+        transform,
     }))
 }
 
@@ -99,4 +159,18 @@ fn json_rect_f64(value: &serde_json::Value) -> Option<(f64, f64, f64, f64)> {
         values[2].as_f64()?,
         values[3].as_f64()?,
     ))
+}
+
+fn parse_transform(value: &str) -> Option<OutputTransform> {
+    match value {
+        "Normal" | "normal" => Some(OutputTransform::Normal),
+        "90" => Some(OutputTransform::_90),
+        "180" => Some(OutputTransform::_180),
+        "270" => Some(OutputTransform::_270),
+        "Flipped" | "flipped" => Some(OutputTransform::Flipped),
+        "Flipped90" | "flipped-90" | "flipped90" => Some(OutputTransform::Flipped90),
+        "Flipped180" | "flipped-180" | "flipped180" => Some(OutputTransform::Flipped180),
+        "Flipped270" | "flipped-270" | "flipped270" => Some(OutputTransform::Flipped270),
+        _ => None,
+    }
 }

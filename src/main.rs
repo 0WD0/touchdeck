@@ -2987,6 +2987,21 @@ impl App {
             h: panel_h,
         };
 
+        if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
+            eprintln!(
+                "touchdeck: ime geometry panel anchor=({}, {} h={}) panel=({}, {} {}x{}) screen={}x{}",
+                cursor_x,
+                cursor_y,
+                cursor_h,
+                panel.x,
+                panel.y,
+                panel.w,
+                panel.h,
+                screen_w,
+                screen_h
+            );
+        }
+
         fill_rect(mmap, width, height, panel, [0x1a, 0x22, 0x26, 0xe6]);
         draw_rect_frame(mmap, width, height, panel, [0x79, 0x8b, 0x86, 0x96]);
 
@@ -3179,8 +3194,44 @@ impl App {
         let (window_output_x, window_output_y, output_window_w, output_window_h) =
             layout.window_rect_in_output;
         let (workarea_x, workarea_y, workarea_w, workarea_h) = layout.working_area_in_output;
-        let origin_x = window_output_x - workarea_x;
-        let origin_y = window_output_y - workarea_y;
+        let output_layout = match niri::focused_output_layout() {
+            Ok(Some(output)) => output,
+            Ok(None) => {
+                if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
+                    eprintln!(
+                        "touchdeck: ime geometry x11-root no focused niri output window=({}, {} {}x{}) raw=({}, {} {}x{})",
+                        window_x,
+                        window_y,
+                        window_w,
+                        window_h,
+                        cursor_rect.x,
+                        cursor_rect.y,
+                        cursor_rect.w,
+                        cursor_rect.h
+                    );
+                }
+                return None;
+            }
+            Err(err) => {
+                eprintln!("touchdeck: failed to query niri focused output for xwayland IME popup: {err:?}");
+                return None;
+            }
+        };
+        let (mut source_output_w, mut source_output_h) = transformed_source_size(output_layout);
+        source_output_w = source_output_w.max(workarea_x + workarea_w);
+        source_output_h = source_output_h.max(workarea_y + workarea_h);
+        let (workarea_overlay_x, workarea_overlay_y, workarea_overlay_w, workarea_overlay_h) =
+            transform_rect_to_overlay(
+                output_layout.transform,
+                workarea_x,
+                workarea_y,
+                workarea_w,
+                workarea_h,
+                source_output_w,
+                source_output_h,
+            );
+        let origin_x = window_output_x - workarea_overlay_x;
+        let origin_y = window_output_y - workarea_overlay_y;
         let window_size_w = output_window_w as f64;
         let window_size_h = output_window_h as f64;
         if window_size_w <= 0.0 || window_size_h <= 0.0 {
@@ -3192,7 +3243,7 @@ impl App {
         if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
             if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
                 eprintln!(
-                    "touchdeck: ime geometry x11-root invalid scale raw=({}, {} {}x{}) x11_window=({}, {} {}x{}) niri_window_rect=({:.2}, {:.2} {}x{}) niri_workarea=({:.2}, {:.2} {:.2}x{:.2}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4})",
+                    "touchdeck: ime geometry x11-root invalid scale raw=({}, {} {}x{}) x11_window=({}, {} {}x{}) niri_output={}x{} {:?} niri_window_rect=({:.2}, {:.2} {}x{}) niri_workarea=({:.2}, {:.2} {:.2}x{:.2}) workarea_overlay=({:.2}, {:.2} {:.2}x{:.2}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4})",
                     cursor_rect.x,
                     cursor_rect.y,
                     cursor_rect.w,
@@ -3201,6 +3252,9 @@ impl App {
                     window_y,
                     window_w,
                     window_h,
+                    output_layout.width,
+                    output_layout.height,
+                    output_layout.transform,
                     window_output_x,
                     window_output_y,
                     output_window_w,
@@ -3209,6 +3263,10 @@ impl App {
                     workarea_y,
                     workarea_w,
                     workarea_h,
+                    workarea_overlay_x,
+                    workarea_overlay_y,
+                    workarea_overlay_w,
+                    workarea_overlay_h,
                     origin_x,
                     origin_y,
                     scale_x,
@@ -3230,7 +3288,7 @@ impl App {
 
         if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
             eprintln!(
-                "touchdeck: ime geometry x11-root raw=({}, {} {}x{}) root={:?}x{:?} x11_window=({}, {} {}x{}) niri_window_rect=({:.2}, {:.2} {}x{}) niri_workarea=({:.2}, {:.2} {:.2}x{:.2}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4}) local=({:.2}, {:.2}) anchor=({}, {} h={}) screen={}x{}",
+                "touchdeck: ime geometry x11-root raw=({}, {} {}x{}) root={:?}x{:?} x11_window=({}, {} {}x{}) niri_output={}x{} {:?} niri_window_rect=({:.2}, {:.2} {}x{}) niri_workarea=({:.2}, {:.2} {:.2}x{:.2}) workarea_overlay=({:.2}, {:.2} {:.2}x{:.2}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4}) local=({:.2}, {:.2}) anchor=({}, {} h={}) screen={}x{}",
                 cursor_rect.x,
                 cursor_rect.y,
                 cursor_rect.w,
@@ -3241,6 +3299,9 @@ impl App {
                 window_y,
                 window_w,
                 window_h,
+                output_layout.width,
+                output_layout.height,
+                output_layout.transform,
                 window_output_x,
                 window_output_y,
                 output_window_w,
@@ -3249,6 +3310,10 @@ impl App {
                 workarea_y,
                 workarea_w,
                 workarea_h,
+                workarea_overlay_x,
+                workarea_overlay_y,
+                workarea_overlay_w,
+                workarea_overlay_h,
                 origin_x,
                 origin_y,
                 scale_x,
@@ -3266,6 +3331,76 @@ impl App {
         Some((cursor_x, cursor_y, cursor_h))
     }
 
+}
+
+fn transformed_source_size(output: niri::FocusedOutputLayout) -> (f64, f64) {
+    match output.transform {
+        niri::OutputTransform::_90
+        | niri::OutputTransform::_270
+        | niri::OutputTransform::Flipped90
+        | niri::OutputTransform::Flipped270 => (f64::from(output.height), f64::from(output.width)),
+        niri::OutputTransform::Normal
+        | niri::OutputTransform::_180
+        | niri::OutputTransform::Flipped
+        | niri::OutputTransform::Flipped180 => (f64::from(output.width), f64::from(output.height)),
+    }
+}
+
+fn transform_rect_to_overlay(
+    transform: niri::OutputTransform,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    source_w: f64,
+    source_h: f64,
+) -> (f64, f64, f64, f64) {
+    let points = [
+        transform_point_to_overlay(transform, x, y, source_w, source_h),
+        transform_point_to_overlay(transform, x + w, y, source_w, source_h),
+        transform_point_to_overlay(transform, x, y + h, source_w, source_h),
+        transform_point_to_overlay(transform, x + w, y + h, source_w, source_h),
+    ];
+    let min_x = points
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::INFINITY, f64::min);
+    let min_y = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = points
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let max_y = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+fn transform_point_to_overlay(
+    transform: niri::OutputTransform,
+    x: f64,
+    y: f64,
+    source_w: f64,
+    source_h: f64,
+) -> (f64, f64) {
+    match transform {
+        niri::OutputTransform::Normal => (x, y),
+        niri::OutputTransform::_90 => (y, source_w - x),
+        niri::OutputTransform::_180 => (source_w - x, source_h - y),
+        niri::OutputTransform::_270 => (source_h - y, x),
+        niri::OutputTransform::Flipped => (source_w - x, y),
+        niri::OutputTransform::Flipped90 => (y, x),
+        niri::OutputTransform::Flipped180 => (x, source_h - y),
+        niri::OutputTransform::Flipped270 => (source_h - y, source_w - x),
+    }
+}
+
+impl App {
     fn ime_header_text(&self) -> String {
         let mut header = String::new();
         if !self.ime_status.preedit.is_empty() {
