@@ -14,18 +14,10 @@ use wayland_client::QueueHandle;
 use super::config::PopupConfig;
 use super::ImeApp;
 
+#[derive(Default)]
 pub(super) struct PopupRenderer {
     buffers: VecDeque<PopupBuffer>,
     text: TextRenderer,
-}
-
-impl Default for PopupRenderer {
-    fn default() -> Self {
-        Self {
-            buffers: VecDeque::new(),
-            text: TextRenderer::default(),
-        }
-    }
 }
 
 impl PopupRenderer {

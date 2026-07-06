@@ -52,7 +52,6 @@ pub(super) fn parse_wayland_key_state(state: &WEnum<wl_keyboard::KeyState>) -> O
     match state {
         WEnum::Value(wl_keyboard::KeyState::Pressed) => Some(KeyState::Pressed),
         WEnum::Value(wl_keyboard::KeyState::Released) => Some(KeyState::Released),
-        WEnum::Unknown(2) => Some(KeyState::Pressed),
         _ => None,
     }
 }
