@@ -2971,7 +2971,7 @@ impl App {
         };
 
         let panel_x = cursor_x.clamp(0, (screen_w - panel_w).max(0));
-        let below_y = cursor_y + cursor_h;
+        let below_y = cursor_y;
         let above_y = cursor_y - panel_h;
         let panel_y = if below_y + panel_h <= screen_h {
             below_y
