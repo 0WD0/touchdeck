@@ -157,6 +157,11 @@ fn main() -> Result<()> {
     event_queue
         .roundtrip(&mut app)
         .context("collect Wayland globals")?;
+    if app.config.input.sunshine_output.is_some() {
+        event_queue
+            .roundtrip(&mut app)
+            .context("collect Wayland output metadata")?;
+    }
 
     app.init_overlay(&qh)?;
     eprintln!(
