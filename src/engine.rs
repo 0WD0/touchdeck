@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::action::NiriAction;
+use crate::action::{NiriAction, NiriResizeEdge};
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{contact_movement, is_tap_like, Contact, Gesture, TapRecord};
@@ -90,10 +90,27 @@ struct RepeatState {
 }
 
 #[derive(Clone, Debug)]
+enum ContinuousDragOperation {
+    NiriMove,
+    NiriResize { edge: NiriResizeEdge },
+}
+
+#[derive(Clone, Debug)]
 struct ContinuousDragState {
+    operation: ContinuousDragOperation,
     contact_ids: Vec<i32>,
+    start_x: f64,
+    start_y: f64,
     last_x: f64,
     last_y: f64,
+}
+
+#[derive(Clone, Debug)]
+struct ArmedDragState {
+    edge: NiriResizeEdge,
+    fingers: usize,
+    min_px: f64,
+    expires_at_ms: u64,
 }
 
 #[derive(Debug)]
@@ -108,7 +125,9 @@ pub(crate) struct Engine {
     held_actions: Vec<HeldActionState>,
     repeaters: Vec<RepeatState>,
     continuous_drag: Option<ContinuousDragState>,
+    armed_drag: Option<ArmedDragState>,
     last_tap: Option<TapRecord>,
+    now_ms: u64,
     pub(crate) last_action: Option<String>,
 }
 
@@ -125,7 +144,9 @@ impl Default for Engine {
             held_actions: Vec::new(),
             repeaters: Vec::new(),
             continuous_drag: None,
+            armed_drag: None,
             last_tap: None,
+            now_ms: 0,
             last_action: None,
         }
     }
@@ -140,6 +161,9 @@ pub(crate) enum EngineEffect {
     InteractiveMoveBegin { x: f64, y: f64 },
     InteractiveMoveUpdate { x: f64, y: f64, dx: f64, dy: f64 },
     InteractiveMoveEnd,
+    InteractiveResizeBegin { edge: NiriResizeEdge },
+    InteractiveResizeUpdate { dx: f64, dy: f64 },
+    InteractiveResizeEnd,
     Redraw,
 }
 
@@ -183,16 +207,21 @@ impl Engine {
     }
 
     pub(crate) fn next_timer_deadline_ms(&self) -> Option<u64> {
-        let hold_deadline = self
+        let mut deadline = self
             .hold_candidate
             .as_ref()
             .map(|candidate| candidate.deadline_ms);
-        self.repeaters.iter().map(|repeater| repeater.next_ms).fold(
-            hold_deadline,
-            |deadline, repeat_deadline| {
+        if let Some(armed) = &self.armed_drag {
+            deadline = Some(deadline.map_or(armed.expires_at_ms, |deadline| {
+                deadline.min(armed.expires_at_ms)
+            }));
+        }
+        self.repeaters
+            .iter()
+            .map(|repeater| repeater.next_ms)
+            .fold(deadline, |deadline, repeat_deadline| {
                 Some(deadline.map_or(repeat_deadline, |deadline| deadline.min(repeat_deadline)))
-            },
-        )
+            })
     }
 
     pub(crate) fn process_timers(
@@ -201,7 +230,17 @@ impl Engine {
         config: &Config,
         _size: SurfaceSize,
     ) -> Vec<EngineEffect> {
+        self.now_ms = now_ms;
         let mut effects = Vec::new();
+
+        if self
+            .armed_drag
+            .as_ref()
+            .is_some_and(|armed| now_ms >= armed.expires_at_ms)
+        {
+            self.armed_drag = None;
+            effects.push(EngineEffect::Redraw);
+        }
 
         if let Some(candidate) = self.hold_candidate.clone() {
             if now_ms >= candidate.deadline_ms {
@@ -293,6 +332,9 @@ impl Engine {
         config: &Config,
         size: SurfaceSize,
     ) -> Vec<EngineEffect> {
+        self.now_ms = sample.now_ms;
+        self.expire_armed_drag(sample.now_ms);
+
         self.active.insert(
             sample.id,
             Contact {
@@ -330,6 +372,9 @@ impl Engine {
         config: &Config,
         size: SurfaceSize,
     ) -> Vec<EngineEffect> {
+        self.now_ms = sample.now_ms;
+        self.expire_armed_drag(sample.now_ms);
+
         let mut action = GestureAction::None;
         let mut moved_contact = None;
 
@@ -354,6 +399,20 @@ impl Engine {
             return effects;
         }
 
+        if let Some(armed) = self.armed_drag.clone() {
+            let gesture = self.active_non_hold_gesture();
+            if self.armed_drag_matches(&gesture, &armed) {
+                self.armed_drag = None;
+                self.start_continuous_drag(
+                    ContinuousDragOperation::NiriResize { edge: armed.edge },
+                    gesture,
+                    &mut effects,
+                );
+                effects.extend(redraw_if_debug(config));
+                return effects;
+            }
+        }
+
         if matches!(self.mode, Mode::NiriMomentary | Mode::NiriLocked) {
             let gesture = self.active_non_hold_gesture();
             let action = config.keymap.resolve_drag_start(DragStartQuery {
@@ -362,7 +421,7 @@ impl Engine {
                 config,
             });
             if action == GestureAction::NiriInteractiveMove {
-                self.start_continuous_drag(gesture, &mut effects);
+                self.start_continuous_drag(ContinuousDragOperation::NiriMove, gesture, &mut effects);
                 effects.extend(redraw_if_debug(config));
                 return effects;
             }
@@ -402,6 +461,7 @@ impl Engine {
         config: &Config,
         size: SurfaceSize,
     ) -> Vec<EngineEffect> {
+        self.now_ms = now_ms;
         if let Some(candidate) = &self.hold_candidate {
             if candidate.id == id {
                 self.hold_candidate = None;
@@ -517,6 +577,7 @@ impl Engine {
     pub(crate) fn handle_cancel(&mut self, config: &Config) -> Vec<EngineEffect> {
         let mut effects = self.release_all_held_actions();
         self.finish_continuous_drag(&mut effects);
+        self.armed_drag = None;
         self.set_mode(Mode::Base, &mut effects, config);
         self.reset_contacts();
         effects.push(EngineEffect::Redraw);
@@ -675,6 +736,16 @@ impl Engine {
             | GestureAction::KeyRepeat
             | GestureAction::HoldRepeat { .. }
             | GestureAction::Exit => self.perform_dispatch_action(action, effects, hold_id),
+            GestureAction::NiriInteractiveResize {
+                edge,
+                fingers,
+                min_px,
+                timeout_ms,
+            } => {
+                self.remember_held_action_if_needed(hold_id);
+                self.arm_resize(edge, fingers, min_px, timeout_ms, config);
+                effects.push(EngineEffect::Redraw);
+            }
             GestureAction::KeyHold(key) => {
                 if let Some(hold_id) = hold_id {
                     self.remember_held_action(hold_id);
@@ -854,6 +925,7 @@ impl Engine {
         }
 
         self.last_tap = None;
+        self.armed_drag = None;
         effects.push(EngineEffect::SetCapture(self.capture_policy(config)));
         effects.push(EngineEffect::Redraw);
     }
@@ -864,6 +936,7 @@ impl Engine {
         };
 
         self.finish_continuous_drag(effects);
+        self.armed_drag = None;
         self.mode = momentary.return_mode;
         self.layer_stack = momentary.return_layer_stack;
         self.hold_candidate = None;
@@ -889,6 +962,7 @@ impl Engine {
         self.momentary = None;
         self.hold_candidate = None;
         self.repeaters.clear();
+        self.armed_drag = None;
         self.last_tap = None;
         eprintln!("touchdeck: mode {}", mode_name(mode));
         effects.push(EngineEffect::SetCapture(self.capture_policy(config)));
@@ -903,6 +977,7 @@ impl Engine {
         };
         self.momentary = None;
         self.hold_candidate = None;
+        self.armed_drag = None;
         self.last_tap = None;
         eprintln!("touchdeck: layer {}", layer_name(layer));
         effects.push(EngineEffect::Redraw);
@@ -1006,7 +1081,54 @@ impl Engine {
             .is_some_and(|drag| drag.contact_ids.contains(&id))
     }
 
-    fn start_continuous_drag(&mut self, gesture: Gesture, effects: &mut Vec<EngineEffect>) {
+    fn arm_resize(
+        &mut self,
+        edge: NiriResizeEdge,
+        fingers: usize,
+        min_px: Option<f64>,
+        timeout_ms: Option<u32>,
+        config: &Config,
+    ) {
+        let fingers = fingers.max(1);
+        let min_px = min_px.unwrap_or(config.tap_radius.max(8.0));
+        let timeout_ms = u64::from(timeout_ms.unwrap_or(1000));
+        self.armed_drag = Some(ArmedDragState {
+            edge,
+            fingers,
+            min_px,
+            expires_at_ms: self.now_ms + timeout_ms,
+        });
+        self.last_action = Some(format!("resize:{}", edge.as_str()));
+    }
+
+    fn expire_armed_drag(&mut self, now_ms: u64) {
+        if self
+            .armed_drag
+            .as_ref()
+            .is_some_and(|armed| now_ms > armed.expires_at_ms)
+        {
+            self.armed_drag = None;
+        }
+    }
+
+    fn armed_drag_matches(&self, gesture: &Gesture, armed: &ArmedDragState) -> bool {
+        if gesture.max_active != armed.fingers || gesture.finished.is_empty() {
+            return false;
+        }
+
+        let Some((start_x, start_y, last_x, last_y)) = gesture_centroid(gesture) else {
+            return false;
+        };
+
+        (last_x - start_x).hypot(last_y - start_y) >= armed.min_px
+    }
+
+    fn start_continuous_drag(
+        &mut self,
+        operation: ContinuousDragOperation,
+        gesture: Gesture,
+        effects: &mut Vec<EngineEffect>,
+    ) {
         let Some((start_x, start_y, last_x, last_y)) = gesture_centroid(&gesture) else {
             return;
         };
@@ -1017,26 +1139,43 @@ impl Engine {
             .map(|contact| contact.id)
             .collect::<Vec<_>>();
         self.continuous_drag = Some(ContinuousDragState {
+            operation: operation.clone(),
             contact_ids,
+            start_x,
+            start_y,
             last_x,
             last_y,
         });
         self.last_tap = None;
 
-        effects.push(EngineEffect::InteractiveMoveBegin {
-            x: start_x,
-            y: start_y,
-        });
+        match operation {
+            ContinuousDragOperation::NiriMove => {
+                effects.push(EngineEffect::InteractiveMoveBegin {
+                    x: start_x,
+                    y: start_y,
+                });
+            }
+            ContinuousDragOperation::NiriResize { edge } => {
+                effects.push(EngineEffect::InteractiveResizeBegin { edge });
+            }
+        }
 
         let dx = last_x - start_x;
         let dy = last_y - start_y;
         if dx != 0.0 || dy != 0.0 {
-            effects.push(EngineEffect::InteractiveMoveUpdate {
-                x: last_x,
-                y: last_y,
-                dx,
-                dy,
-            });
+            match operation {
+                ContinuousDragOperation::NiriMove => {
+                    effects.push(EngineEffect::InteractiveMoveUpdate {
+                        x: last_x,
+                        y: last_y,
+                        dx,
+                        dy,
+                    });
+                }
+                ContinuousDragOperation::NiriResize { .. } => {
+                    effects.push(EngineEffect::InteractiveResizeUpdate { dx, dy });
+                }
+            }
         }
     }
 
@@ -1044,7 +1183,10 @@ impl Engine {
         let Some(drag) = &self.continuous_drag else {
             return;
         };
+        let operation = drag.operation.clone();
         let contact_ids = drag.contact_ids.clone();
+        let start_x = drag.start_x;
+        let start_y = drag.start_y;
         let last_x = drag.last_x;
         let last_y = drag.last_y;
 
@@ -1073,13 +1215,28 @@ impl Engine {
         }
 
         if dx != 0.0 || dy != 0.0 {
-            effects.push(EngineEffect::InteractiveMoveUpdate { x, y, dx, dy });
+            match operation {
+                ContinuousDragOperation::NiriMove => {
+                    effects.push(EngineEffect::InteractiveMoveUpdate { x, y, dx, dy });
+                }
+                ContinuousDragOperation::NiriResize { .. } => {
+                    effects.push(EngineEffect::InteractiveResizeUpdate {
+                        dx: x - start_x,
+                        dy: y - start_y,
+                    });
+                }
+            }
         }
     }
 
     fn finish_continuous_drag(&mut self, effects: &mut Vec<EngineEffect>) {
-        if self.continuous_drag.take().is_some() {
-            effects.push(EngineEffect::InteractiveMoveEnd);
+        if let Some(drag) = self.continuous_drag.take() {
+            match drag.operation {
+                ContinuousDragOperation::NiriMove => effects.push(EngineEffect::InteractiveMoveEnd),
+                ContinuousDragOperation::NiriResize { .. } => {
+                    effects.push(EngineEffect::InteractiveResizeEnd)
+                }
+            }
         }
     }
 
@@ -1118,6 +1275,7 @@ impl Engine {
         self.hold_candidate = None;
         self.repeaters.clear();
         self.continuous_drag = None;
+        self.armed_drag = None;
     }
 }
 

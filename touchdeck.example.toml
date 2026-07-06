@@ -325,3 +325,18 @@ mode = "niri-locked"
 layer = "niri"
 trigger = { type = "drag", target = "full", fingers = 2, min_px = 8 }
 behavior = { type = "niri_interactive_move" }
+
+# Niri mode sticky resize.
+# Tap bottom_edge to arm right-edge resize, then drag with one finger.
+# This follows ZMK sticky/one-shot semantics: the tap only arms the next drag.
+[[bindings]]
+mode = "niri-momentary"
+layer = "niri"
+trigger = { type = "tap", target = "bottom_edge" }
+behavior = { type = "niri_interactive_resize", edge = "right", fingers = 1, min_px = 8, timeout_ms = 1200 }
+
+[[bindings]]
+mode = "niri-locked"
+layer = "niri"
+trigger = { type = "tap", target = "bottom_edge" }
+behavior = { type = "niri_interactive_resize", edge = "right", fingers = 1, min_px = 8, timeout_ms = 1200 }

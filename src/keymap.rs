@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 
-use crate::action::{ActionStep, NiriAction};
+use crate::action::{ActionStep, NiriAction, NiriResizeEdge};
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{
@@ -600,6 +600,12 @@ pub(crate) fn gesture_centroid(gesture: &Gesture) -> Option<(f64, f64, f64, f64)
 pub(crate) enum Behavior {
     Niri(NiriAction),
     NiriInteractiveMove,
+    NiriInteractiveResize {
+        edge: NiriResizeEdge,
+        fingers: usize,
+        min_px: Option<f64>,
+        timeout_ms: Option<u32>,
+    },
     KeySequence(Vec<KeyChord>),
     KeyHold(u32),
     ModMorph {
@@ -646,6 +652,17 @@ impl Behavior {
         match self {
             Self::Niri(action) => GestureAction::Niri(action),
             Self::NiriInteractiveMove => GestureAction::NiriInteractiveMove,
+            Self::NiriInteractiveResize {
+                edge,
+                fingers,
+                min_px,
+                timeout_ms,
+            } => GestureAction::NiriInteractiveResize {
+                edge,
+                fingers,
+                min_px,
+                timeout_ms,
+            },
             Self::KeySequence(sequence) => GestureAction::KeySequence(sequence),
             Self::KeyHold(key) => GestureAction::KeyHold(key),
             Self::ModMorph {
@@ -699,6 +716,12 @@ impl Behavior {
 pub(crate) enum GestureAction {
     Niri(NiriAction),
     NiriInteractiveMove,
+    NiriInteractiveResize {
+        edge: NiriResizeEdge,
+        fingers: usize,
+        min_px: Option<f64>,
+        timeout_ms: Option<u32>,
+    },
     KeySequence(Vec<KeyChord>),
     KeySequenceWithOptions {
         sequence: Vec<KeyChord>,
@@ -745,6 +768,7 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
         Behavior::Niri(action) => Some(action.as_str().to_string()),
         Behavior::NiriInteractiveMove => Some("drag".to_string()),
+        Behavior::NiriInteractiveResize { edge, .. } => Some(format!("resize:{}", edge.as_str())),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),
         Behavior::KeySequenceWithOptions {
             sequence,

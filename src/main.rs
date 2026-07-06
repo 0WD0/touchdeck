@@ -931,6 +931,13 @@ impl App {
                     self.send_interactive_move_update(index, x, y, dx, dy)
                 }
                 EngineEffect::InteractiveMoveEnd => self.send_interactive_move_end(),
+                EngineEffect::InteractiveResizeBegin { edge } => {
+                    self.send_interactive_resize_begin(edge)
+                }
+                EngineEffect::InteractiveResizeUpdate { dx, dy } => {
+                    self.send_interactive_resize_update(dx, dy)
+                }
+                EngineEffect::InteractiveResizeEnd => self.send_interactive_resize_end(),
                 EngineEffect::Redraw => {
                     if let Some((width, height)) = self.sessions[index].overlay.dimensions() {
                         self.attach_overlay_buffer(qh, index, width, height)
@@ -976,6 +983,20 @@ impl App {
 
     fn send_interactive_move_end(&self) -> Result<()> {
         niri_backend::send_niri_interactive_move_end().context("send niri interactive move end")
+    }
+
+    fn send_interactive_resize_begin(&self, edge: crate::action::NiriResizeEdge) -> Result<()> {
+        niri_backend::send_niri_interactive_resize_begin(edge)
+            .with_context(|| format!("send niri interactive resize begin edge={}", edge.as_str()))
+    }
+
+    fn send_interactive_resize_update(&self, dx: f64, dy: f64) -> Result<()> {
+        niri_backend::send_niri_interactive_resize_update(dx, dy)
+            .context("send niri interactive resize update")
+    }
+
+    fn send_interactive_resize_end(&self) -> Result<()> {
+        niri_backend::send_niri_interactive_resize_end().context("send niri interactive resize end")
     }
 
     fn apply_executor_outcome(&mut self, index: usize, outcome: ExecutorOutcome) {

@@ -13,6 +13,47 @@ pub(crate) enum ActionStep {
     DelayMs(u32),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NiriResizeEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl NiriResizeEdge {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::TopLeft => "top-left",
+            Self::TopRight => "top-right",
+            Self::BottomLeft => "bottom-left",
+            Self::BottomRight => "bottom-right",
+        }
+    }
+}
+
+pub(crate) fn parse_niri_resize_edge(value: &str) -> Result<NiriResizeEdge> {
+    match normalize_name(value).as_str() {
+        "left" => Ok(NiriResizeEdge::Left),
+        "right" => Ok(NiriResizeEdge::Right),
+        "top" | "up" => Ok(NiriResizeEdge::Top),
+        "bottom" | "down" => Ok(NiriResizeEdge::Bottom),
+        "top_left" | "left_top" => Ok(NiriResizeEdge::TopLeft),
+        "top_right" | "right_top" => Ok(NiriResizeEdge::TopRight),
+        "bottom_left" | "left_bottom" => Ok(NiriResizeEdge::BottomLeft),
+        "bottom_right" | "right_bottom" => Ok(NiriResizeEdge::BottomRight),
+        _ => Err(anyhow!("unknown niri resize edge {value}")),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum NiriAction {
     CloseWindow,
@@ -387,6 +428,29 @@ pub(crate) fn niri_interactive_move_update_request_json(
 
 pub(crate) fn niri_interactive_move_end_request_json() -> String {
     action("InteractiveMoveEnd", object()).to_string()
+}
+
+pub(crate) fn niri_interactive_resize_begin_request_json(edge: NiriResizeEdge) -> String {
+    action(
+        "InteractiveResizeBegin",
+        fields([
+            ("id", Value::Null),
+            ("edges", Value::String(edge.as_str().to_string())),
+        ]),
+    )
+    .to_string()
+}
+
+pub(crate) fn niri_interactive_resize_update_request_json(dx: f64, dy: f64) -> String {
+    action(
+        "InteractiveResizeUpdate",
+        fields([("dx", Value::from(dx)), ("dy", Value::from(dy))]),
+    )
+    .to_string()
+}
+
+pub(crate) fn niri_interactive_resize_end_request_json() -> String {
+    action("InteractiveResizeEnd", object()).to_string()
 }
 
 pub(crate) fn parse_niri_action(value: &str) -> Result<NiriAction> {

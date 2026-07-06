@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-use crate::action::{parse_niri_action, ActionStep, NiriAction};
+use crate::action::{parse_niri_action, parse_niri_resize_edge, ActionStep, NiriAction};
 use crate::gesture::SwipeDirection;
 use crate::key::{
     normalize_name, parse_key_sequence, parse_single_key, XKB_MOD_ALT, XKB_MOD_CONTROL,
@@ -528,6 +528,10 @@ pub(crate) struct BehaviorFileConfig {
     pub(crate) interval_ms: Option<u32>,
     pub(crate) translation: Option<String>,
     pub(crate) route: Option<String>,
+    pub(crate) edge: Option<String>,
+    pub(crate) fingers: Option<usize>,
+    pub(crate) min_px: Option<f64>,
+    pub(crate) timeout_ms: Option<u32>,
     pub(crate) bindings: Option<Vec<String>>,
     pub(crate) mods: Option<Vec<String>>,
     #[serde(alias = "keep-mods")]
@@ -554,6 +558,10 @@ pub(crate) struct BehaviorDefinitionFileConfig {
     pub(crate) interval_ms: Option<u32>,
     pub(crate) translation: Option<String>,
     pub(crate) route: Option<String>,
+    pub(crate) edge: Option<String>,
+    pub(crate) fingers: Option<usize>,
+    pub(crate) min_px: Option<f64>,
+    pub(crate) timeout_ms: Option<u32>,
     pub(crate) bindings: Option<Vec<String>>,
     pub(crate) mods: Option<Vec<String>>,
     #[serde(alias = "keep-mods")]
@@ -1019,6 +1027,19 @@ fn parse_behavior(
                 .ok_or_else(|| anyhow!("niri behavior is missing action"))?,
         )?)),
         "niri_interactive_move" | "interactive_move" => Ok(Behavior::NiriInteractiveMove),
+        "niri_interactive_resize" | "interactive_resize" => {
+            Ok(Behavior::NiriInteractiveResize {
+                edge: parse_niri_resize_edge(
+                    value
+                        .edge
+                        .as_deref()
+                        .ok_or_else(|| anyhow!("interactive_resize behavior is missing edge"))?,
+                )?,
+                fingers: value.fingers.unwrap_or(1),
+                min_px: value.min_px,
+                timeout_ms: value.timeout_ms,
+            })
+        }
         "mode" | "mode_set" => Ok(Behavior::ModeSet(parse_mode(
             value
                 .mode
@@ -1140,6 +1161,10 @@ fn parse_defined_behavior_invocation(
             interval_ms: definition.interval_ms,
             translation: definition.translation.as_deref(),
             route: definition.route.as_deref(),
+            edge: definition.edge.as_deref(),
+            fingers: definition.fingers,
+            min_px: definition.min_px,
+            timeout_ms: definition.timeout_ms,
         },
         macros,
     )
@@ -1241,6 +1266,10 @@ struct BehaviorFields<'a> {
     interval_ms: Option<u32>,
     translation: Option<&'a str>,
     route: Option<&'a str>,
+    edge: Option<&'a str>,
+    fingers: Option<usize>,
+    min_px: Option<f64>,
+    timeout_ms: Option<u32>,
 }
 
 fn parse_behavior_invocation_kind(
@@ -1368,6 +1397,19 @@ fn parse_behavior_invocation_kind(
             Ok(Behavior::Niri(parse_niri_action(&action)?))
         }
         "niri_interactive_move" | "interactive_move" => Ok(Behavior::NiriInteractiveMove),
+        "niri_interactive_resize" | "interactive_resize" => {
+            let edge = fields
+                .edge
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&{kind} is missing edge"))?;
+            Ok(Behavior::NiriInteractiveResize {
+                edge: parse_niri_resize_edge(&edge)?,
+                fingers: fields.fingers.unwrap_or(1),
+                min_px: fields.min_px,
+                timeout_ms: fields.timeout_ms,
+            })
+        }
         "mode" | "mode_set" => {
             let mode = fields
                 .mode
