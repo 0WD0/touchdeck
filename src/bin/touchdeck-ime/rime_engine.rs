@@ -27,9 +27,13 @@ pub(super) struct RimeOutput {
 }
 
 pub(super) struct RimeEngine {
-    api: NonNull<RimeApi>,
-    session: RimeSessionId,
+    session: RimeSession,
+    runtime: RimeRuntime,
     key_translation: KeyTranslationPolicy,
+}
+
+struct RimeRuntime {
+    api: NonNull<RimeApi>,
     _shared_data_dir: CString,
     _user_data_dir: CString,
     _prebuilt_data_dir: CString,
@@ -38,8 +42,141 @@ pub(super) struct RimeEngine {
     _log_dir: CString,
 }
 
+struct RimeSession {
+    api: NonNull<RimeApi>,
+    id: RimeSessionId,
+}
+
 impl RimeEngine {
     pub(super) fn new(key_translation: KeyTranslationPolicy) -> Result<Self> {
+        let runtime = RimeRuntime::new()?;
+        let session = runtime.create_session()?;
+
+        eprintln!("touchdeck-ime: librime initialized session={}", session.id());
+        Ok(Self {
+            session,
+            runtime,
+            key_translation,
+        })
+    }
+
+    pub(super) fn process_key(
+        &mut self,
+        keysym: u32,
+        state: KeyState,
+        xkb_modifiers: u32,
+        translation: Option<KeyTranslationPolicy>,
+    ) -> Result<RimeOutput> {
+        let mut mask = rime_modifier_mask(xkb_modifiers);
+        if state == KeyState::Released {
+            mask |= RIME_RELEASE_MASK;
+        }
+        let keysym = match translation.unwrap_or(self.key_translation) {
+            KeyTranslationPolicy::Effective => rime_effective_keysym(keysym, mask),
+            KeyTranslationPolicy::Raw => keysym,
+        };
+
+        let handled = unsafe {
+            let process_key = call_ret(self.api().process_key, "RimeApi.process_key")?;
+            process_key(self.session.id(), keysym as c_int, mask as c_int) != RIME_FALSE
+        };
+
+        let commit = self.take_commit()?;
+        let status = self.current_status()?;
+
+        Ok(RimeOutput {
+            handled,
+            commit,
+            status,
+        })
+    }
+
+    pub(super) fn clear(&mut self) {
+        unsafe {
+            if let Some(clear) = self.api().clear_composition {
+                clear(self.session.id());
+            }
+        }
+    }
+
+    fn api(&self) -> &RimeApi {
+        self.runtime.api()
+    }
+
+    fn take_commit(&self) -> Result<Option<String>> {
+        unsafe {
+            let Some(get_commit) = self.api().get_commit else {
+                return Ok(None);
+            };
+            let Some(free_commit) = self.api().free_commit else {
+                return Ok(None);
+            };
+
+            let mut commit = RimeCommit {
+                data_size: rime_commit_data_size(),
+                text: ptr::null_mut(),
+            };
+
+            if get_commit(self.session.id(), &mut commit) == RIME_FALSE {
+                return Ok(None);
+            }
+
+            let text = if commit.text.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(commit.text).to_string_lossy().into_owned())
+            };
+            free_commit(&mut commit);
+            Ok(text)
+        }
+    }
+
+    fn current_status(&self) -> Result<ImeStatus> {
+        unsafe {
+            let Some(get_context) = self.api().get_context else {
+                return Ok(ImeStatus::default());
+            };
+            let Some(free_context) = self.api().free_context else {
+                return Ok(ImeStatus::default());
+            };
+
+            let mut context = empty_rime_context();
+            if get_context(self.session.id(), &mut context) == RIME_FALSE {
+                return Ok(ImeStatus::default());
+            }
+
+            let preedit = if context.composition.preedit.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(context.composition.preedit)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let commit_preview = c_string_lossy(context.commit_text_preview);
+            let candidates = context_candidates(&context);
+            let highlighted_candidate_index = if context.menu.highlighted_candidate_index >= 0 {
+                Some(context.menu.highlighted_candidate_index as usize)
+            } else {
+                None
+            };
+            let status = ImeStatus {
+                active: true,
+                preedit,
+                commit_preview,
+                candidates,
+                highlighted_candidate_index,
+                page_no: context.menu.page_no,
+                is_last_page: context.menu.is_last_page != RIME_FALSE,
+                ..ImeStatus::default()
+            };
+            free_context(&mut context);
+            Ok(status)
+        }
+    }
+}
+
+impl RimeRuntime {
+    fn new() -> Result<Self> {
         let shared_data_dir_path = default_rime_shared_data_dir();
         let user_data_dir_path =
             env_path("TOUCHDECK_RIME_USER_DATA_DIR").unwrap_or_else(default_rime_user_data_dir);
@@ -120,145 +257,58 @@ impl RimeEngine {
             return Err(anyhow!("RimeApi.create_session returned 0"));
         }
 
-        let engine = Self {
+        Ok(Self {
             api,
-            session,
-            key_translation,
             _shared_data_dir: shared_data_dir,
             _user_data_dir: user_data_dir,
             _prebuilt_data_dir: prebuilt_data_dir,
             _staging_dir: staging_dir,
             _app_name: app_name,
             _log_dir: log_dir,
-        };
-
-        eprintln!("touchdeck-ime: librime initialized session={session}");
-        Ok(engine)
-    }
-
-    pub(super) fn process_key(
-        &mut self,
-        keysym: u32,
-        state: KeyState,
-        xkb_modifiers: u32,
-        translation: Option<KeyTranslationPolicy>,
-    ) -> Result<RimeOutput> {
-        let mut mask = rime_modifier_mask(xkb_modifiers);
-        if state == KeyState::Released {
-            mask |= RIME_RELEASE_MASK;
-        }
-        let keysym = match translation.unwrap_or(self.key_translation) {
-            KeyTranslationPolicy::Effective => rime_effective_keysym(keysym, mask),
-            KeyTranslationPolicy::Raw => keysym,
-        };
-
-        let handled = unsafe {
-            let process_key = call_ret(self.api().process_key, "RimeApi.process_key")?;
-            process_key(self.session, keysym as c_int, mask as c_int) != RIME_FALSE
-        };
-
-        let commit = self.take_commit()?;
-        let status = self.current_status()?;
-
-        Ok(RimeOutput {
-            handled,
-            commit,
-            status,
         })
     }
 
-    pub(super) fn clear(&mut self) {
+    fn create_session(&self) -> Result<RimeSession> {
         unsafe {
-            if let Some(clear) = self.api().clear_composition {
-                clear(self.session);
+            let create_session = call_ret(self.api().create_session, "RimeApi.create_session")?;
+            let id = create_session();
+            if id == 0 {
+                return Err(anyhow!("RimeApi.create_session returned 0"));
             }
+            Ok(RimeSession { api: self.api, id })
         }
     }
 
     fn api(&self) -> &RimeApi {
         unsafe { self.api.as_ref() }
     }
+}
 
-    fn take_commit(&self) -> Result<Option<String>> {
+impl Drop for RimeRuntime {
+    fn drop(&mut self) {
         unsafe {
-            let Some(get_commit) = self.api().get_commit else {
-                return Ok(None);
-            };
-            let Some(free_commit) = self.api().free_commit else {
-                return Ok(None);
-            };
-
-            let mut commit = RimeCommit {
-                data_size: rime_commit_data_size(),
-                text: ptr::null_mut(),
-            };
-
-            if get_commit(self.session, &mut commit) == RIME_FALSE {
-                return Ok(None);
+            if let Some(finalize) = self.api().finalize {
+                finalize();
             }
-
-            let text = if commit.text.is_null() {
-                None
-            } else {
-                Some(CStr::from_ptr(commit.text).to_string_lossy().into_owned())
-            };
-            free_commit(&mut commit);
-            Ok(text)
-        }
-    }
-
-    fn current_status(&self) -> Result<ImeStatus> {
-        unsafe {
-            let Some(get_context) = self.api().get_context else {
-                return Ok(ImeStatus::default());
-            };
-            let Some(free_context) = self.api().free_context else {
-                return Ok(ImeStatus::default());
-            };
-
-            let mut context = empty_rime_context();
-            if get_context(self.session, &mut context) == RIME_FALSE {
-                return Ok(ImeStatus::default());
-            }
-
-            let preedit = if context.composition.preedit.is_null() {
-                String::new()
-            } else {
-                CStr::from_ptr(context.composition.preedit)
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            let commit_preview = c_string_lossy(context.commit_text_preview);
-            let candidates = context_candidates(&context);
-            let highlighted_candidate_index = if context.menu.highlighted_candidate_index >= 0 {
-                Some(context.menu.highlighted_candidate_index as usize)
-            } else {
-                None
-            };
-            let status = ImeStatus {
-                active: true,
-                preedit,
-                commit_preview,
-                candidates,
-                highlighted_candidate_index,
-                page_no: context.menu.page_no,
-                is_last_page: context.menu.is_last_page != RIME_FALSE,
-                ..ImeStatus::default()
-            };
-            free_context(&mut context);
-            Ok(status)
         }
     }
 }
 
-impl Drop for RimeEngine {
+impl RimeSession {
+    fn id(&self) -> RimeSessionId {
+        self.id
+    }
+
+    fn api(&self) -> &RimeApi {
+        unsafe { self.api.as_ref() }
+    }
+}
+
+impl Drop for RimeSession {
     fn drop(&mut self) {
         unsafe {
             if let Some(destroy_session) = self.api().destroy_session {
-                destroy_session(self.session);
-            }
-            if let Some(finalize) = self.api().finalize {
-                finalize();
+                destroy_session(self.id);
             }
         }
     }
