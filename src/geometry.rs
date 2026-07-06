@@ -1,5 +1,6 @@
 use touchdeck::niri;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RectNorm {
     pub(crate) x0: f64,
     pub(crate) y0: f64,
@@ -26,15 +27,15 @@ impl RectNorm {
         let y1 = (height * self.y1).ceil().max(0.0) as i32;
 
         RectPx {
-            pub(crate) x: x0,
-            pub(crate) y: y0,
-            pub(crate) w: (x1 - x0).max(0),
-            pub(crate) h: (y1 - y0).max(0),
+            x: x0,
+            y: y0,
+            w: (x1 - x0).max(0),
+            h: (y1 - y0).max(0),
         }
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RectPx {
     pub(crate) x: i32,
     pub(crate) y: i32,
@@ -42,13 +43,11 @@ pub(crate) struct RectPx {
     pub(crate) h: i32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SurfaceSize {
     pub(crate) width: u32,
     pub(crate) height: u32,
 }
-
-#[derive(Clone, Debug)]
 
 pub(crate) fn transformed_source_size(output: niri::FocusedOutputLayout) -> (f64, f64) {
     match output.transform {
@@ -65,10 +64,10 @@ pub(crate) fn transformed_source_size(output: niri::FocusedOutputLayout) -> (f64
 
 pub(crate) fn transform_rect_to_overlay(
     transform: niri::OutputTransform,
-    pub(crate) x: f64,
-    pub(crate) y: f64,
-    pub(crate) w: f64,
-    pub(crate) h: f64,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
     source_w: f64,
     source_h: f64,
 ) -> (f64, f64, f64, f64) {
@@ -100,8 +99,8 @@ pub(crate) fn transform_rect_to_overlay(
 
 pub(crate) fn transform_point_to_overlay(
     transform: niri::OutputTransform,
-    pub(crate) x: f64,
-    pub(crate) y: f64,
+    x: f64,
+    y: f64,
     source_w: f64,
     source_h: f64,
 ) -> (f64, f64) {
@@ -116,4 +115,3 @@ pub(crate) fn transform_point_to_overlay(
         niri::OutputTransform::Flipped270 => (source_h - y, source_w - x),
     }
 }
-

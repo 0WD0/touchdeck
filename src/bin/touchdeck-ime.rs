@@ -4,6 +4,7 @@ use std::ffi::{CStr, CString};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::raw::{c_char, c_int};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -19,7 +20,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache};
 use memmap2::MmapMut;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tempfile::tempfile;
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool,
@@ -3906,4 +3907,3 @@ fn poll_fd(fd: RawFd, timeout: Option<Duration>) -> Result<bool> {
 
     Ok(ret > 0 && poll_fd.revents & libc::POLLIN != 0)
 }
-

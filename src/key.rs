@@ -77,10 +77,9 @@ pub(crate) const XKB_MOD_ALT: u32 = 1 << 3;
 pub(crate) const XKB_MOD_SUPER: u32 = 1 << 6;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KeyChord {
-    keys: Vec<u32>,
+    pub(crate) keys: Vec<u32>,
 }
 
-#[derive(Clone, Debug)]
 pub(crate) fn parse_single_key(value: &str) -> Result<u32> {
     let sequence = parse_key_sequence(value)?;
     if sequence.len() != 1 || sequence[0].keys.len() != 1 {
@@ -428,4 +427,3 @@ pub(crate) fn key_code_label(key: u32) -> Option<&'static str> {
 pub(crate) fn normalize_name(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace('-', "_")
 }
-

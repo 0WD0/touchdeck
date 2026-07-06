@@ -842,13 +842,14 @@ struct Binding {
     consume: bool,
 }
 
+#[derive(Clone, Debug)]
 struct LastKeySequence {
     sequence: Vec<KeyChord>,
     translation: Option<KeyTranslationPolicy>,
     route: Option<KeyRoute>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct MacroRegistry {
     macros: HashMap<String, Vec<ActionStep>>,
 }
@@ -917,6 +918,7 @@ impl std::fmt::Display for NiriAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GestureKind {
     Tap,
     SwipeLeft,

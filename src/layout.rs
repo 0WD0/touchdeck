@@ -1,7 +1,13 @@
 use anyhow::{anyhow, Context, Result};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
-use crate::geometry::{RectNorm, RectPx, SurfaceSize};
+use crate::geometry::RectNorm;
+use crate::key::normalize_name;
+use crate::validate_rect;
 
+#[derive(Clone, Debug)]
 pub(crate) struct Layout {
     pub(crate) slots: HashMap<String, Slot>,
 }
@@ -42,22 +48,20 @@ impl Default for SlotRegistry {
     fn default() -> Self {
         Self {
             layout: Layout {
-                pub(crate) slots: HashMap::new(),
+                slots: HashMap::new(),
             },
         }
     }
 }
 
-#[derive(Clone, Debug, Default)]
-
 impl SlotRegistry {
-    fn from_svg_file(path: &Path) -> Result<Self> {
+    pub(crate) fn from_svg_file(path: &Path) -> Result<Self> {
         let source = fs::read_to_string(path)
             .with_context(|| format!("read SVG layout {}", path.display()))?;
         Self::from_svg_str(&source).with_context(|| format!("parse SVG layout {}", path.display()))
     }
 
-    fn from_svg_str(source: &str) -> Result<Self> {
+    pub(crate) fn from_svg_str(source: &str) -> Result<Self> {
         let document = roxmltree::Document::parse(source).context("parse SVG XML")?;
         let root = document
             .descendants()
@@ -66,7 +70,7 @@ impl SlotRegistry {
         let (view_x, view_y, view_w, view_h) = svg_canvas(root)?;
         let mut registry = Self {
             layout: Layout {
-                pub(crate) slots: HashMap::new(),
+                slots: HashMap::new(),
             },
         };
 
@@ -110,32 +114,32 @@ impl SlotRegistry {
         Ok(registry)
     }
 
-    fn get(&self, name: &str) -> Result<SlotTarget> {
+    pub(crate) fn get(&self, name: &str) -> Result<SlotTarget> {
         let key = normalize_name(name);
         self.layout
             .slots
             .get(&key)
             .map(|slot| SlotTarget {
-                pub(crate) id: slot.id.clone(),
-                pub(crate) rect: slot.rect,
-                pub(crate) role: slot.role,
-                pub(crate) capture: slot.capture,
-                pub(crate) label: slot.label.clone(),
+                id: slot.id.clone(),
+                rect: slot.rect,
+                role: slot.role,
+                capture: slot.capture,
+                label: slot.label.clone(),
             })
             .ok_or_else(|| anyhow!("unknown slot {name}"))
     }
 
-    fn slots(&self) -> impl Iterator<Item = &Slot> {
+    pub(crate) fn slots(&self) -> impl Iterator<Item = &Slot> {
         self.layout.slots.values()
     }
 
-    fn insert_slot(
+    pub(crate) fn insert_slot(
         &mut self,
-        pub(crate) name: &str,
-        pub(crate) rect: RectNorm,
-        pub(crate) role: SlotRole,
-        pub(crate) capture: bool,
-        pub(crate) label: Option<&str>,
+        name: &str,
+        rect: RectNorm,
+        role: SlotRole,
+        capture: bool,
+        label: Option<&str>,
     ) {
         let id = normalize_name(name);
         self.layout.slots.insert(
@@ -145,7 +149,7 @@ impl SlotRegistry {
                 rect,
                 role,
                 capture,
-                pub(crate) label: label.map(str::to_string),
+                label: label.map(str::to_string),
             },
         );
     }
@@ -211,5 +215,3 @@ pub(crate) fn parse_optional_bool(value: Option<&str>) -> Result<Option<bool>> {
         Some(other) => Err(anyhow!("invalid boolean value {other}")),
     }
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
