@@ -316,6 +316,9 @@ This avoids the old `EVIOCGRAB` passthrough race: the Wayland overlay is
 display-only, and pointer motion, mouse buttons, scroll wheels, and touchpad
 events never target TouchDeck.
 
+See [docs/input-routing.md](docs/input-routing.md) for the routing architecture,
+contact ownership model, protocol, and failure behavior.
+
 Sunshine uses `${XDG_RUNTIME_DIR}/touchdeck/sunshine.sock` by default. Override
 both sides only if needed:
 
