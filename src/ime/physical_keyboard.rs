@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::OwnedFd;
 
 use anyhow::{Context, Result};
@@ -15,10 +15,12 @@ pub(super) struct PhysicalKeyboard {
 
 impl PhysicalKeyboard {
     pub(super) fn from_keymap_fd(fd: OwnedFd, size: u32) -> Result<Self> {
-        let mut bytes = Vec::with_capacity(size as usize);
-        File::from(fd)
-            .take(u64::from(size))
-            .read_to_end(&mut bytes)
+        let mut file = File::from(fd);
+        file.seek(SeekFrom::Start(0))
+            .context("seek input-method keyboard keymap")?;
+
+        let mut bytes = vec![0; size as usize];
+        file.read_exact(&mut bytes)
             .context("read input-method keyboard keymap")?;
         let keymap = String::from_utf8(bytes).context("input-method keymap is not UTF-8")?;
         Self::from_keymap_string(keymap)

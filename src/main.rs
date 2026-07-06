@@ -18,7 +18,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
-use touchdeck::protocol::ImeStatus;
+use touchdeck::{niri, protocol::ImeStatus};
 
 mod action;
 mod action_executor;
@@ -92,6 +92,7 @@ struct OutputInfo {
 
 struct TouchSession {
     id: usize,
+    display_only: bool,
     touch_device: Option<PathBuf>,
     sunshine_output: Option<String>,
     overlay_output_global: Option<u32>,
@@ -117,6 +118,7 @@ impl TouchSession {
         let capture_policy = engine.capture_policy(config);
         Self {
             id,
+            display_only: false,
             touch_device: None,
             sunshine_output: config.input.sunshine_output.clone(),
             overlay_output_global: None,
@@ -148,6 +150,7 @@ impl TouchSession {
         let capture_policy = engine.capture_policy(config);
         Self {
             id,
+            display_only: false,
             touch_device: Some(touch_device),
             sunshine_output,
             overlay_output_global: None,
@@ -173,8 +176,35 @@ impl TouchSession {
         let capture_policy = engine.capture_policy(config);
         Self {
             id,
+            display_only: false,
             touch_device: None,
             sunshine_output,
+            overlay_output_global: None,
+            overlay_output_name: None,
+            overlay_wait_reason: None,
+            raw_touch: None,
+            raw_touch_retry_at_ms: None,
+            raw_touch_last_error: None,
+            raw_discard_active: HashSet::new(),
+            raw_discard_until_ms: None,
+            sunshine_contacts: HashMap::new(),
+            overlay: Overlay::default(),
+            engine,
+            capture_policy,
+            mode_hint: None,
+            last_presented_mode: Mode::Base,
+            text_renderer: TextRenderer::new(),
+        }
+    }
+
+    fn ime_display(id: usize, output: Option<String>, config: &Config) -> Self {
+        let engine = Engine::default();
+        let capture_policy = engine.capture_policy(config);
+        Self {
+            id,
+            display_only: true,
+            touch_device: None,
+            sunshine_output: output,
             overlay_output_global: None,
             overlay_output_name: None,
             overlay_wait_reason: None,
@@ -624,7 +654,55 @@ impl App {
         }
 
         self.ime_status = status;
+        self.ensure_ime_display_overlay(qh)?;
         self.redraw_all_configured_overlays(qh)
+    }
+
+    fn ensure_ime_display_overlay(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        if !ime_status_needs_display_overlay(&self.ime_status) {
+            return Ok(());
+        }
+
+        let output_name = match niri::focused_output_name() {
+            Ok(name) => name,
+            Err(err) => {
+                eprintln!(
+                    "touchdeck: failed to query focused output for IME display overlay: {err:?}"
+                );
+                None
+            }
+        };
+
+        let configured_on_target = self.sessions.iter().any(|session| {
+            session.overlay.is_initialized()
+                && session.overlay.dimensions().is_some()
+                && output_name
+                    .as_ref()
+                    .map(|name| session.overlay_output_name.as_ref() == Some(name))
+                    .unwrap_or(true)
+        });
+        if configured_on_target {
+            return Ok(());
+        }
+
+        if let Some(index) = self
+            .sessions
+            .iter()
+            .position(|session| session.display_only && session.sunshine_output == output_name)
+        {
+            self.try_init_session_overlay(qh, index)?;
+            return Ok(());
+        }
+
+        let id = self.allocate_session_id();
+        eprintln!(
+            "touchdeck: created display-only IME overlay session {id} output={}",
+            output_name.as_deref().unwrap_or("<focused>")
+        );
+        self.sessions
+            .push(TouchSession::ime_display(id, output_name, &self.config));
+        let index = self.sessions.len() - 1;
+        self.try_init_session_overlay(qh, index)
     }
 
     fn attach_overlay_buffer(
@@ -675,13 +753,17 @@ impl App {
             .compositor
             .as_ref()
             .ok_or_else(|| anyhow!("Wayland compositor global is unavailable"))?;
-        let effective_policy = match self.config.input.touch_backend {
+        let effective_policy = if session.display_only {
+            CapturePolicy::None
+        } else {
+            match self.config.input.touch_backend {
             TouchInputBackend::Wayland => policy.clone(),
             TouchInputBackend::Evdev => match policy {
                 CapturePolicy::Zones(_) => policy.clone(),
                 CapturePolicy::Fullscreen | CapturePolicy::None => CapturePolicy::None,
             },
             TouchInputBackend::SunshineRouter => CapturePolicy::None,
+            }
         };
         session
             .overlay
@@ -720,6 +802,7 @@ impl App {
     fn raw_touch_should_grab(&self, index: usize, policy: &CapturePolicy) -> bool {
         self.config.input.touch_backend == TouchInputBackend::Evdev
             && self.config.input.evdev_grab
+            && !self.sessions[index].display_only
             && self.sessions[index].overlay.is_initialized()
             && matches!(policy, CapturePolicy::Fullscreen)
     }
@@ -1197,7 +1280,7 @@ impl App {
         if let Some(index) = self
             .sessions
             .iter()
-            .position(|session| session.sunshine_output == output)
+            .position(|session| !session.display_only && session.sunshine_output == output)
         {
             return Ok(index);
         }
@@ -1260,6 +1343,7 @@ impl App {
         let mut claimed_outputs = self
             .sessions
             .iter()
+            .filter(|session| !session.display_only)
             .filter_map(|session| session.output_name(&self.config).map(str::to_string))
             .collect::<HashSet<_>>();
         let mut claimed_devices = self
@@ -1374,7 +1458,8 @@ impl App {
 
     fn disconnected_session_for_output(&self, output: &str) -> Option<usize> {
         self.sessions.iter().position(|session| {
-            session.raw_touch.is_none()
+            !session.display_only
+                && session.raw_touch.is_none()
                 && session.output_name(&self.config) == Some(output)
                 && session.touch_device.is_some()
         })
@@ -1628,6 +1713,15 @@ fn render_session_overlay(
     }
 
     render_mode_hint(now_ms, session, mmap, width, height);
+}
+
+fn ime_status_needs_display_overlay(status: &ImeStatus) -> bool {
+    if status.preedit.is_empty() && status.commit_preview.is_empty() && status.candidates.is_empty()
+    {
+        return false;
+    }
+
+    status.ui_owner == "touchdeck-server-popup" && status.cursor_rect.is_some()
 }
 
 fn render_mode_hint(

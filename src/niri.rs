@@ -103,6 +103,25 @@ pub fn focused_output_layout() -> Result<Option<FocusedOutputLayout>> {
     }))
 }
 
+pub fn focused_output_name() -> Result<Option<String>> {
+    let value = send_ipc_request_json("\"FocusedOutput\"")?;
+    let focused = value
+        .get("Ok")
+        .and_then(|ok| ok.get("FocusedOutput"))
+        .or_else(|| value.get("FocusedOutput"));
+    let Some(focused) = focused else {
+        return Ok(None);
+    };
+    if focused.is_null() {
+        return Ok(None);
+    }
+
+    Ok(focused
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(str::to_string))
+}
+
 pub fn send_ipc_request_json(request: &str) -> Result<serde_json::Value> {
     let socket_path = env::var_os("NIRI_SOCKET")
         .map(PathBuf::from)
