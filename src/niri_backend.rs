@@ -7,7 +7,8 @@ use crate::action::{
     niri_action_request_json, niri_interactive_move_begin_request_json,
     niri_interactive_move_end_request_json, niri_interactive_move_update_request_json,
     niri_interactive_resize_begin_request_json, niri_interactive_resize_end_request_json,
-    niri_interactive_resize_update_request_json, NiriAction, NiriResizeEdge,
+    niri_interactive_resize_update_request_json, niri_spawn_request_json,
+    niri_spawn_sh_request_json, NiriAction, NiriResizeEdge,
 };
 
 pub(crate) fn spawn_niri_action(action: NiriAction) {
@@ -20,6 +21,34 @@ pub(crate) fn spawn_niri_action(action: NiriAction) {
 
 pub(crate) fn send_niri_action_socket(action: NiriAction) -> Result<()> {
     let request = niri_action_request_json(action);
+    let _ = niri::send_ipc_request_json(&request)?;
+    Ok(())
+}
+
+pub(crate) fn spawn_niri_command(command: Vec<String>) {
+    thread::spawn(move || {
+        if let Err(err) = send_niri_spawn_socket(&command) {
+            eprintln!("touchdeck: failed to send niri spawn {:?}: {err:?}", command);
+        }
+    });
+}
+
+pub(crate) fn spawn_niri_shell(command: String) {
+    thread::spawn(move || {
+        if let Err(err) = send_niri_spawn_sh_socket(&command) {
+            eprintln!("touchdeck: failed to send niri spawn-sh {:?}: {err:?}", command);
+        }
+    });
+}
+
+fn send_niri_spawn_socket(command: &[String]) -> Result<()> {
+    let request = niri_spawn_request_json(command);
+    let _ = niri::send_ipc_request_json(&request)?;
+    Ok(())
+}
+
+fn send_niri_spawn_sh_socket(command: &str) -> Result<()> {
+    let request = niri_spawn_sh_request_json(command);
     let _ = niri::send_ipc_request_json(&request)?;
     Ok(())
 }

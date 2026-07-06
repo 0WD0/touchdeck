@@ -9,7 +9,7 @@ use crate::action::ActionStep;
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::key::{modifier_mask_for_key, KeyChord, XKB_MOD_SUPER};
 use crate::keymap::{GestureAction, LastKeySequence};
-use crate::niri_backend::spawn_niri_action;
+use crate::niri_backend::{spawn_niri_action, spawn_niri_command, spawn_niri_shell};
 use touchdeck::ime::TouchDeckEvent;
 
 #[derive(Default)]
@@ -334,6 +334,18 @@ impl ActionExecutor {
                     eprintln!("touchdeck: niri action {action}");
                     spawn_niri_action(*action);
                     outcome.last_action = Some(action.as_str().to_string());
+                }
+                ActionStep::Spawn(command) => {
+                    if !command.is_empty() {
+                        eprintln!("touchdeck: niri spawn {}", command.join(" "));
+                        spawn_niri_command(command.clone());
+                        outcome.last_action = Some(format!("spawn {}", command.join(" ")));
+                    }
+                }
+                ActionStep::SpawnSh(command) => {
+                    eprintln!("touchdeck: niri spawn-sh {command}");
+                    spawn_niri_shell(command.clone());
+                    outcome.last_action = Some(format!("spawn-sh {command}"));
                 }
                 ActionStep::DelayMs(ms) => {
                     std::thread::sleep(Duration::from_millis(u64::from(*ms)));

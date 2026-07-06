@@ -10,6 +10,8 @@ pub(crate) enum ActionStep {
     TapKey(u32),
     KeySequence(Vec<KeyChord>),
     Niri(NiriAction),
+    Spawn(Vec<String>),
+    SpawnSh(String),
     DelayMs(u32),
 }
 
@@ -99,6 +101,10 @@ pub(crate) enum NiriAction {
         focus: bool,
     },
     MoveColumnToWorkspaceUp {
+        focus: bool,
+    },
+    MoveColumnToWorkspace {
+        reference: WorkspaceReference,
         focus: bool,
     },
     ConsumeOrExpelWindowLeft,
@@ -214,6 +220,7 @@ impl NiriAction {
             Self::MoveWindowToWorkspaceUp { .. } => "move-window-to-workspace-up",
             Self::MoveColumnToWorkspaceDown { .. } => "move-column-to-workspace-down",
             Self::MoveColumnToWorkspaceUp { .. } => "move-column-to-workspace-up",
+            Self::MoveColumnToWorkspace { .. } => "move-column-to-workspace",
             Self::ConsumeOrExpelWindowLeft => "consume-or-expel-window-left",
             Self::ConsumeOrExpelWindowRight => "consume-or-expel-window-right",
             Self::ConsumeWindowIntoColumn => "consume-window-into-column",
@@ -322,6 +329,13 @@ impl NiriAction {
                 "MoveColumnToWorkspaceUp",
                 field("focus", Value::from(focus)),
             ),
+            Self::MoveColumnToWorkspace { reference, focus } => action(
+                "MoveColumnToWorkspace",
+                fields([
+                    ("reference", workspace_reference(reference)),
+                    ("focus", Value::from(focus)),
+                ]),
+            ),
             Self::ConsumeOrExpelWindowLeft => {
                 action("ConsumeOrExpelWindowLeft", object_with_null_id())
             }
@@ -410,6 +424,21 @@ impl std::fmt::Display for NiriAction {
 
 pub(crate) fn niri_action_request_json(action: NiriAction) -> String {
     action.ipc_request_json().to_string()
+}
+
+pub(crate) fn niri_spawn_request_json(command: &[String]) -> String {
+    action(
+        "Spawn",
+        field(
+            "command",
+            Value::Array(command.iter().cloned().map(Value::String).collect()),
+        ),
+    )
+    .to_string()
+}
+
+pub(crate) fn niri_spawn_sh_request_json(command: &str) -> String {
+    action("SpawnSh", field("command", Value::String(command.to_string()))).to_string()
 }
 
 pub(crate) fn niri_interactive_move_begin_request_json(output: &str, x: f64, y: f64) -> String {
@@ -524,6 +553,10 @@ pub(crate) fn parse_niri_action(value: &str) -> Result<NiriAction> {
         }),
         "move_column_to_workspace_up" => Ok(NiriAction::MoveColumnToWorkspaceUp {
             focus: parse_bool_arg(arg, true)?,
+        }),
+        "move_column_to_workspace" => Ok(NiriAction::MoveColumnToWorkspace {
+            reference: parse_workspace_reference(required_arg(name.as_str(), arg)?)?,
+            focus: true,
         }),
         "consume_or_expel_window_left" => Ok(NiriAction::ConsumeOrExpelWindowLeft),
         "consume_or_expel_window_right" => Ok(NiriAction::ConsumeOrExpelWindowRight),
@@ -796,6 +829,18 @@ mod tests {
                 parse_niri_action("move-window-to-workspace-up:false").unwrap()
             ),
             r#"{"Action":{"MoveWindowToWorkspaceUp":{"focus":false}}}"#
+        );
+        assert_eq!(
+            niri_action_request_json(parse_niri_action("move-column-to-workspace:5").unwrap()),
+            r#"{"Action":{"MoveColumnToWorkspace":{"focus":true,"reference":{"Index":5}}}}"#
+        );
+        assert_eq!(
+            niri_spawn_request_json(&["foot".to_string()]),
+            r#"{"Action":{"Spawn":{"command":["foot"]}}}"#
+        );
+        assert_eq!(
+            niri_spawn_sh_request_json("noctalia msg settings-toggle"),
+            r#"{"Action":{"SpawnSh":{"command":"noctalia msg settings-toggle"}}}"#
         );
     }
 }

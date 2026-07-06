@@ -1500,6 +1500,19 @@ fn parse_behavior_invocation_kind(
                 .ok_or_else(|| anyhow!("&macro is missing macro name"))?;
             Ok(Behavior::Sequence(macros.get(&name)?))
         }
+        "spawn" => {
+            let command = args.iter().map(|value| (*value).to_string()).collect::<Vec<_>>();
+            if command.is_empty() {
+                return Err(anyhow!("&spawn is missing command"));
+            }
+            Ok(Behavior::Sequence(vec![ActionStep::Spawn(command)]))
+        }
+        "spawn_sh" | "spawnsh" => {
+            if args.is_empty() {
+                return Err(anyhow!("&spawn-sh is missing shell command"));
+            }
+            Ok(Behavior::Sequence(vec![ActionStep::SpawnSh(args.join(" "))]))
+        }
         "sequence" => {
             let steps = fields
                 .steps
@@ -1674,6 +1687,22 @@ fn parse_action_step(value: ActionStepFileConfig) -> Result<ActionStep> {
                 .as_deref()
                 .ok_or_else(|| anyhow!("niri step is missing action"))?,
         )?)),
+        "spawn" => Ok(ActionStep::Spawn(
+            value
+                .keys
+                .or(value.key)
+                .as_deref()
+                .ok_or_else(|| anyhow!("spawn step is missing key/keys command"))?
+                .split_whitespace()
+                .map(str::to_string)
+                .collect(),
+        )),
+        "spawn_sh" | "spawn-sh" => Ok(ActionStep::SpawnSh(
+            value
+                .keys
+                .or(value.key)
+                .ok_or_else(|| anyhow!("spawn_sh step is missing key/keys command"))?,
+        )),
         "delay" | "delay_ms" => Ok(ActionStep::DelayMs(
             value
                 .ms
@@ -1790,8 +1819,7 @@ mod tests {
         let mut registry = BehaviorRegistry::default();
         registry.extend(file_config.behaviors.unwrap());
         let behavior =
-            parse_behavior_invocation("&niri_super", &MacroRegistry::default(), &registry)
-                .unwrap();
+            parse_behavior_invocation("&niri_super", &MacroRegistry::default(), &registry).unwrap();
 
         assert_eq!(
             behavior,
