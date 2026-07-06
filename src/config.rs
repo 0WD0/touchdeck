@@ -784,7 +784,7 @@ impl KeyboardMapExpansion<'_> {
     fn push(&mut self, trigger: Trigger, behavior: Behavior) {
         self.bindings.push(Binding {
             mode: self.mode,
-            layer: self.layer,
+            layer: self.layer.clone(),
             trigger,
             behavior,
             priority: self.priority,
@@ -1076,6 +1076,15 @@ fn parse_behavior(
                 .as_deref()
                 .ok_or_else(|| anyhow!("layer_momentary behavior is missing layer"))?,
         )?)),
+        "sticky_layer" | "layer_sticky" => Ok(Behavior::LayerSticky {
+            layer: parse_layer(
+                value
+                    .layer
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("sticky_layer behavior is missing layer"))?,
+            )?,
+            timeout_ms: value.timeout_ms,
+        }),
         "transparent" => Ok(Behavior::Transparent),
         "noop" | "no_op" => Ok(Behavior::NoOp),
         "exit" => Ok(Behavior::Exit),
@@ -1458,6 +1467,17 @@ fn parse_behavior_invocation_kind(
                 .ok_or_else(|| anyhow!("&layer_momentary is missing layer"))?;
             Ok(Behavior::LayerMomentary(parse_layer(&layer)?))
         }
+        "sticky_layer" | "layer_sticky" | "sl" => {
+            let layer = fields
+                .layer
+                .map(str::to_string)
+                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .ok_or_else(|| anyhow!("&sticky_layer is missing layer"))?;
+            Ok(Behavior::LayerSticky {
+                layer: parse_layer(&layer)?,
+                timeout_ms: fields.timeout_ms,
+            })
+        }
         "trans" | "transparent" => Ok(Behavior::Transparent),
         "none" | "noop" | "no_op" => Ok(Behavior::NoOp),
         "exit" => Ok(Behavior::Exit),
@@ -1592,7 +1612,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(binding.mode, Mode::Base);
-        assert_eq!(binding.layer, Layer::Base);
+        assert_eq!(binding.layer, Layer::base());
         assert_eq!(
             binding.trigger,
             Trigger::Swipe {

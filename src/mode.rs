@@ -12,11 +12,29 @@ pub(crate) enum Mode {
     Passthrough,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum Layer {
-    #[default]
-    Base,
-    Niri,
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct Layer {
+    name: String,
+}
+
+impl Layer {
+    pub(crate) fn new(value: &str) -> Self {
+        Self {
+            name: normalize_name(value),
+        }
+    }
+
+    pub(crate) fn base() -> Self {
+        Self::new("base")
+    }
+
+    pub(crate) fn niri() -> Self {
+        Self::new("niri")
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,8 +49,8 @@ pub(crate) enum SlotGestureKind {
 
 pub(crate) fn default_layer_stack_for_mode(mode: Mode) -> Vec<Layer> {
     match mode {
-        Mode::NiriMomentary | Mode::NiriLocked => vec![Layer::Niri],
-        Mode::Base | Mode::Text | Mode::Passthrough => vec![Layer::Base],
+        Mode::NiriMomentary | Mode::NiriLocked => vec![Layer::niri()],
+        Mode::Base | Mode::Text | Mode::Passthrough => vec![Layer::base()],
     }
 }
 
@@ -66,11 +84,8 @@ pub(crate) fn mode_hint_color(mode: Mode) -> [u8; 4] {
     }
 }
 
-pub(crate) fn layer_name(layer: Layer) -> &'static str {
-    match layer {
-        Layer::Base => "base",
-        Layer::Niri => "niri",
-    }
+pub(crate) fn layer_name(layer: &Layer) -> &str {
+    layer.as_str()
 }
 
 pub(crate) fn parse_mode(value: &str) -> Result<Mode> {
@@ -85,9 +100,10 @@ pub(crate) fn parse_mode(value: &str) -> Result<Mode> {
 }
 
 pub(crate) fn parse_layer(value: &str) -> Result<Layer> {
-    match normalize_name(value).as_str() {
-        "base" => Ok(Layer::Base),
-        "niri" => Ok(Layer::Niri),
-        _ => Err(anyhow!("unknown layer {value}")),
+    let layer = Layer::new(value);
+    if layer.as_str().is_empty() {
+        Err(anyhow!("layer name cannot be empty"))
+    } else {
+        Ok(layer)
     }
 }

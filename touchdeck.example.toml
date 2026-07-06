@@ -155,14 +155,14 @@ key_dot = "&kp DOT"
 key_fslh = "&slash_question"
 thumb_ctrl = "&kp LCTRL"
 thumb_shift = "&kp LSHIFT"
-thumb_super = "&kp LGUI"
+thumb_super = "&sl niri_bind"
 thumb_ret = "&kp RET"
 thumb_spc = "&kp SPC"
 
 [keyboard.layers.hold]
 thumb_ctrl = "&hold LCTRL"
 thumb_shift = "&hold LSHIFT"
-thumb_super = "&hold LGUI"
+thumb_super = "&mo niri_bind"
 
 [keyboard.layers.swipe_up]
 key_n1 = "&kp EXCLAMATION"
@@ -204,6 +204,68 @@ key_k = "&hold_repeat RIGHT"
 key_l = "&hold_repeat RIGHT"
 thumb_spc = "&kp RET"
 thumb_ret = "&kp LC(RIGHT)"
+
+[[keyboard.layers]]
+mode = "text"
+layer = "niri_bind"
+
+[keyboard.layers.tap]
+key_n1 = "&niri focus-workspace:1"
+key_n2 = "&niri focus-workspace:2"
+key_n3 = "&niri focus-workspace:3"
+key_n4 = "&niri focus-workspace:4"
+key_n5 = "&niri focus-workspace:5"
+key_n6 = "&niri focus-workspace:6"
+key_n7 = "&niri focus-workspace:7"
+key_n8 = "&niri focus-workspace:8"
+key_n9 = "&niri focus-workspace:9"
+key_n0 = "&niri focus-workspace:10"
+key_q = "&niri close-window"
+key_w = "&niri toggle-overview"
+key_e = "&niri center-window"
+key_r = "&niri center-column"
+key_f = "&niri fullscreen-window"
+key_v = "&niri toggle-window-floating"
+key_h = "&niri focus-window-up"
+key_j = "&niri focus-column-right"
+key_k = "&niri focus-column-left"
+key_l = "&niri focus-window-down"
+key_b = "&niri switch-focus-between-floating-and-tiling"
+thumb_ctrl = "&mo niri_move"
+thumb_shift = "&mo niri_resize"
+thumb_super = "&layer base"
+thumb_ret = "&niri toggle-overview"
+thumb_spc = "&mode base"
+
+[[keyboard.layers]]
+mode = "text"
+layer = "niri_move"
+
+[keyboard.layers.tap]
+key_h = "&niri move-window-up"
+key_j = "&niri move-column-right"
+key_k = "&niri move-column-left"
+key_l = "&niri move-window-down"
+key_f = "&niri move-window-to-floating"
+key_v = "&niri move-window-to-tiling"
+key_b = "&niri switch-focus-between-floating-and-tiling"
+thumb_super = "&layer base"
+thumb_spc = "&mode base"
+
+[[keyboard.layers]]
+mode = "text"
+layer = "niri_resize"
+
+[keyboard.layers.tap]
+key_h = "&niri set-window-height:-5%"
+key_j = "&niri set-column-width:+5%"
+key_k = "&niri set-column-width:-5%"
+key_l = "&niri set-window-height:+5%"
+key_f = "&niri maximize-column"
+key_v = "&niri reset-window-height"
+key_b = "&niri switch-preset-column-width"
+thumb_super = "&layer base"
+thumb_spc = "&mode base"
 
 # Mode ownership controls.
 

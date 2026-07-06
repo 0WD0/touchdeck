@@ -113,6 +113,12 @@ struct ArmedDragState {
     expires_at_ms: u64,
 }
 
+#[derive(Clone, Debug)]
+struct StickyLayerState {
+    layer: Layer,
+    expires_at_ms: u64,
+}
+
 #[derive(Debug)]
 pub(crate) struct Engine {
     pub(crate) mode: Mode,
@@ -126,6 +132,7 @@ pub(crate) struct Engine {
     repeaters: Vec<RepeatState>,
     continuous_drag: Option<ContinuousDragState>,
     armed_drag: Option<ArmedDragState>,
+    sticky_layer: Option<StickyLayerState>,
     last_tap: Option<TapRecord>,
     now_ms: u64,
     pub(crate) last_action: Option<String>,
@@ -135,7 +142,7 @@ impl Default for Engine {
     fn default() -> Self {
         Self {
             mode: Mode::Base,
-            layer_stack: vec![Layer::Base],
+            layer_stack: vec![Layer::base()],
             active: HashMap::new(),
             finished: Vec::new(),
             max_active: 0,
@@ -145,6 +152,7 @@ impl Default for Engine {
             repeaters: Vec::new(),
             continuous_drag: None,
             armed_drag: None,
+            sticky_layer: None,
             last_tap: None,
             now_ms: 0,
             last_action: None,
@@ -216,6 +224,11 @@ impl Engine {
                 deadline.min(armed.expires_at_ms)
             }));
         }
+        if let Some(sticky) = &self.sticky_layer {
+            deadline = Some(deadline.map_or(sticky.expires_at_ms, |deadline| {
+                deadline.min(sticky.expires_at_ms)
+            }));
+        }
         self.repeaters
             .iter()
             .map(|repeater| repeater.next_ms)
@@ -240,6 +253,14 @@ impl Engine {
         {
             self.armed_drag = None;
             effects.push(EngineEffect::Redraw);
+        }
+
+        if self
+            .sticky_layer
+            .as_ref()
+            .is_some_and(|sticky| now_ms >= sticky.expires_at_ms)
+        {
+            self.clear_sticky_layer(&mut effects);
         }
 
         if let Some(candidate) = self.hold_candidate.clone() {
@@ -578,6 +599,7 @@ impl Engine {
         let mut effects = self.release_all_held_actions();
         self.finish_continuous_drag(&mut effects);
         self.armed_drag = None;
+        self.clear_sticky_layer(&mut effects);
         self.set_mode(Mode::Base, &mut effects, config);
         self.reset_contacts();
         effects.push(EngineEffect::Redraw);
@@ -727,6 +749,8 @@ impl Engine {
         config: &Config,
         hold_id: Option<i32>,
     ) {
+        let consume_sticky_layer = self.should_consume_sticky_layer(&action, hold_id);
+
         match action {
             GestureAction::Niri(_)
             | GestureAction::NiriInteractiveMove
@@ -800,7 +824,15 @@ impl Engine {
                     self.set_layer(layer, effects);
                 }
             }
+            GestureAction::LayerSticky { layer, timeout_ms } => {
+                self.remember_held_action_if_needed(hold_id);
+                self.activate_sticky_layer(layer, timeout_ms, effects);
+            }
             GestureAction::None => {}
+        }
+
+        if consume_sticky_layer {
+            self.clear_sticky_layer(effects);
         }
     }
 
@@ -899,6 +931,52 @@ impl Engine {
         }
     }
 
+    fn should_consume_sticky_layer(&self, action: &GestureAction, hold_id: Option<i32>) -> bool {
+        if hold_id.is_some() || self.sticky_layer.is_none() {
+            return false;
+        }
+
+        !matches!(
+            action,
+            GestureAction::LayerSticky { .. }
+                | GestureAction::LayerSet(_)
+                | GestureAction::LayerToggle(_)
+                | GestureAction::LayerMomentary(_)
+                | GestureAction::ModeSet(_)
+                | GestureAction::ModeToggle(_)
+                | GestureAction::ModeMomentary(_)
+                | GestureAction::None
+        )
+    }
+
+    fn activate_sticky_layer(
+        &mut self,
+        layer: Layer,
+        timeout_ms: Option<u32>,
+        effects: &mut Vec<EngineEffect>,
+    ) {
+        let timeout_ms = u64::from(timeout_ms.unwrap_or(1000));
+        self.clear_sticky_layer(effects);
+        self.push_layer(layer.clone(), effects);
+        self.sticky_layer = Some(StickyLayerState {
+            layer,
+            expires_at_ms: self.now_ms + timeout_ms,
+        });
+    }
+
+    fn clear_sticky_layer(&mut self, effects: &mut Vec<EngineEffect>) {
+        let Some(sticky) = self.sticky_layer.take() else {
+            return;
+        };
+
+        self.layer_stack
+            .retain(|existing| existing != &sticky.layer);
+        if self.layer_stack.is_empty() {
+            self.layer_stack.push(Layer::base());
+        }
+        effects.push(EngineEffect::Redraw);
+    }
+
     fn start_momentary(
         &mut self,
         hold_id: i32,
@@ -907,6 +985,7 @@ impl Engine {
         effects: &mut Vec<EngineEffect>,
         config: &Config,
     ) {
+        self.clear_sticky_layer(effects);
         self.momentary = Some(MomentaryState {
             hold_id,
             return_mode: self.mode,
@@ -920,8 +999,8 @@ impl Engine {
         }
 
         if let Some(layer) = layer {
+            eprintln!("touchdeck: layer {}", layer_name(&layer));
             self.push_layer(layer, effects);
-            eprintln!("touchdeck: layer {}", layer_name(layer));
         }
 
         self.last_tap = None;
@@ -937,6 +1016,7 @@ impl Engine {
 
         self.finish_continuous_drag(effects);
         self.armed_drag = None;
+        self.clear_sticky_layer(effects);
         self.mode = momentary.return_mode;
         self.layer_stack = momentary.return_layer_stack;
         self.hold_candidate = None;
@@ -945,7 +1025,7 @@ impl Engine {
         eprintln!(
             "touchdeck: return mode {} layer {}",
             mode_name(self.mode),
-            layer_name(self.current_layer())
+            layer_name(&self.current_layer())
         );
         effects.push(EngineEffect::SetCapture(self.capture_policy(config)));
         effects.push(EngineEffect::Redraw);
@@ -957,6 +1037,7 @@ impl Engine {
         effects: &mut Vec<EngineEffect>,
         config: &Config,
     ) {
+        self.clear_sticky_layer(effects);
         self.mode = mode;
         self.layer_stack = default_layer_stack_for_mode(mode);
         self.momentary = None;
@@ -970,52 +1051,56 @@ impl Engine {
     }
 
     fn set_layer(&mut self, layer: Layer, effects: &mut Vec<EngineEffect>) {
-        self.layer_stack = if layer == Layer::Base {
-            vec![Layer::Base]
+        self.clear_sticky_layer(effects);
+        let label = layer_name(&layer).to_string();
+        self.layer_stack = if layer == Layer::base() {
+            vec![Layer::base()]
         } else {
-            vec![Layer::Base, layer]
+            vec![Layer::base(), layer]
         };
         self.momentary = None;
         self.hold_candidate = None;
         self.armed_drag = None;
         self.last_tap = None;
-        eprintln!("touchdeck: layer {}", layer_name(layer));
+        eprintln!("touchdeck: layer {label}");
         effects.push(EngineEffect::Redraw);
     }
 
     fn push_layer(&mut self, layer: Layer, effects: &mut Vec<EngineEffect>) {
-        if layer == Layer::Base {
-            self.set_layer(Layer::Base, effects);
+        if layer == Layer::base() {
+            self.set_layer(Layer::base(), effects);
             return;
         }
 
-        self.layer_stack.retain(|existing| *existing != layer);
-        if !self.layer_stack.contains(&Layer::Base) {
-            self.layer_stack.insert(0, Layer::Base);
+        let label = layer_name(&layer).to_string();
+        self.layer_stack.retain(|existing| existing != &layer);
+        if !self.layer_stack.contains(&Layer::base()) {
+            self.layer_stack.insert(0, Layer::base());
         }
         self.layer_stack.push(layer);
         self.last_tap = None;
-        eprintln!("touchdeck: push layer {}", layer_name(layer));
+        eprintln!("touchdeck: push layer {label}");
         effects.push(EngineEffect::Redraw);
     }
 
     fn pop_layer(&mut self, layer: Layer, effects: &mut Vec<EngineEffect>) {
-        if layer == Layer::Base {
-            self.set_layer(Layer::Base, effects);
+        if layer == Layer::base() {
+            self.set_layer(Layer::base(), effects);
             return;
         }
 
-        self.layer_stack.retain(|existing| *existing != layer);
+        let label = layer_name(&layer).to_string();
+        self.layer_stack.retain(|existing| existing != &layer);
         if self.layer_stack.is_empty() {
-            self.layer_stack.push(Layer::Base);
+            self.layer_stack.push(Layer::base());
         }
         self.last_tap = None;
-        eprintln!("touchdeck: pop layer {}", layer_name(layer));
+        eprintln!("touchdeck: pop layer {label}");
         effects.push(EngineEffect::Redraw);
     }
 
     pub(crate) fn current_layer(&self) -> Layer {
-        self.layer_stack.last().copied().unwrap_or(Layer::Base)
+        self.layer_stack.last().cloned().unwrap_or_else(Layer::base)
     }
 }
 
@@ -1276,6 +1361,7 @@ impl Engine {
         self.repeaters.clear();
         self.continuous_drag = None;
         self.armed_drag = None;
+        self.sticky_layer = None;
     }
 }
 
@@ -1730,7 +1816,7 @@ mod tests {
         config.keymap.bindings = vec![
             Binding {
                 mode: Mode::Base,
-                layer: Layer::Base,
+                layer: Layer::base(),
                 trigger: Trigger::Tap {
                     target: test_target("left_bottom"),
                     fingers: 1,
@@ -1744,7 +1830,7 @@ mod tests {
             },
             Binding {
                 mode: Mode::Base,
-                layer: Layer::Niri,
+                layer: Layer::niri(),
                 trigger: Trigger::Tap {
                     target: test_target("left_bottom"),
                     fingers: 1,
@@ -1759,7 +1845,7 @@ mod tests {
         ];
 
         engine.perform_action(
-            GestureAction::LayerToggle(Layer::Niri),
+            GestureAction::LayerToggle(Layer::niri()),
             &mut Vec::new(),
             &config,
             None,
@@ -1788,7 +1874,7 @@ mod tests {
         config.keymap.bindings = vec![
             Binding {
                 mode: Mode::Base,
-                layer: Layer::Base,
+                layer: Layer::base(),
                 trigger: Trigger::Tap {
                     target: test_target("left_bottom"),
                     fingers: 1,
@@ -1802,7 +1888,7 @@ mod tests {
             },
             Binding {
                 mode: Mode::Base,
-                layer: Layer::Niri,
+                layer: Layer::niri(),
                 trigger: Trigger::Tap {
                     target: test_target("left_bottom"),
                     fingers: 1,
@@ -1815,7 +1901,7 @@ mod tests {
         ];
 
         engine.perform_action(
-            GestureAction::LayerToggle(Layer::Niri),
+            GestureAction::LayerToggle(Layer::niri()),
             &mut Vec::new(),
             &config,
             None,
@@ -1838,22 +1924,22 @@ mod tests {
         let mut effects = Vec::new();
 
         engine.perform_action(
-            GestureAction::LayerToggle(Layer::Niri),
+            GestureAction::LayerToggle(Layer::niri()),
             &mut effects,
             &config,
             None,
         );
-        assert_eq!(engine.current_layer(), Layer::Niri);
-        assert_eq!(engine.layer_stack, vec![Layer::Base, Layer::Niri]);
+        assert_eq!(engine.current_layer(), Layer::niri());
+        assert_eq!(engine.layer_stack, vec![Layer::base(), Layer::niri()]);
 
         engine.perform_action(
-            GestureAction::LayerToggle(Layer::Niri),
+            GestureAction::LayerToggle(Layer::niri()),
             &mut effects,
             &config,
             None,
         );
-        assert_eq!(engine.current_layer(), Layer::Base);
-        assert_eq!(engine.layer_stack, vec![Layer::Base]);
+        assert_eq!(engine.current_layer(), Layer::base());
+        assert_eq!(engine.layer_stack, vec![Layer::base()]);
 
         assert_eq!(engine.capture_policy(&config), CapturePolicy::Fullscreen);
         assert!(effects.contains(&EngineEffect::Redraw));
@@ -1869,25 +1955,25 @@ mod tests {
         let (x, y) = test_slot_center("left_bottom");
         config.keymap.bindings = vec![Binding {
             mode: Mode::Base,
-            layer: Layer::Base,
+            layer: Layer::base(),
             trigger: Trigger::Hold {
                 target: test_target("left_bottom"),
                 fingers: 1,
                 min_ms: None,
             },
-            behavior: Behavior::LayerMomentary(Layer::Niri),
+            behavior: Behavior::LayerMomentary(Layer::niri()),
             priority: 0,
             consume: true,
         }];
 
         handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         engine.process_timers(181, &config, size);
-        assert_eq!(engine.current_layer(), Layer::Niri);
-        assert_eq!(engine.layer_stack, vec![Layer::Base, Layer::Niri]);
+        assert_eq!(engine.current_layer(), Layer::niri());
+        assert_eq!(engine.layer_stack, vec![Layer::base(), Layer::niri()]);
 
         engine.handle_up(220, 220, 1, &config, size);
-        assert_eq!(engine.current_layer(), Layer::Base);
-        assert_eq!(engine.layer_stack, vec![Layer::Base]);
+        assert_eq!(engine.current_layer(), Layer::base());
+        assert_eq!(engine.layer_stack, vec![Layer::base()]);
     }
 
     #[test]

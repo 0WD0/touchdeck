@@ -194,6 +194,7 @@ impl ActionExecutor {
             | GestureAction::LayerSet(_)
             | GestureAction::LayerToggle(_)
             | GestureAction::LayerMomentary(_)
+            | GestureAction::LayerSticky { .. }
             | GestureAction::NiriInteractiveMove
             | GestureAction::NiriInteractiveResize { .. }
             | GestureAction::None => ExecutorOutcome::default(),

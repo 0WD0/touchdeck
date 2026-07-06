@@ -62,7 +62,7 @@ impl Keymap {
                 .iter()
                 .filter(|binding| {
                     binding.mode == query.context.mode
-                        && binding.layer == *layer
+                        && &binding.layer == layer
                         && binding
                             .trigger
                             .matches_hold(query.context.size, query.x, query.y)
@@ -205,7 +205,7 @@ impl Keymap {
                 .bindings
                 .iter()
                 .filter(|binding| {
-                    binding.mode == mode && binding.layer == *layer && predicate(binding)
+                    binding.mode == mode && &binding.layer == layer && predicate(binding)
                 })
                 .collect::<Vec<_>>();
             matches.sort_by_key(|binding| std::cmp::Reverse(binding.priority));
@@ -264,7 +264,7 @@ impl Keymap {
                 .iter()
                 .filter(|binding| {
                     binding.mode == mode
-                        && binding.layer == *layer
+                        && &binding.layer == layer
                         && binding.consume
                         && binding.trigger.target_id() == slot_id
                         && binding.trigger.matches_slot_gesture(gesture)
@@ -299,7 +299,7 @@ impl Keymap {
                 .iter()
                 .filter(|binding| {
                     binding.mode == mode
-                        && binding.layer == *layer
+                        && &binding.layer == layer
                         && binding.consume
                         && binding.trigger.target_id() == slot_id
                         && (!tap_only || binding.trigger.is_tap())
@@ -634,6 +634,7 @@ pub(crate) enum Behavior {
     LayerSet(Layer),
     LayerToggle(Layer),
     LayerMomentary(Layer),
+    LayerSticky { layer: Layer, timeout_ms: Option<u32> },
     Transparent,
     NoOp,
     Exit,
@@ -706,6 +707,9 @@ impl Behavior {
             Self::LayerSet(layer) => GestureAction::LayerSet(layer),
             Self::LayerToggle(layer) => GestureAction::LayerToggle(layer),
             Self::LayerMomentary(layer) => GestureAction::LayerMomentary(layer),
+            Self::LayerSticky { layer, timeout_ms } => {
+                GestureAction::LayerSticky { layer, timeout_ms }
+            }
             Self::Exit => GestureAction::Exit,
             Self::Transparent | Self::NoOp => GestureAction::None,
         }
@@ -750,6 +754,7 @@ pub(crate) enum GestureAction {
     LayerSet(Layer),
     LayerToggle(Layer),
     LayerMomentary(Layer),
+    LayerSticky { layer: Layer, timeout_ms: Option<u32> },
     Exit,
     None,
 }
@@ -796,9 +801,10 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
         Behavior::ModeSet(mode) => Some(mode_name(*mode).to_string()),
         Behavior::ModeToggle(mode) => Some(format!("{}*", mode_name(*mode))),
         Behavior::ModeMomentary(mode) => Some(format!("{}+", mode_name(*mode))),
-        Behavior::LayerSet(layer) => Some(layer_name(*layer).to_string()),
-        Behavior::LayerToggle(layer) => Some(format!("{}*", layer_name(*layer))),
-        Behavior::LayerMomentary(layer) => Some(format!("{}+", layer_name(*layer))),
+        Behavior::LayerSet(layer) => Some(layer_name(layer).to_string()),
+        Behavior::LayerToggle(layer) => Some(format!("{}*", layer_name(layer))),
+        Behavior::LayerMomentary(layer) => Some(format!("{}+", layer_name(layer))),
+        Behavior::LayerSticky { layer, .. } => Some(format!("{}~", layer_name(layer))),
         Behavior::Exit => Some("exit".to_string()),
         Behavior::Transparent | Behavior::NoOp => None,
     }
@@ -919,17 +925,17 @@ mod tests {
         let keymap = &config.keymap;
 
         assert_eq!(
-            keymap.slot_label(Mode::Text, &[Layer::Base], "key_q"),
+            keymap.slot_label(Mode::Text, &[Layer::base()], "key_q"),
             Some("Q".to_string())
         );
         assert_eq!(
-            keymap.slot_label(Mode::Text, &[Layer::Base], "key_h"),
+            keymap.slot_label(Mode::Text, &[Layer::base()], "key_h"),
             Some("H".to_string())
         );
         assert_eq!(
             keymap.slot_gesture_label(
                 Mode::Text,
-                &[Layer::Base],
+                &[Layer::base()],
                 "key_n1",
                 SlotGestureKind::SwipeUp
             ),
@@ -938,7 +944,7 @@ mod tests {
         assert_eq!(
             keymap.slot_gesture_label(
                 Mode::Text,
-                &[Layer::Base],
+                &[Layer::base()],
                 "key_h",
                 SlotGestureKind::SwipeLeft
             ),
