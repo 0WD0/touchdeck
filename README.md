@@ -300,14 +300,42 @@ For daily use with a separate mouse or touchpad, use the `evdev` backend:
 
 ```toml
 [input]
+backend = "sunshine-router"
+```
+
+`sunshine-router` is the preferred backend with the Sunshine fork. Sunshine
+sends each native touch contact to TouchDeck before injecting it into niri.
+TouchDeck decides contact ownership on `down`:
+
+- `touchdeck`: the contact drives TouchDeck gestures/keymap/IME/niri actions and
+  is not injected into the app.
+- `app`: Sunshine injects the contact normally and TouchDeck ignores the rest of
+  that contact sequence.
+
+This avoids the old `EVIOCGRAB` passthrough race: the Wayland overlay is
+display-only, and pointer motion, mouse buttons, scroll wheels, and touchpad
+events never target TouchDeck.
+
+Sunshine uses `${XDG_RUNTIME_DIR}/touchdeck/sunshine.sock` by default. Override
+both sides only if needed:
+
+```toml
+[input]
+backend = "sunshine-router"
+sunshine_socket = "/run/user/1000/touchdeck/sunshine.sock"
+```
+
+```sh
+SUNSHINE_TOUCHDECK_SOCKET=/run/user/1000/touchdeck/sunshine.sock sunshine
+```
+
+`evdev` remains available as a debugging backend:
+
+```toml
+[input]
 backend = "evdev"
 grab = true
 ```
-
-In `evdev` mode the Wayland overlay is display-only and always uses an empty
-input region. TouchDeck reads and optionally grabs only the configured
-touchscreen event node; mouse buttons, pointer motion, and scroll wheels remain
-routed by the compositor.
 
 With the Sunshine fork, TouchDeck can auto-discover the per-client virtual
 touchscreen created by inputtino. Sunshine names it like:

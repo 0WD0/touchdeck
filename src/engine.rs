@@ -1095,6 +1095,7 @@ mod tests {
                 evdev_touch_device: None,
                 evdev_device_name_contains: None,
                 sunshine_output: None,
+                sunshine_router_socket: std::path::PathBuf::from("/tmp/touchdeck-test.sock"),
                 evdev_grab: true,
             },
             action_swipe_left: Some(NiriAction::FocusWorkspaceDown),

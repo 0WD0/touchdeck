@@ -143,6 +143,13 @@ impl Config {
             if let Some(output) = &input.sunshine_output {
                 self.input.sunshine_output = Some(output.clone());
             }
+            if let Some(socket) = input
+                .sunshine_socket
+                .as_deref()
+                .or(input.sunshine_router_socket.as_deref())
+            {
+                self.input.sunshine_router_socket = resolve_config_relative(&path, socket);
+            }
             if let Some(grab) = input.grab {
                 self.input.evdev_grab = grab;
             }
@@ -223,6 +230,7 @@ pub(crate) struct InputConfig {
     pub(crate) evdev_touch_device: Option<PathBuf>,
     pub(crate) evdev_device_name_contains: Option<String>,
     pub(crate) sunshine_output: Option<String>,
+    pub(crate) sunshine_router_socket: PathBuf,
     pub(crate) evdev_grab: bool,
 }
 
@@ -233,6 +241,7 @@ impl InputConfig {
             evdev_touch_device: None,
             evdev_device_name_contains: None,
             sunshine_output: None,
+            sunshine_router_socket: default_sunshine_router_socket(),
             evdev_grab: true,
         };
         config.apply_env_overrides();
@@ -260,6 +269,11 @@ impl InputConfig {
         if let Ok(output) = env::var("TOUCHDECK_SUNSHINE_OUTPUT") {
             self.sunshine_output = Some(output);
         }
+        if let Some(socket) = env::var_os("TOUCHDECK_SUNSHINE_SOCKET")
+            .or_else(|| env::var_os("TOUCHDECK_SUNSHINE_ROUTER_SOCKET"))
+        {
+            self.sunshine_router_socket = PathBuf::from(socket);
+        }
         if env::var_os("TOUCHDECK_TOUCH_GRAB").is_some()
             || env::var_os("TOUCHDECK_EVDEV_GRAB").is_some()
         {
@@ -275,6 +289,7 @@ impl InputConfig {
 pub(crate) enum TouchInputBackend {
     Wayland,
     Evdev,
+    SunshineRouter,
 }
 
 impl TouchInputBackend {
@@ -282,6 +297,7 @@ impl TouchInputBackend {
         match self {
             Self::Wayland => "wayland",
             Self::Evdev => "evdev",
+            Self::SunshineRouter => "sunshine-router",
         }
     }
 }
@@ -290,10 +306,20 @@ pub(crate) fn parse_touch_input_backend(value: &str) -> Result<TouchInputBackend
     match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
         "wayland" | "wl_touch" | "wl" => Ok(TouchInputBackend::Wayland),
         "evdev" | "raw" | "raw_touch" | "linux_input" => Ok(TouchInputBackend::Evdev),
+        "sunshine" | "sunshine_router" | "sunshine_route" | "touchdeck_router" => {
+            Ok(TouchInputBackend::SunshineRouter)
+        }
         other => Err(anyhow!(
-            "unsupported touch input backend {other}; supported: wayland, evdev"
+            "unsupported touch input backend {other}; supported: wayland, evdev, sunshine-router"
         )),
     }
+}
+
+fn default_sunshine_router_socket() -> PathBuf {
+    if let Ok(runtime_dir) = env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("touchdeck").join("sunshine.sock");
+    }
+    PathBuf::from("/tmp").join(format!("touchdeck-sunshine-{}.sock", std::process::id()))
 }
 
 #[derive(Clone, Debug)]
@@ -404,6 +430,8 @@ pub(crate) struct InputFileConfig {
     pub(crate) touch_device: Option<String>,
     pub(crate) device_name_contains: Option<String>,
     pub(crate) sunshine_output: Option<String>,
+    pub(crate) sunshine_socket: Option<String>,
+    pub(crate) sunshine_router_socket: Option<String>,
     pub(crate) grab: Option<bool>,
 }
 

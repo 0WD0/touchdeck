@@ -34,6 +34,7 @@ mod layout;
 mod mode;
 mod niri_backend;
 mod renderer;
+mod sunshine_router;
 mod trace;
 mod wayland_overlay;
 
@@ -47,6 +48,9 @@ use mode::{mode_hint_color, mode_hint_label, Mode, SlotGestureKind};
 use renderer::{
     draw_circle, draw_keycap_labels, draw_label_in_rect, draw_label_in_rect_limited,
     draw_rect_frame, fill_rect, KeycapLabels, TextRenderer,
+};
+use sunshine_router::{
+    SunshineRouteDecision, SunshineRouter, SunshineTouchKind, SunshineTouchRequest,
 };
 use trace::TraceRecorder;
 use wayland_overlay::Overlay;
@@ -66,6 +70,7 @@ struct App {
     sessions: Vec<TouchSession>,
     next_session_id: usize,
     routed_wayland_touches: HashMap<i32, usize>,
+    sunshine_router: Option<SunshineRouter>,
     session_scan_retry_at_ms: Option<u64>,
     session_scan_last_error: Option<String>,
     config: Config,
@@ -97,6 +102,7 @@ struct TouchSession {
     raw_touch_last_error: Option<String>,
     raw_discard_active: HashSet<i32>,
     raw_discard_until_ms: Option<u64>,
+    sunshine_contacts: HashMap<i32, SunshineRouteDecision>,
     overlay: Overlay,
     engine: Engine,
     capture_policy: CapturePolicy,
@@ -121,6 +127,7 @@ impl TouchSession {
             raw_touch_last_error: None,
             raw_discard_active: HashSet::new(),
             raw_discard_until_ms: None,
+            sunshine_contacts: HashMap::new(),
             overlay: Overlay::default(),
             engine,
             capture_policy,
@@ -151,6 +158,32 @@ impl TouchSession {
             raw_touch_last_error: None,
             raw_discard_active: HashSet::new(),
             raw_discard_until_ms: None,
+            sunshine_contacts: HashMap::new(),
+            overlay: Overlay::default(),
+            engine,
+            capture_policy,
+            mode_hint: None,
+            last_presented_mode: Mode::Base,
+            text_renderer: TextRenderer::new(),
+        }
+    }
+
+    fn sunshine(id: usize, sunshine_output: Option<String>, config: &Config) -> Self {
+        let engine = Engine::default();
+        let capture_policy = engine.capture_policy(config);
+        Self {
+            id,
+            touch_device: None,
+            sunshine_output,
+            overlay_output_global: None,
+            overlay_output_name: None,
+            overlay_wait_reason: None,
+            raw_touch: None,
+            raw_touch_retry_at_ms: None,
+            raw_touch_last_error: None,
+            raw_discard_active: HashSet::new(),
+            raw_discard_until_ms: None,
+            sunshine_contacts: HashMap::new(),
             overlay: Overlay::default(),
             engine,
             capture_policy,
@@ -181,6 +214,7 @@ impl Default for App {
             sessions: Vec::new(),
             next_session_id: 0,
             routed_wayland_touches: HashMap::new(),
+            sunshine_router: None,
             session_scan_retry_at_ms: None,
             session_scan_last_error: None,
             config,
@@ -242,10 +276,10 @@ fn main() -> Result<()> {
     eprintln!(
         "touchdeck: overlay initialized; touch backend={}; Wayland input region {}",
         app.config.input.touch_backend.as_str(),
-        if app.config.input.touch_backend == TouchInputBackend::Evdev {
-            "display-only except passthrough zones"
-        } else {
-            "follows capture policy"
+        match app.config.input.touch_backend {
+            TouchInputBackend::Wayland => "follows capture policy",
+            TouchInputBackend::Evdev => "display-only except passthrough zones",
+            TouchInputBackend::SunshineRouter => "display-only",
         }
     );
 
@@ -280,14 +314,15 @@ fn main() -> Result<()> {
         let timeout = app.poll_timeout();
         let wayland_fd = event_queue.as_fd().as_raw_fd();
         let raw_touch_fds = app.raw_touch_fds();
+        let sunshine_router_fd = app.sunshine_router_fd();
 
         let Some(guard) = event_queue.prepare_read() else {
             continue;
         };
 
         event_queue.flush().context("flush Wayland requests")?;
-        let poll_result =
-            poll_fds(wayland_fd, &raw_touch_fds, timeout).context("poll input fds")?;
+        let poll_result = poll_fds(wayland_fd, &raw_touch_fds, sunshine_router_fd, timeout)
+            .context("poll input fds")?;
         if poll_result.wayland {
             guard.read().context("read Wayland events")?;
         } else {
@@ -296,6 +331,10 @@ fn main() -> Result<()> {
         for index in poll_result.raw_touch {
             app.drain_raw_touch(&qh, index)
                 .context("drain raw touch events")?;
+        }
+        if poll_result.sunshine_router {
+            app.drain_sunshine_router(&qh)
+                .context("drain Sunshine router events")?;
         }
     }
 
@@ -317,9 +356,20 @@ impl App {
                 self.session_scan_retry_at_ms = Some(self.now_ms());
                 self.maybe_connect_raw_touch(qh);
             }
+            TouchInputBackend::SunshineRouter => {
+                self.init_sunshine_router()?;
+            }
         }
 
         self.try_init_all_session_overlays(qh)?;
+        Ok(())
+    }
+
+    fn init_sunshine_router(&mut self) -> Result<()> {
+        if self.sunshine_router.is_some() {
+            return Ok(());
+        }
+        self.sunshine_router = Some(SunshineRouter::bind(&self.config.input.sunshine_router_socket)?);
         Ok(())
     }
 
@@ -631,6 +681,7 @@ impl App {
                 CapturePolicy::Zones(_) => policy.clone(),
                 CapturePolicy::Fullscreen | CapturePolicy::None => CapturePolicy::None,
             },
+            TouchInputBackend::SunshineRouter => CapturePolicy::None,
         };
         session
             .overlay
@@ -1018,6 +1069,145 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn sunshine_router_fd(&self) -> Option<RawFd> {
+        self.sunshine_router.as_ref().map(SunshineRouter::fd)
+    }
+
+    fn drain_sunshine_router(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        let requests = {
+            let Some(router) = self.sunshine_router.as_ref() else {
+                return Ok(());
+            };
+            router.drain_requests()?
+        };
+
+        for request in requests {
+            let decision = match self.route_sunshine_touch(qh, &request) {
+                Ok(decision) => decision,
+                Err(err) => {
+                    eprintln!("touchdeck: Sunshine router request failed: {err:?}");
+                    SunshineRouteDecision::App
+                }
+            };
+            if let Some(router) = self.sunshine_router.as_ref() {
+                if let Err(err) = router.reply(&request, decision) {
+                    eprintln!("touchdeck: failed to reply Sunshine router request: {err:?}");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn route_sunshine_touch(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        request: &SunshineTouchRequest,
+    ) -> Result<SunshineRouteDecision> {
+        let index = self.ensure_sunshine_session(qh, request.output.as_deref())?;
+        let _request_size = SurfaceSize {
+            width: request.width,
+            height: request.height,
+        };
+        if !self.sessions[index].overlay.is_initialized()
+            || self.sessions[index].overlay.dimensions().is_none()
+        {
+            self.try_init_session_overlay(qh, index)?;
+            return Ok(SunshineRouteDecision::App);
+        }
+
+        let size = self.sessions[index].overlay.surface_size();
+        let x = request.x.clamp(0.0, 1.0) * f64::from(size.width.max(1));
+        let y = request.y.clamp(0.0, 1.0) * f64::from(size.height.max(1));
+
+        match request.kind {
+            SunshineTouchKind::Down => {
+                let decision = self.sunshine_decision_for_down(index, size, x, y);
+                self.sessions[index]
+                    .sunshine_contacts
+                    .insert(request.id, decision);
+                if decision == SunshineRouteDecision::TouchDeck {
+                    self.touch_down(qh, index, request.id, request.time, x, y);
+                }
+                Ok(decision)
+            }
+            SunshineTouchKind::Motion => {
+                let decision = self
+                    .sessions
+                    .get(index)
+                    .and_then(|session| session.sunshine_contacts.get(&request.id))
+                    .copied()
+                    .unwrap_or(SunshineRouteDecision::App);
+                if decision == SunshineRouteDecision::TouchDeck {
+                    self.touch_motion(qh, index, request.id, request.time, x, y);
+                }
+                Ok(decision)
+            }
+            SunshineTouchKind::Up => {
+                let decision = self.sessions[index]
+                    .sunshine_contacts
+                    .remove(&request.id)
+                    .unwrap_or(SunshineRouteDecision::App);
+                if decision == SunshineRouteDecision::TouchDeck {
+                    self.touch_up(qh, index, request.id, request.time);
+                }
+                Ok(decision)
+            }
+            SunshineTouchKind::Cancel => {
+                let decision = self.sessions[index]
+                    .sunshine_contacts
+                    .remove(&request.id)
+                    .unwrap_or(SunshineRouteDecision::App);
+                if decision == SunshineRouteDecision::TouchDeck {
+                    self.touch_cancel(qh, index);
+                }
+                Ok(decision)
+            }
+        }
+    }
+
+    fn sunshine_decision_for_down(
+        &self,
+        index: usize,
+        size: SurfaceSize,
+        x: f64,
+        y: f64,
+    ) -> SunshineRouteDecision {
+        match &self.sessions[index].capture_policy {
+            CapturePolicy::Fullscreen => SunshineRouteDecision::TouchDeck,
+            CapturePolicy::None => SunshineRouteDecision::App,
+            CapturePolicy::Zones(rects) => {
+                if rects.iter().any(|rect| rect.contains_px(size, x, y)) {
+                    SunshineRouteDecision::TouchDeck
+                } else {
+                    SunshineRouteDecision::App
+                }
+            }
+        }
+    }
+
+    fn ensure_sunshine_session(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        sunshine_output: Option<&str>,
+    ) -> Result<usize> {
+        let output = sunshine_output.map(str::to_string);
+        if let Some(index) = self
+            .sessions
+            .iter()
+            .position(|session| session.sunshine_output == output)
+        {
+            return Ok(index);
+        }
+
+        let id = self.allocate_session_id();
+        let session = TouchSession::sunshine(id, output, &self.config);
+        self.sessions.push(session);
+        let index = self.sessions.len() - 1;
+        self.try_init_session_overlay(qh, index)?;
+        Ok(index)
     }
 
     fn raw_touch_fds(&self) -> Vec<(usize, RawFd)> {
@@ -1593,11 +1783,13 @@ fn render_text_keyboard(
 struct PollResult {
     wayland: bool,
     raw_touch: Vec<usize>,
+    sunshine_router: bool,
 }
 
 fn poll_fds(
     wayland_fd: RawFd,
     raw_touch_fds: &[(usize, RawFd)],
+    sunshine_router_fd: Option<RawFd>,
     timeout: Option<Duration>,
 ) -> Result<PollResult> {
     let timeout_ms = timeout
@@ -1615,6 +1807,15 @@ fn poll_fds(
             revents: 0,
         });
     }
+    let sunshine_router_index = sunshine_router_fd.map(|fd| {
+        let index = pollfds.len();
+        pollfds.push(libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        });
+        index
+    });
 
     let rc =
         unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, timeout_ms) };
@@ -1631,12 +1832,15 @@ fn poll_fds(
         return Ok(PollResult {
             wayland: pollfds[0].revents & event_mask != 0,
             raw_touch,
+            sunshine_router: sunshine_router_index
+                .is_some_and(|index| pollfds[index].revents & event_mask != 0),
         });
     }
     if rc == 0 {
         return Ok(PollResult {
             wayland: false,
             raw_touch: Vec::new(),
+            sunshine_router: false,
         });
     }
 
@@ -1645,6 +1849,7 @@ fn poll_fds(
         return Ok(PollResult {
             wayland: false,
             raw_touch: Vec::new(),
+            sunshine_router: false,
         });
     }
     Err(err.into())
