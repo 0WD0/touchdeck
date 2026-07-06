@@ -2963,7 +2963,6 @@ impl App {
         let candidate_count = self.ime_status.candidates.iter().take(6).count();
         let panel_w = 560.min(screen_w - 16).max(220);
         let panel_h = if candidate_count == 0 { 48 } else { 88 }.min(screen_h - 16).max(44);
-        let gap = 8;
 
         let Some((cursor_x, cursor_y, cursor_h)) =
             self.physical_ime_anchor(cursor_rect, screen_w, screen_h)
@@ -2971,13 +2970,13 @@ impl App {
             return;
         };
 
-        let panel_x = cursor_x.clamp(8, (screen_w - panel_w - 8).max(8));
-        let below_y = cursor_y + cursor_h + gap;
-        let above_y = cursor_y - panel_h - gap;
-        let panel_y = if below_y + panel_h <= screen_h - 8 {
+        let panel_x = cursor_x.clamp(0, (screen_w - panel_w).max(0));
+        let below_y = cursor_y + cursor_h;
+        let above_y = cursor_y - panel_h;
+        let panel_y = if below_y + panel_h <= screen_h {
             below_y
         } else {
-            above_y.max(8)
+            above_y.max(0)
         };
 
         let panel = RectPx {
