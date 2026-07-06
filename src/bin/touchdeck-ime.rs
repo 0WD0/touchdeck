@@ -2,11 +2,9 @@ use std::collections::VecDeque;
 use std::env;
 use std::ffi::{CStr, CString};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::raw::{c_char, c_int};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
 use std::sync::{
@@ -20,7 +18,6 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache};
 use memmap2::MmapMut;
-use serde::Deserialize;
 use tempfile::tempfile;
 use touchdeck::protocol::{ImeCandidate, ImeCursorRect, ImeStatus};
 use touchdeck::rime::*;
@@ -48,43 +45,22 @@ use zbus::names::OwnedBusName;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Structure, Value};
 use zbus::{interface, message::Header, object_server::SignalEmitter, ObjectServer};
 
+#[path = "touchdeck-ime/config.rs"]
+mod ime_config;
+#[path = "touchdeck-ime/key.rs"]
+mod ime_key;
+#[path = "touchdeck-ime/touchdeck_socket.rs"]
+mod touchdeck_socket;
+
+use ime_config::*;
+use ime_key::*;
+use touchdeck_socket::*;
+
 const RIME_FALSE: c_int = 0;
-const RIME_SHIFT_MASK: u32 = 1 << 0;
-const RIME_CONTROL_MASK: u32 = 1 << 2;
-const RIME_ALT_MASK: u32 = 1 << 3;
-const RIME_SUPER_MASK: u32 = 1 << 26;
-const RIME_RELEASE_MASK: u32 = 1 << 30;
 const RIME_MODULE_DEFAULT: &[u8] = b"default\0";
 const RIME_MODULE_PLUGINS: &[u8] = b"plugins\0";
 
-const XKB_SHIFT_MASK: u32 = 1 << 0;
-const XKB_CONTROL_MASK: u32 = 1 << 2;
-const XKB_ALT_MASK: u32 = 1 << 3;
-const XKB_SUPER_MASK: u32 = 1 << 6;
-
 const FCITX_INPUT_CONTEXT_INTERFACE: &str = "org.fcitx.Fcitx.InputContext1";
-
-const XK_BACKSPACE: u32 = 0xff08;
-const XK_TAB: u32 = 0xff09;
-const XK_RETURN: u32 = 0xff0d;
-const XK_ESCAPE: u32 = 0xff1b;
-const XK_DELETE: u32 = 0xffff;
-const XK_HOME: u32 = 0xff50;
-const XK_LEFT: u32 = 0xff51;
-const XK_UP: u32 = 0xff52;
-const XK_RIGHT: u32 = 0xff53;
-const XK_DOWN: u32 = 0xff54;
-const XK_PAGE_UP: u32 = 0xff55;
-const XK_PAGE_DOWN: u32 = 0xff56;
-const XK_END: u32 = 0xff57;
-const XK_SHIFT_L: u32 = 0xffe1;
-const XK_SHIFT_R: u32 = 0xffe2;
-const XK_CONTROL_L: u32 = 0xffe3;
-const XK_CONTROL_R: u32 = 0xffe4;
-const XK_ALT_L: u32 = 0xffe9;
-const XK_ALT_R: u32 = 0xffea;
-const XK_SUPER_L: u32 = 0xffeb;
-const XK_SUPER_R: u32 = 0xffec;
 
 #[derive(Default)]
 struct ImeApp {
@@ -139,110 +115,6 @@ struct TextRenderer {
     swash_cache: SwashCache,
 }
 
-#[derive(Clone, Debug)]
-struct ImeRuntimeConfig {
-    key_translation: KeyTranslationPolicy,
-    popup: PopupConfig,
-}
-
-impl Default for ImeRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            key_translation: KeyTranslationPolicy::Effective,
-            popup: PopupConfig::default(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KeyTranslationPolicy {
-    Effective,
-    Raw,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KeyRoute {
-    ImeKey,
-    ImeText,
-    AppKey,
-    ImeOnly,
-}
-
-#[derive(Clone, Debug)]
-struct PopupConfig {
-    width: u32,
-    max_candidates: usize,
-    height_empty: u32,
-    height_candidates: u32,
-    header_height: i32,
-    padding_x: i32,
-    header_y: i32,
-    candidate_gap: i32,
-    candidate_min_width: i32,
-    candidate_max_width: i32,
-    candidate_unit_width: i32,
-    candidate_extra_width: i32,
-    preedit_font_size: f32,
-    candidate_font_size: f32,
-    background_color: Rgba,
-    border_color: Rgba,
-    separator_color: Rgba,
-    preedit_color: Rgba,
-    candidate_text_color: Rgba,
-    highlight_background_color: Rgba,
-    first_candidate_background_color: Rgba,
-}
-
-impl Default for PopupConfig {
-    fn default() -> Self {
-        Self {
-            width: 560,
-            max_candidates: 6,
-            height_empty: 48,
-            height_candidates: 88,
-            header_height: 32,
-            padding_x: 10,
-            header_y: 5,
-            candidate_gap: 6,
-            candidate_min_width: 48,
-            candidate_max_width: 154,
-            candidate_unit_width: 8,
-            candidate_extra_width: 26,
-            preedit_font_size: 15.5,
-            candidate_font_size: 16.0,
-            background_color: Rgba::new(0x1a, 0x22, 0x26, 0xe6),
-            border_color: Rgba::new(0x79, 0x8b, 0x86, 0x96),
-            separator_color: Rgba::new(0x6c, 0x78, 0x72, 0x70),
-            preedit_color: Rgba::new(0xd8, 0xde, 0xe8, 0xee),
-            candidate_text_color: Rgba::new(0xff, 0xff, 0xff, 0xf0),
-            highlight_background_color: Rgba::new(0x3b, 0x86, 0xf2, 0xdc),
-            first_candidate_background_color: Rgba::new(0x2e, 0x3d, 0x44, 0x70),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Rgba {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
-
-impl Rgba {
-    const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self { r, g, b, a }
-    }
-
-    fn rgba(self) -> [u8; 4] {
-        [self.r, self.g, self.b, self.a]
-    }
-
-    fn bgra(self) -> [u8; 4] {
-        [self.b, self.g, self.r, self.a]
-    }
-}
-
 impl Default for TextRenderer {
     fn default() -> Self {
         Self {
@@ -294,36 +166,6 @@ impl TextRenderer {
             },
         );
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct TouchDeckEvent {
-    protocol: String,
-    #[serde(rename = "type")]
-    kind: String,
-    source: String,
-    #[serde(default)]
-    time: u32,
-    #[serde(default)]
-    key: u32,
-    #[serde(default)]
-    state: String,
-    #[serde(default)]
-    modifiers: u32,
-    #[serde(default)]
-    translation: Option<String>,
-    #[serde(default)]
-    route: Option<String>,
-}
-
-enum TouchDeckRequest {
-    Event {
-        event: TouchDeckEvent,
-        response: Sender<ImeStatus>,
-    },
-    Subscribe {
-        response: Sender<ImeStatus>,
-    },
 }
 
 enum XimRequest {
@@ -454,12 +296,6 @@ enum FcitxDbusUnitKind {
     FocusIn,
     FocusOut,
     Reset,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KeyState {
-    Pressed,
-    Released,
 }
 
 #[derive(Debug, Default)]
@@ -2951,219 +2787,6 @@ async fn emit_fcitx_dbus_output(
     Ok(())
 }
 
-fn spawn_socket_listener(socket_path: PathBuf) -> Result<Receiver<TouchDeckRequest>> {
-    if socket_path.exists() {
-        fs::remove_file(&socket_path)
-            .with_context(|| format!("remove stale socket {}", socket_path.display()))?;
-    }
-
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("bind touchdeck-ime socket {}", socket_path.display()))?;
-    eprintln!("touchdeck-ime: listening on {}", socket_path.display());
-
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let tx = tx.clone();
-                    thread::spawn(move || {
-                        if let Err(err) = handle_client(stream, tx) {
-                            eprintln!("touchdeck-ime: client error: {err:?}");
-                        }
-                    });
-                }
-                Err(err) => eprintln!("touchdeck-ime: accept error: {err}"),
-            }
-        }
-    });
-
-    Ok(rx)
-}
-
-fn default_socket_path() -> PathBuf {
-    env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("touchdeck-ime.sock")
-}
-
-fn load_ime_config() -> Result<ImeRuntimeConfig> {
-    let Some(path) = config_path() else {
-        return Ok(ImeRuntimeConfig::default());
-    };
-    let source = fs::read_to_string(&path)
-        .with_context(|| format!("read touchdeck config {}", path.display()))?;
-    let file_config: TouchDeckImeConfigFile = toml::from_str(&source)
-        .with_context(|| format!("parse touchdeck config {}", path.display()))?;
-    let mut config = ImeRuntimeConfig::default();
-    if let Some(ime) = file_config.ime {
-        if let Some(policy) = ime.key_translation {
-            config.key_translation = parse_key_translation_policy(&policy)?;
-        }
-        if let Some(popup) = ime.popup {
-            config.popup.apply(popup)?;
-        }
-    }
-    Ok(config)
-}
-
-fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("TOUCHDECK_CONFIG") {
-        return Some(PathBuf::from(path));
-    }
-    let default_path = PathBuf::from("touchdeck.toml");
-    default_path.exists().then_some(default_path)
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct TouchDeckImeConfigFile {
-    ime: Option<ImeConfigFile>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ImeConfigFile {
-    key_translation: Option<String>,
-    popup: Option<PopupConfigFile>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct PopupConfigFile {
-    width: Option<u32>,
-    max_candidates: Option<usize>,
-    height_empty: Option<u32>,
-    height_candidates: Option<u32>,
-    header_height: Option<i32>,
-    padding_x: Option<i32>,
-    header_y: Option<i32>,
-    candidate_gap: Option<i32>,
-    candidate_min_width: Option<i32>,
-    candidate_max_width: Option<i32>,
-    candidate_unit_width: Option<i32>,
-    candidate_extra_width: Option<i32>,
-    preedit_font_size: Option<f32>,
-    candidate_font_size: Option<f32>,
-    background_color: Option<String>,
-    border_color: Option<String>,
-    separator_color: Option<String>,
-    preedit_color: Option<String>,
-    candidate_text_color: Option<String>,
-    highlight_background_color: Option<String>,
-    first_candidate_background_color: Option<String>,
-}
-
-fn parse_key_translation_policy(value: &str) -> Result<KeyTranslationPolicy> {
-    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "effective" | "effective_keysym" | "translated" => Ok(KeyTranslationPolicy::Effective),
-        "raw" | "raw_keysym" | "base" => Ok(KeyTranslationPolicy::Raw),
-        other => Err(anyhow!("unknown ime.key_translation {other:?}")),
-    }
-}
-
-fn parse_key_route(value: &str) -> Result<KeyRoute> {
-    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "ime" | "ime_key" | "ime_first" | "rime" | "rime_first" => Ok(KeyRoute::ImeKey),
-        "ime_text" | "text" | "commit_text" => Ok(KeyRoute::ImeText),
-        "app" | "app_key" | "direct" | "passthrough" | "forward" => Ok(KeyRoute::AppKey),
-        "ime_only" | "rime_only" | "consume" | "filter" => Ok(KeyRoute::ImeOnly),
-        other => Err(anyhow!("unknown key route {other:?}")),
-    }
-}
-
-impl PopupConfig {
-    fn apply(&mut self, value: PopupConfigFile) -> Result<()> {
-        if let Some(width) = value.width {
-            self.width = width;
-        }
-        if let Some(max_candidates) = value.max_candidates {
-            self.max_candidates = max_candidates.max(1);
-        }
-        if let Some(height_empty) = value.height_empty {
-            self.height_empty = height_empty;
-        }
-        if let Some(height_candidates) = value.height_candidates {
-            self.height_candidates = height_candidates;
-        }
-        if let Some(header_height) = value.header_height {
-            self.header_height = header_height.max(1);
-        }
-        if let Some(padding_x) = value.padding_x {
-            self.padding_x = padding_x.max(0);
-        }
-        if let Some(header_y) = value.header_y {
-            self.header_y = header_y.max(0);
-        }
-        if let Some(candidate_gap) = value.candidate_gap {
-            self.candidate_gap = candidate_gap.max(0);
-        }
-        if let Some(candidate_min_width) = value.candidate_min_width {
-            self.candidate_min_width = candidate_min_width.max(1);
-        }
-        if let Some(candidate_max_width) = value.candidate_max_width {
-            self.candidate_max_width = candidate_max_width.max(self.candidate_min_width);
-        }
-        if let Some(candidate_unit_width) = value.candidate_unit_width {
-            self.candidate_unit_width = candidate_unit_width.max(1);
-        }
-        if let Some(candidate_extra_width) = value.candidate_extra_width {
-            self.candidate_extra_width = candidate_extra_width.max(0);
-        }
-        if let Some(preedit_font_size) = value.preedit_font_size {
-            self.preedit_font_size = preedit_font_size.max(1.0);
-        }
-        if let Some(candidate_font_size) = value.candidate_font_size {
-            self.candidate_font_size = candidate_font_size.max(1.0);
-        }
-        if let Some(color) = value.background_color {
-            self.background_color = parse_hex_color(&color, "ime.popup.background_color")?;
-        }
-        if let Some(color) = value.border_color {
-            self.border_color = parse_hex_color(&color, "ime.popup.border_color")?;
-        }
-        if let Some(color) = value.separator_color {
-            self.separator_color = parse_hex_color(&color, "ime.popup.separator_color")?;
-        }
-        if let Some(color) = value.preedit_color {
-            self.preedit_color = parse_hex_color(&color, "ime.popup.preedit_color")?;
-        }
-        if let Some(color) = value.candidate_text_color {
-            self.candidate_text_color = parse_hex_color(&color, "ime.popup.candidate_text_color")?;
-        }
-        if let Some(color) = value.highlight_background_color {
-            self.highlight_background_color =
-                parse_hex_color(&color, "ime.popup.highlight_background_color")?;
-        }
-        if let Some(color) = value.first_candidate_background_color {
-            self.first_candidate_background_color =
-                parse_hex_color(&color, "ime.popup.first_candidate_background_color")?;
-        }
-        Ok(())
-    }
-}
-
-fn parse_hex_color(value: &str, name: &str) -> Result<Rgba> {
-    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    if hex.len() != 6 && hex.len() != 8 {
-        return Err(anyhow!(
-            "{name} must be #RRGGBB or #RRGGBBAA, got {value:?}"
-        ));
-    }
-    let r = parse_hex_byte(hex, 0, name)?;
-    let g = parse_hex_byte(hex, 2, name)?;
-    let b = parse_hex_byte(hex, 4, name)?;
-    let a = if hex.len() == 8 {
-        parse_hex_byte(hex, 6, name)?
-    } else {
-        0xff
-    };
-    Ok(Rgba::new(r, g, b, a))
-}
-
-fn parse_hex_byte(hex: &str, start: usize, name: &str) -> Result<u8> {
-    u8::from_str_radix(&hex[start..start + 2], 16)
-        .with_context(|| format!("parse {name} color component"))
-}
-
 fn default_rime_shared_data_dir() -> PathBuf {
     PathBuf::from("/usr/share/rime-data")
 }
@@ -3195,65 +2818,6 @@ fn path_to_cstring(path: &Path) -> Result<CString> {
         .with_context(|| format!("path contains NUL: {}", path.display()))
 }
 
-fn handle_client(mut stream: UnixStream, tx: Sender<TouchDeckRequest>) -> Result<()> {
-    let reader_stream = stream
-        .try_clone()
-        .context("clone touchdeck-ime client stream")?;
-    let reader = BufReader::new(reader_stream);
-    for line in reader.lines() {
-        let line = line.context("read touchdeck-ime line")?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let event: TouchDeckEvent =
-            serde_json::from_str(&line).with_context(|| format!("parse event {line}"))?;
-
-        if event.protocol == "touchdeck-ime-v1"
-            && event.kind == "subscribe_status"
-            && event.source == "touchdeck"
-        {
-            let (status_tx, status_rx) = mpsc::channel();
-            if tx
-                .send(TouchDeckRequest::Subscribe {
-                    response: status_tx,
-                })
-                .is_err()
-            {
-                break;
-            }
-
-            for status in status_rx {
-                serde_json::to_writer(&mut stream, &status)
-                    .context("write subscribed touchdeck-ime status")?;
-                stream
-                    .write_all(b"\n")
-                    .context("write subscribed touchdeck-ime status newline")?;
-            }
-            break;
-        }
-
-        let (response_tx, response_rx) = mpsc::channel();
-        if tx
-            .send(TouchDeckRequest::Event {
-                event,
-                response: response_tx,
-            })
-            .is_err()
-        {
-            break;
-        }
-        let status = response_rx
-            .recv_timeout(Duration::from_millis(500))
-            .context("wait for touchdeck-ime status")?;
-        serde_json::to_writer(&mut stream, &status).context("write touchdeck-ime status")?;
-        stream
-            .write_all(b"\n")
-            .context("write touchdeck-ime status newline")?;
-    }
-
-    Ok(())
-}
 
 unsafe fn context_candidates(context: &RimeContext) -> Vec<ImeCandidate> {
     let count = context.menu.num_candidates.max(0) as usize;
@@ -3294,292 +2858,6 @@ unsafe fn c_string_lossy(ptr: *const c_char) -> String {
     }
 }
 
-fn parse_key_state(state: &str) -> Option<KeyState> {
-    match state {
-        "pressed" => Some(KeyState::Pressed),
-        "released" => Some(KeyState::Released),
-        _ => None,
-    }
-}
-
-fn parse_wayland_key_state(state: &WEnum<wl_keyboard::KeyState>) -> Option<KeyState> {
-    match state {
-        WEnum::Value(wl_keyboard::KeyState::Pressed) => Some(KeyState::Pressed),
-        WEnum::Value(wl_keyboard::KeyState::Released) => Some(KeyState::Released),
-        WEnum::Unknown(2) => Some(KeyState::Pressed),
-        _ => None,
-    }
-}
-
-fn x_keycode_to_keysym(keycode: u8) -> Option<u32> {
-    let evdev_key = u32::from(keycode).checked_sub(8)?;
-    evdev_key_to_keysym(evdev_key)
-}
-
-fn evdev_key_to_keysym(key: u32) -> Option<u32> {
-    Some(match key {
-        1 => XK_ESCAPE,
-        2 => '1' as u32,
-        3 => '2' as u32,
-        4 => '3' as u32,
-        5 => '4' as u32,
-        6 => '5' as u32,
-        7 => '6' as u32,
-        8 => '7' as u32,
-        9 => '8' as u32,
-        10 => '9' as u32,
-        11 => '0' as u32,
-        12 => '-' as u32,
-        13 => '=' as u32,
-        14 => XK_BACKSPACE,
-        15 => XK_TAB,
-        16 => 'q' as u32,
-        17 => 'w' as u32,
-        18 => 'e' as u32,
-        19 => 'r' as u32,
-        20 => 't' as u32,
-        21 => 'y' as u32,
-        22 => 'u' as u32,
-        23 => 'i' as u32,
-        24 => 'o' as u32,
-        25 => 'p' as u32,
-        26 => '[' as u32,
-        27 => ']' as u32,
-        28 => XK_RETURN,
-        29 => XK_CONTROL_L,
-        30 => 'a' as u32,
-        31 => 's' as u32,
-        32 => 'd' as u32,
-        33 => 'f' as u32,
-        34 => 'g' as u32,
-        35 => 'h' as u32,
-        36 => 'j' as u32,
-        37 => 'k' as u32,
-        38 => 'l' as u32,
-        39 => ';' as u32,
-        40 => '\'' as u32,
-        41 => '`' as u32,
-        42 => XK_SHIFT_L,
-        43 => '\\' as u32,
-        44 => 'z' as u32,
-        45 => 'x' as u32,
-        46 => 'c' as u32,
-        47 => 'v' as u32,
-        48 => 'b' as u32,
-        49 => 'n' as u32,
-        50 => 'm' as u32,
-        51 => ',' as u32,
-        52 => '.' as u32,
-        53 => '/' as u32,
-        54 => XK_SHIFT_R,
-        56 => XK_ALT_L,
-        57 => ' ' as u32,
-        97 => XK_CONTROL_R,
-        100 => XK_ALT_R,
-        102 => XK_HOME,
-        103 => XK_UP,
-        104 => XK_PAGE_UP,
-        105 => XK_LEFT,
-        106 => XK_RIGHT,
-        107 => XK_END,
-        108 => XK_DOWN,
-        109 => XK_PAGE_DOWN,
-        111 => XK_DELETE,
-        125 => XK_SUPER_L,
-        126 => XK_SUPER_R,
-        _ => return None,
-    })
-}
-
-fn rime_modifier_mask(xkb_modifiers: u32) -> u32 {
-    let mut mask = 0;
-    if xkb_modifiers & XKB_SHIFT_MASK != 0 {
-        mask |= RIME_SHIFT_MASK;
-    }
-    if xkb_modifiers & XKB_CONTROL_MASK != 0 {
-        mask |= RIME_CONTROL_MASK;
-    }
-    if xkb_modifiers & XKB_ALT_MASK != 0 {
-        mask |= RIME_ALT_MASK;
-    }
-    if xkb_modifiers & XKB_SUPER_MASK != 0 {
-        mask |= RIME_SUPER_MASK;
-    }
-    mask
-}
-
-fn rime_effective_keysym(keysym: u32, rime_mask: u32) -> u32 {
-    keysym_to_text(keysym, rime_mask)
-        .and_then(|text| {
-            let mut chars = text.chars();
-            let ch = chars.next()?;
-            chars.next().is_none().then_some(ch as u32)
-        })
-        .unwrap_or(keysym)
-}
-
-fn keysym_to_text(keysym: u32, rime_mask: u32) -> Option<String> {
-    let shifted = rime_mask & RIME_SHIFT_MASK != 0;
-    if (97..=122).contains(&keysym) {
-        let ch = char::from_u32(keysym)?;
-        return Some(if shifted { ch.to_ascii_uppercase() } else { ch }.to_string());
-    }
-
-    let ch = match keysym {
-        49 => {
-            if shifted {
-                '!'
-            } else {
-                '1'
-            }
-        }
-        50 => {
-            if shifted {
-                '@'
-            } else {
-                '2'
-            }
-        }
-        51 => {
-            if shifted {
-                '#'
-            } else {
-                '3'
-            }
-        }
-        52 => {
-            if shifted {
-                '$'
-            } else {
-                '4'
-            }
-        }
-        53 => {
-            if shifted {
-                '%'
-            } else {
-                '5'
-            }
-        }
-        54 => {
-            if shifted {
-                '^'
-            } else {
-                '6'
-            }
-        }
-        55 => {
-            if shifted {
-                '&'
-            } else {
-                '7'
-            }
-        }
-        56 => {
-            if shifted {
-                '*'
-            } else {
-                '8'
-            }
-        }
-        57 => {
-            if shifted {
-                '('
-            } else {
-                '9'
-            }
-        }
-        48 => {
-            if shifted {
-                ')'
-            } else {
-                '0'
-            }
-        }
-        45 => {
-            if shifted {
-                '_'
-            } else {
-                '-'
-            }
-        }
-        61 => {
-            if shifted {
-                '+'
-            } else {
-                '='
-            }
-        }
-        91 => {
-            if shifted {
-                '{'
-            } else {
-                '['
-            }
-        }
-        93 => {
-            if shifted {
-                '}'
-            } else {
-                ']'
-            }
-        }
-        92 => {
-            if shifted {
-                '|'
-            } else {
-                '\\'
-            }
-        }
-        59 => {
-            if shifted {
-                ':'
-            } else {
-                ';'
-            }
-        }
-        39 => {
-            if shifted {
-                '"'
-            } else {
-                '\''
-            }
-        }
-        96 => {
-            if shifted {
-                '~'
-            } else {
-                '`'
-            }
-        }
-        44 => {
-            if shifted {
-                '<'
-            } else {
-                ','
-            }
-        }
-        46 => {
-            if shifted {
-                '>'
-            } else {
-                '.'
-            }
-        }
-        47 => {
-            if shifted {
-                '?'
-            } else {
-                '/'
-            }
-        }
-        32 => ' ',
-        _ => return None,
-    };
-
-    Some(ch.to_string())
-}
-
 fn status_is_empty(status: &ImeStatus) -> bool {
     status.preedit.is_empty() && status.commit_preview.is_empty() && status.candidates.is_empty()
 }
@@ -3598,10 +2876,6 @@ fn format_x11_geometry(geometry: Option<X11WindowGeometry>) -> String {
         ),
         None => "none".to_string(),
     }
-}
-
-fn is_empty_state_passthrough_key(keysym: u32) -> bool {
-    matches!(keysym, XK_BACKSPACE | XK_DELETE)
 }
 
 fn draw_popup_status(
