@@ -321,6 +321,7 @@ impl Engine {
     ) -> Vec<EngineEffect> {
         self.now_ms = sample.now_ms;
         self.expire_armed_drag(sample.now_ms);
+        let previous_non_hold_count = self.active_non_hold_count();
 
         self.active.insert(
             sample.id,
@@ -337,6 +338,7 @@ impl Engine {
         self.max_active = self.max_active.max(self.active.len());
 
         let mut effects = Vec::new();
+        self.cancel_active_operation_on_new_contact(previous_non_hold_count, &mut effects);
         self.interrupt_hold_candidate_on_down(sample.id, sample.now_ms, config, &mut effects);
 
         if let Some(hold) = config.keymap.resolve_hold(HoldQuery {
@@ -1273,6 +1275,27 @@ impl Engine {
         {
             self.armed_drag = None;
         }
+    }
+
+    fn cancel_active_operation_on_new_contact(
+        &mut self,
+        previous_non_hold_count: usize,
+        effects: &mut Vec<EngineEffect>,
+    ) {
+        if previous_non_hold_count == 0
+            && self.continuous_drag.is_none()
+            && self.repeaters.is_empty()
+        {
+            return;
+        }
+
+        self.finish_continuous_drag(effects);
+        self.repeaters.clear();
+        if previous_non_hold_count > 0 {
+            self.armed_drag = None;
+        }
+        self.last_tap = None;
+        self.finished.clear();
     }
 
     fn armed_drag_matches(&self, gesture: &Gesture, armed: &ArmedDragState) -> bool {
