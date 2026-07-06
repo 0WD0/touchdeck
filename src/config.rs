@@ -8,9 +8,8 @@ use serde::Deserialize;
 
 use crate::action::{parse_niri_action, NiriAction};
 use crate::layout::SlotRegistry;
-use crate::{
-    expand_keyboard_maps, parse_action_steps, Binding, BehaviorRegistry, Keymap, MacroRegistry,
-};
+use crate::keymap::{Binding, Keymap, MacroRegistry};
+use crate::{expand_keyboard_maps, parse_action_steps, BehaviorRegistry};
 
 #[derive(Clone)]
 pub(crate) struct Config {
