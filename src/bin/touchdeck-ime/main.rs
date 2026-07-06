@@ -33,6 +33,7 @@ mod rime_engine;
 mod touchdeck_socket;
 mod xim_frontend;
 
+use app_state::*;
 use fcitx_dbus::*;
 use config::*;
 use key::*;
@@ -303,24 +304,19 @@ impl ImeApp {
             return;
         }
 
-        let output = {
-            let Some(rime) = self.rime.as_mut() else {
-                self.passthrough_physical_key(time, key, state);
-                return;
-            };
-
-            match rime.process_key(keysym, key_state, self.physical_modifiers, None) {
-                Ok(output) => output,
-                Err(err) => {
-                    eprintln!("touchdeck-ime: rime error for physical key {key}: {err:?}");
-                    self.passthrough_physical_key(time, key, state);
-                    return;
-                }
-            }
+        let Some(effects) = self.process_rime_key(
+            &format!("physical key {key}"),
+            keysym,
+            key_state,
+            self.physical_modifiers,
+            None,
+        ) else {
+            self.passthrough_physical_key(time, key, state);
+            return;
         };
 
-        let handled = output.handled;
-        self.apply_rime_output(output);
+        let handled = effects.handled;
+        self.apply_local_effects(ImeSource::Physical, effects);
 
         if !handled {
             self.passthrough_physical_key(time, key, state);
@@ -572,44 +568,29 @@ impl ImeApp {
             return FcitxDbusKeyResponse::default();
         }
 
-        let output = {
-            let Some(rime) = self.rime.as_mut() else {
-                eprintln!("touchdeck-ime: rime engine unavailable for fcitx dbus key");
-                return FcitxDbusKeyResponse::default();
-            };
-
-            match rime.process_key(keyval, key_state, state, Some(KeyTranslationPolicy::Raw)) {
-                Ok(output) => output,
-                Err(err) => {
-                    eprintln!(
-                        "touchdeck-ime: rime error for fcitx dbus keyval={keyval} keycode={keycode}: {err:?}"
-                    );
-                    return FcitxDbusKeyResponse::default();
-                }
-            }
+        let Some(effects) = self.process_rime_key(
+            &format!("fcitx dbus keyval={keyval} keycode={keycode}"),
+            keyval,
+            key_state,
+            state,
+            Some(KeyTranslationPolicy::Raw),
+        ) else {
+            return FcitxDbusKeyResponse::default();
         };
 
-        let handled = output.handled;
-        let preedit = output.status.preedit.clone();
-        let commit = output.commit;
-
-        self.status = output.status;
-        self.status.active = true;
-        self.status.source = "fcitx-dbus".to_string();
-        self.preedit = preedit.clone();
-        let status = self.status.clone();
-        self.broadcast_status("fcitx-dbus");
+        let handled = effects.handled;
+        let effects = self.apply_response_effects(ImeSource::FcitxDbus, effects);
 
         eprintln!(
             "touchdeck-ime: fcitx dbus keyval={keyval} keycode={keycode} state={state} release={is_release} time={time} handled={handled} preedit={:?}",
-            self.preedit
+            effects.preedit
         );
 
         FcitxDbusKeyResponse {
             handled,
-            preedit,
-            commit,
-            status,
+            preedit: effects.preedit,
+            commit: effects.commit,
+            status: effects.status,
         }
     }
 
@@ -632,43 +613,28 @@ impl ImeApp {
             return XimKeyResponse::default();
         }
 
-        let output = {
-            let Some(rime) = self.rime.as_mut() else {
-                eprintln!("touchdeck-ime: rime engine unavailable for xim key");
-                return XimKeyResponse::default();
-            };
-
-            match rime.process_key(keysym, state, u32::from(state_mask), None) {
-                Ok(output) => output,
-                Err(err) => {
-                    eprintln!(
-                        "touchdeck-ime: rime error for xim keycode {}: {err:?}",
-                        hardware_keycode
-                    );
-                    return XimKeyResponse::default();
-                }
-            }
+        let Some(effects) = self.process_rime_key(
+            &format!("xim keycode {hardware_keycode}"),
+            keysym,
+            state,
+            u32::from(state_mask),
+            None,
+        ) else {
+            return XimKeyResponse::default();
         };
 
-        let consumed = output.handled;
-        let preedit = output.status.preedit.clone();
-        let commit = output.commit;
-
-        self.status = output.status;
-        self.status.active = true;
-        self.status.source = "xim".to_string();
-        self.preedit = preedit.clone();
-        self.broadcast_status("xim");
+        let consumed = effects.handled;
+        let effects = self.apply_response_effects(ImeSource::Xim, effects);
 
         eprintln!(
             "touchdeck-ime: xim keycode={} keysym={} state={:?} time={} modifiers={} consumed={} preedit={:?}",
-            hardware_keycode, keysym, state, time, state_mask, consumed, self.preedit
+            hardware_keycode, keysym, state, time, state_mask, consumed, effects.preedit
         );
 
         XimKeyResponse {
             consumed,
-            preedit,
-            commit,
+            preedit: effects.preedit,
+            commit: effects.commit,
         }
     }
 
@@ -752,29 +718,21 @@ impl ImeApp {
             KeyRoute::ImeKey | KeyRoute::ImeOnly => {}
         }
 
-        let output = {
-            let Some(rime) = self.rime.as_mut() else {
-                eprintln!("touchdeck-ime: rime engine unavailable");
-                if route == KeyRoute::ImeKey {
-                    self.passthrough_touchdeck_key(event.time, event.key, state);
-                }
-                return self.current_status_with_source("touchdeck");
-            };
-
-            match rime.process_key(keysym, state, event.modifiers, translation) {
-                Ok(output) => output,
-                Err(err) => {
-                    eprintln!("touchdeck-ime: rime error for key {}: {err:?}", event.key);
-                    if route == KeyRoute::ImeKey {
-                        self.passthrough_touchdeck_key(event.time, event.key, state);
-                    }
-                    return self.current_status_with_source("touchdeck");
-                }
+        let Some(effects) = self.process_rime_key(
+            &format!("touchdeck key {}", event.key),
+            keysym,
+            state,
+            event.modifiers,
+            translation,
+        ) else {
+            if route == KeyRoute::ImeKey {
+                self.passthrough_touchdeck_key(event.time, event.key, state);
             }
+            return self.current_status_with_source("touchdeck");
         };
 
-        let handled = output.handled;
-        self.apply_rime_output(output);
+        let handled = effects.handled;
+        self.apply_local_effects(ImeSource::Touchdeck, effects);
 
         if !handled && route == KeyRoute::ImeKey {
             self.passthrough_touchdeck_key(event.time, event.key, state);

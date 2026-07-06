@@ -1,15 +1,74 @@
 use touchdeck::protocol::ImeStatus;
 
+use super::config::KeyTranslationPolicy;
 use super::fcitx_dbus::{FcitxDbusOutput, FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL};
-use super::rime_engine::RimeOutput;
+use super::key::KeyState;
 use super::{status_is_empty, ImeApp};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ImeSource {
+    FcitxDbus,
+    Physical,
+    Touchdeck,
+    Xim,
+}
+
+impl ImeSource {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::FcitxDbus => "fcitx-dbus",
+            Self::Physical => "physical",
+            Self::Touchdeck => "touchdeck",
+            Self::Xim => "xim",
+        }
+    }
+}
+
+pub(super) struct ImeEffects {
+    pub(super) handled: bool,
+    pub(super) preedit: String,
+    pub(super) commit: Option<String>,
+    pub(super) status: ImeStatus,
+}
+
 impl ImeApp {
-    pub(super) fn apply_rime_output(&mut self, output: RimeOutput) {
+    pub(super) fn process_rime_key(
+        &mut self,
+        context: &str,
+        keysym: u32,
+        state: KeyState,
+        modifiers: u32,
+        translation: Option<KeyTranslationPolicy>,
+    ) -> Option<ImeEffects> {
+        let Some(rime) = self.rime.as_mut() else {
+            eprintln!("touchdeck-ime: rime engine unavailable for {context}");
+            return None;
+        };
+
+        let output = match rime.process_key(keysym, state, modifiers, translation) {
+            Ok(output) => output,
+            Err(err) => {
+                eprintln!("touchdeck-ime: rime error for {context}: {err:?}");
+                return None;
+            }
+        };
+
         let preedit = output.status.preedit.clone();
-        let commit = output.commit;
-        let status = output.status.clone();
-        self.status = output.status;
+        Some(ImeEffects {
+            handled: output.handled,
+            preedit,
+            commit: output.commit,
+            status: output.status,
+        })
+    }
+
+    pub(super) fn apply_local_effects(&mut self, source: ImeSource, mut effects: ImeEffects) {
+        let preedit = effects.preedit;
+        let commit = effects.commit;
+        let status = effects.status.clone();
+        effects.status.active = self.active;
+        effects.status.source = source.as_str().to_string();
+        self.status = effects.status;
         self.status.active = self.active;
 
         if self.fcitx_focus.is_some() {
@@ -24,6 +83,19 @@ impl ImeApp {
         if let Some(text) = commit {
             self.commit_text(text);
         }
+    }
+
+    pub(super) fn apply_response_effects(
+        &mut self,
+        source: ImeSource,
+        mut effects: ImeEffects,
+    ) -> ImeEffects {
+        effects.status.active = true;
+        effects.status.source = source.as_str().to_string();
+        self.status = effects.status.clone();
+        self.preedit = effects.preedit.clone();
+        self.broadcast_status(source.as_str());
+        effects
     }
 
     pub(super) fn fcitx_uses_client_side_input_panel(&self) -> bool {
