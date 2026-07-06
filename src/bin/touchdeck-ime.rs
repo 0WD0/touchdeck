@@ -877,8 +877,6 @@ impl ImeApp {
     ) {
         match request {
             FcitxDbusRequest::FocusIn { target, response } => {
-                self.active = true;
-                self.status.active = true;
                 self.status.source = "fcitx-dbus".to_string();
                 eprintln!(
                     "touchdeck-ime: fcitx dbus focus in path={} client={} display={}",
@@ -894,7 +892,6 @@ impl ImeApp {
                 let _ = response.send(());
             }
             FcitxDbusRequest::FocusOut { target, response } => {
-                self.active = false;
                 eprintln!(
                     "touchdeck-ime: fcitx dbus focus out path={} client={} display={}",
                     target.path.as_str(),
@@ -912,11 +909,13 @@ impl ImeApp {
                     self.fcitx_capability = 0;
                     self.fcitx_supported_capability = 0;
                 }
-                if let Some(rime) = self.rime.as_mut() {
-                    rime.clear();
+                if !self.active {
+                    if let Some(rime) = self.rime.as_mut() {
+                        rime.clear();
+                    }
+                    self.clear_preedit();
+                    self.status.active = false;
                 }
-                self.clear_preedit();
-                self.status.active = false;
                 self.broadcast_status("fcitx-dbus");
                 let _ = response.send(());
             }
@@ -1397,7 +1396,6 @@ impl ImeApp {
 
     fn current_status_with_source(&self, source: &str) -> ImeStatus {
         let mut status = self.status.clone();
-        status.active = self.active;
         status.source = source.to_string();
         status.display_kind = if source == "touchdeck" {
             "touchdeck".to_string()
@@ -1407,6 +1405,10 @@ impl ImeApp {
             "xim".to_string()
         } else {
             "wayland-im".to_string()
+        };
+        status.active = match status.display_kind.as_str() {
+            "fcitx-dbus" => self.fcitx_focus.is_some(),
+            _ => self.active,
         };
         status.client_side_input_panel = self.fcitx_uses_client_side_input_panel();
         status.ui_owner = match status.display_kind.as_str() {
