@@ -1,13 +1,14 @@
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use touchdeck::protocol::ImeStatus;
 
@@ -43,8 +44,31 @@ pub(super) enum TouchDeckRequest {
 
 pub(super) fn spawn_socket_listener(socket_path: PathBuf) -> Result<Receiver<TouchDeckRequest>> {
     if socket_path.exists() {
-        fs::remove_file(&socket_path)
-            .with_context(|| format!("remove stale socket {}", socket_path.display()))?;
+        let metadata = fs::symlink_metadata(&socket_path)
+            .with_context(|| format!("stat existing socket path {}", socket_path.display()))?;
+        if !metadata.file_type().is_socket() {
+            return Err(anyhow!(
+                "refusing to remove non-socket path {}",
+                socket_path.display()
+            ));
+        }
+
+        match UnixStream::connect(&socket_path) {
+            Ok(_) => {
+                return Err(anyhow!(
+                    "touchdeck-ime socket {} is already in use",
+                    socket_path.display()
+                ));
+            }
+            Err(err) if matches!(err.kind(), ErrorKind::ConnectionRefused | ErrorKind::NotFound) => {
+                fs::remove_file(&socket_path)
+                    .with_context(|| format!("remove stale socket {}", socket_path.display()))?;
+            }
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("connect existing socket {}", socket_path.display()));
+            }
+        }
     }
 
     let listener = UnixListener::bind(&socket_path)
@@ -137,7 +161,6 @@ pub(super) fn handle_client(mut stream: UnixStream, tx: Sender<TouchDeckRequest>
 
     Ok(())
 }
-
 
 
 
