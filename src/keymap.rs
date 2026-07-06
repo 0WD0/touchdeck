@@ -612,7 +612,7 @@ impl Behavior {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum GestureAction {
     Niri(NiriAction),
     KeySequence(Vec<KeyChord>),

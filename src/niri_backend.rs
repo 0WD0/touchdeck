@@ -15,6 +15,6 @@ pub(crate) fn spawn_niri_action(action: NiriAction) {
 
 pub(crate) fn send_niri_action_socket(action: NiriAction) -> Result<()> {
     let request = niri_action_request_json(action);
-    let _ = niri::send_ipc_request_json(request)?;
+    let _ = niri::send_ipc_request_json(&request)?;
     Ok(())
 }

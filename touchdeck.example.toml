@@ -310,3 +310,56 @@ mode = "niri_locked"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "down" }
 behavior = { type = "niri", action = "focus-column-left" }
+
+# Niri mode two-finger examples.
+# In portrait niri usage, vertical swipes map naturally to columns:
+#   one finger down/up     -> focus column left/right (configured above)
+#   two fingers down/up    -> move column left/right
+# Horizontal two-finger swipes operate within the focused column.
+[[bindings]]
+mode = "niri-momentary"
+layer = "niri"
+trigger = { type = "swipe", target = "full", fingers = 2, direction = "down" }
+behavior = { type = "niri", action = "move-column-left" }
+
+[[bindings]]
+mode = "niri-momentary"
+layer = "niri"
+trigger = { type = "swipe", target = "full", fingers = 2, direction = "up" }
+behavior = { type = "niri", action = "move-column-right" }
+
+[[bindings]]
+mode = "niri-momentary"
+layer = "niri"
+trigger = { type = "swipe", target = "full", fingers = 2, direction = "left" }
+behavior = { type = "niri", action = "move-window-up" }
+
+[[bindings]]
+mode = "niri-momentary"
+layer = "niri"
+trigger = { type = "swipe", target = "full", fingers = 2, direction = "right" }
+behavior = { type = "niri", action = "move-window-down" }
+
+[[bindings]]
+mode = "niri-locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", fingers = 2, direction = "down" }
+behavior = { type = "niri", action = "move-column-left" }
+
+[[bindings]]
+mode = "niri-locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", fingers = 2, direction = "up" }
+behavior = { type = "niri", action = "move-column-right" }
+
+[[bindings]]
+mode = "niri-locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", fingers = 2, direction = "left" }
+behavior = { type = "niri", action = "move-window-up" }
+
+[[bindings]]
+mode = "niri-locked"
+layer = "niri"
+trigger = { type = "swipe", target = "full", fingers = 2, direction = "right" }
+behavior = { type = "niri", action = "move-window-down" }

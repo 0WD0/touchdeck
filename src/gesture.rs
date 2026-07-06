@@ -58,7 +58,7 @@ pub(crate) fn recognize_gesture_kind(
     config: &Config,
     size: SurfaceSize,
 ) -> Option<GestureKind> {
-    if gesture.max_active != 1 || gesture.finished.len() != 1 {
+    if gesture.max_active == 0 || gesture.finished.is_empty() {
         return None;
     }
 
@@ -66,14 +66,24 @@ pub(crate) fn recognize_gesture_kind(
         return Some(GestureKind::Tap);
     }
 
-    let contact = &gesture.finished[0];
     let min_dim = f64::from(size.width.min(size.height).max(1));
     let swipe_threshold_min = config.swipe_threshold_min.min(config.swipe_threshold_max);
     let swipe_threshold_max = config.swipe_threshold_min.max(config.swipe_threshold_max);
     let swipe_threshold =
         (min_dim * config.swipe_threshold_ratio).clamp(swipe_threshold_min, swipe_threshold_max);
-    let dx = contact.last_x - contact.start_x;
-    let dy = contact.last_y - contact.start_y;
+    let contact_count = gesture.finished.len() as f64;
+    let dx = gesture
+        .finished
+        .iter()
+        .map(|contact| contact.last_x - contact.start_x)
+        .sum::<f64>()
+        / contact_count;
+    let dy = gesture
+        .finished
+        .iter()
+        .map(|contact| contact.last_y - contact.start_y)
+        .sum::<f64>()
+        / contact_count;
     let abs_dx = dx.abs();
     let abs_dy = dy.abs();
 
