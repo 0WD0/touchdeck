@@ -154,7 +154,7 @@ fn main() -> Result<()> {
         "touchdeck: overlay initialized; touch backend={}; Wayland input region {}",
         app.config.input.touch_backend.as_str(),
         if app.config.input.touch_backend == TouchInputBackend::Evdev {
-            "disabled"
+            "display-only except passthrough zones"
         } else {
             "follows capture policy"
         }
@@ -649,10 +649,42 @@ impl App {
             .ok_or_else(|| anyhow!("Wayland compositor global is unavailable"))?;
         let effective_policy = match self.config.input.touch_backend {
             TouchInputBackend::Wayland => policy.clone(),
-            TouchInputBackend::Evdev => CapturePolicy::None,
+            TouchInputBackend::Evdev => match policy {
+                CapturePolicy::Zones(_) => policy.clone(),
+                CapturePolicy::Fullscreen | CapturePolicy::None => CapturePolicy::None,
+            },
         };
         self.overlay
             .apply_input_region(compositor, qh, &effective_policy)
+    }
+
+    fn apply_capture_policy(&mut self, qh: &QueueHandle<Self>, policy: &CapturePolicy) -> Result<()> {
+        if self.raw_touch_should_grab(policy) {
+            self.sync_raw_touch_grab(policy)?;
+            self.apply_input_region(qh, policy)
+        } else {
+            self.apply_input_region(qh, policy)?;
+            self.sync_raw_touch_grab(policy)
+        }
+    }
+
+    fn raw_touch_should_grab(&self, policy: &CapturePolicy) -> bool {
+        self.config.input.touch_backend == TouchInputBackend::Evdev
+            && self.config.input.evdev_grab
+            && matches!(policy, CapturePolicy::Fullscreen)
+    }
+
+    fn raw_touch_passthrough(&self) -> bool {
+        self.config.input.touch_backend == TouchInputBackend::Evdev
+            && matches!(self.capture_policy, CapturePolicy::Zones(_))
+    }
+
+    fn sync_raw_touch_grab(&mut self, policy: &CapturePolicy) -> Result<()> {
+        let should_grab = self.raw_touch_should_grab(policy);
+        if let Some(raw_touch) = self.raw_touch.as_mut() {
+            raw_touch.set_grab(should_grab)?;
+        }
+        Ok(())
     }
 
     fn apply_effects_or_stop(&mut self, qh: &QueueHandle<Self>, effects: Vec<EngineEffect>) {
@@ -661,7 +693,7 @@ impl App {
                 EngineEffect::SetCapture(policy) => {
                     self.capture_policy = policy.clone();
                     self.present_mode_hint_if_changed();
-                    self.apply_input_region(qh, &policy)
+                    self.apply_capture_policy(qh, &policy)
                 }
                 EngineEffect::Dispatch(action) => {
                     let outcome =
@@ -835,6 +867,7 @@ impl App {
 
     fn drain_raw_touch(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
         let size = self.surface_size();
+        let passthrough = self.raw_touch_passthrough();
         let events = {
             let Some(raw_touch) = self.raw_touch.as_mut() else {
                 return Ok(());
@@ -847,6 +880,10 @@ impl App {
                 }
             }
         };
+
+        if passthrough {
+            return Ok(());
+        }
 
         for event in events {
             match event {
@@ -878,7 +915,15 @@ impl App {
         }
 
         match EvdevTouchBackend::open(&self.config.input) {
-            Ok(raw_touch) => {
+            Ok(mut raw_touch) => {
+                if let Err(err) = raw_touch.set_grab(self.raw_touch_should_grab(&self.capture_policy))
+                {
+                    let message = format!("{err:#}");
+                    eprintln!("touchdeck: waiting for evdev touch device: {message}");
+                    self.raw_touch_last_error = Some(message);
+                    self.raw_touch_retry_at_ms = Some(now_ms + RAW_TOUCH_RETRY_MS);
+                    return;
+                }
                 self.raw_touch = Some(raw_touch);
                 self.raw_touch_retry_at_ms = None;
                 self.raw_touch_last_error = None;
@@ -1059,10 +1104,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 }
                 "wl_seat" => {
                     let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(8), qh, ());
-                    if state.config.input.touch_backend == TouchInputBackend::Wayland {
-                        let touch = seat.get_touch(qh, ());
-                        state.touch = Some(touch);
-                    }
+                    let touch = seat.get_touch(qh, ());
+                    state.touch = Some(touch);
                     state.seat = Some(seat);
                 }
                 "zwlr_layer_shell_v1" => {
@@ -1269,6 +1312,12 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for App {
                 }
                 if let Err(err) = state.apply_input_region(qh, &state.capture_policy) {
                     eprintln!("touchdeck: failed to apply input region: {err:?}");
+                    state.running = false;
+                    return;
+                }
+                let capture_policy = state.capture_policy.clone();
+                if let Err(err) = state.sync_raw_touch_grab(&capture_policy) {
+                    eprintln!("touchdeck: failed to sync raw touch grab: {err:?}");
                     state.running = false;
                 }
             }

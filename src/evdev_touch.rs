@@ -51,10 +51,12 @@ pub(crate) enum RawTouchEvent {
 #[derive(Debug)]
 pub(crate) struct EvdevTouchBackend {
     file: File,
+    path: PathBuf,
     x_axis: AbsAxis,
     y_axis: AbsAxis,
     slots: Vec<MtSlot>,
     current_slot: usize,
+    grabbed: bool,
 }
 
 #[repr(C)]
@@ -115,33 +117,59 @@ impl EvdevTouchBackend {
             .ok_or_else(|| anyhow!("invalid ABS_MT_SLOT range"))?
             .clamp(1, 64) as usize;
 
+        let mut backend = Self {
+            file,
+            path,
+            x_axis,
+            y_axis,
+            slots: vec![MtSlot::default(); slot_count],
+            current_slot: 0,
+            grabbed: false,
+        };
         if config.evdev_grab {
-            grab_device(file.as_raw_fd(), true)
-                .with_context(|| format!("grab touch device {}", path.display()))?;
+            backend.set_grab(true)?;
         }
 
         eprintln!(
             "touchdeck: evdev touch initialized path={} slots={} x={}..{} y={}..{} grab={}",
-            path.display(),
+            backend.path.display(),
             slot_count,
             x_axis.min,
             x_axis.max,
             y_axis.min,
             y_axis.max,
-            config.evdev_grab
+            backend.grabbed
         );
 
-        Ok(Self {
-            file,
-            x_axis,
-            y_axis,
-            slots: vec![MtSlot::default(); slot_count],
-            current_slot: 0,
-        })
+        Ok(backend)
     }
 
     pub(crate) fn fd(&self) -> RawFd {
         self.file.as_raw_fd()
+    }
+
+    pub(crate) fn set_grab(&mut self, grab: bool) -> Result<()> {
+        if self.grabbed == grab {
+            return Ok(());
+        }
+
+        grab_device(self.file.as_raw_fd(), grab)
+            .with_context(|| format!("set EVIOCGRAB={grab} for {}", self.path.display()))?;
+        self.grabbed = grab;
+        self.reset_state();
+        eprintln!(
+            "touchdeck: evdev touch grab={} path={}",
+            self.grabbed,
+            self.path.display()
+        );
+        Ok(())
+    }
+
+    fn reset_state(&mut self) {
+        self.current_slot = 0;
+        for slot in &mut self.slots {
+            *slot = MtSlot::default();
+        }
     }
 
     pub(crate) fn drain_events(&mut self, size: SurfaceSize) -> Result<Vec<RawTouchEvent>> {
