@@ -7,7 +7,7 @@ use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{contact_movement, is_tap_like, Contact, Gesture, TapRecord};
 use crate::key::KeyChord;
-use crate::keymap::GestureAction;
+use crate::keymap::{ActiveSwipeQuery, GestureAction, HoldQuery, KeymapContext, ReleaseQuery};
 use crate::mode::{
     default_layer_stack_for_mode, layer_name, mode_name, Layer, Mode,
 };
@@ -131,8 +131,36 @@ pub(crate) enum EngineEffect {
     Redraw,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TouchSample {
+    pub(crate) now_ms: u64,
+    pub(crate) time: u32,
+    pub(crate) id: i32,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+}
+
+#[derive(Debug)]
+struct HoldRepeatStart {
+    hold_id: i32,
+    now_ms: u64,
+    sequence: Vec<KeyChord>,
+    start_ms: Option<u32>,
+    interval_ms: Option<u32>,
+    translation: Option<KeyTranslationPolicy>,
+    route: Option<KeyRoute>,
+}
+
 
 impl Engine {
+    fn keymap_context(&self, size: SurfaceSize) -> KeymapContext<'_> {
+        KeymapContext {
+            mode: self.mode,
+            layers: &self.layer_stack,
+            size,
+        }
+    }
+
     pub(crate) fn capture_policy(&self, config: &Config) -> CapturePolicy {
         match self.mode {
             Mode::Passthrough => {
@@ -194,13 +222,15 @@ impl Engine {
                         route,
                     } => {
                         self.start_hold_repeat(
-                            candidate.id,
-                            now_ms,
-                            sequence,
-                            start_ms,
-                            interval_ms,
-                            translation,
-                            route,
+                            HoldRepeatStart {
+                                hold_id: candidate.id,
+                                now_ms,
+                                sequence,
+                                start_ms,
+                                interval_ms,
+                                translation,
+                                route,
+                            },
                             config,
                             &mut effects,
                         );
@@ -248,40 +278,34 @@ impl Engine {
 
     pub(crate) fn handle_down(
         &mut self,
-        now_ms: u64,
-        time: u32,
-        id: i32,
-        x: f64,
-        y: f64,
+        sample: TouchSample,
         config: &Config,
         size: SurfaceSize,
     ) -> Vec<EngineEffect> {
         self.active.insert(
-            id,
+            sample.id,
             Contact {
-                id,
-                start_x: x,
-                start_y: y,
-                last_x: x,
-                last_y: y,
-                start_time: time,
-                last_time: time,
+                id: sample.id,
+                start_x: sample.x,
+                start_y: sample.y,
+                last_x: sample.x,
+                last_y: sample.y,
+                start_time: sample.time,
+                last_time: sample.time,
             },
         );
         self.max_active = self.max_active.max(self.active.len());
 
-        if let Some((action, min_ms)) = config.keymap.resolve_hold(
-            self.mode,
-            &self.layer_stack,
-            size,
-            x,
-            y,
-            config.hold_ms,
-            config.repeat_start_ms,
-        ) {
+        if let Some((action, min_ms)) = config.keymap.resolve_hold(HoldQuery {
+            context: self.keymap_context(size),
+            x: sample.x,
+            y: sample.y,
+            default_hold_ms: config.hold_ms,
+            default_repeat_start_ms: config.repeat_start_ms,
+        }) {
             self.hold_candidate = Some(HoldCandidate {
-                id,
-                deadline_ms: now_ms + u64::from(min_ms),
+                id: sample.id,
+                deadline_ms: sample.now_ms + u64::from(min_ms),
                 action,
             });
         }
@@ -291,24 +315,20 @@ impl Engine {
 
     pub(crate) fn handle_motion(
         &mut self,
-        now_ms: u64,
-        id: i32,
-        time: u32,
-        x: f64,
-        y: f64,
+        sample: TouchSample,
         config: &Config,
         size: SurfaceSize,
     ) -> Vec<EngineEffect> {
         let mut action = GestureAction::None;
         let mut moved_contact = None;
 
-        if let Some(contact) = self.active.get_mut(&id) {
-            contact.last_x = x;
-            contact.last_y = y;
-            contact.last_time = time;
+        if let Some(contact) = self.active.get_mut(&sample.id) {
+            contact.last_x = sample.x;
+            contact.last_y = sample.y;
+            contact.last_time = sample.time;
 
             if let Some(candidate) = &self.hold_candidate {
-                if candidate.id == id && contact_movement(contact) > config.tap_radius {
+                if candidate.id == sample.id && contact_movement(contact) > config.tap_radius {
                     self.hold_candidate = None;
                 }
             }
@@ -317,14 +337,12 @@ impl Engine {
         }
 
         if let Some(contact) = moved_contact {
-            if !self.hold_contact_ids().contains(&id) && self.active_non_hold_count() == 1 {
-                action = config.keymap.resolve_active_swipe(
-                    self.mode,
-                    &self.layer_stack,
-                    &contact,
+            if !self.hold_contact_ids().contains(&sample.id) && self.active_non_hold_count() == 1 {
+                action = config.keymap.resolve_active_swipe(ActiveSwipeQuery {
+                    context: self.keymap_context(size),
+                    contact: &contact,
                     config,
-                    size,
-                );
+                });
             }
         }
 
@@ -333,12 +351,12 @@ impl Engine {
             if self
                 .hold_candidate
                 .as_ref()
-                .is_some_and(|candidate| candidate.id == id)
+                .is_some_and(|candidate| candidate.id == sample.id)
             {
                 self.hold_candidate = None;
             }
             self.last_tap = None;
-            self.start_active_action(id, now_ms, action, config, &mut effects);
+            self.start_active_action(sample.id, sample.now_ms, action, config, &mut effects);
         }
 
         effects.extend(redraw_if_debug(config));
@@ -480,14 +498,34 @@ impl Engine {
                 id,
                 x,
                 y,
-            } => self.handle_down(t, wl_time, id, x, y, config, size),
+            } => self.handle_down(
+                TouchSample {
+                    now_ms: t,
+                    time: wl_time,
+                    id,
+                    x,
+                    y,
+                },
+                config,
+                size,
+            ),
             TraceEvent::Motion {
                 t,
                 wl_time,
                 id,
                 x,
                 y,
-            } => self.handle_motion(t, id, wl_time, x, y, config, size),
+            } => self.handle_motion(
+                TouchSample {
+                    now_ms: t,
+                    time: wl_time,
+                    id,
+                    x,
+                    y,
+                },
+                config,
+                size,
+            ),
             TraceEvent::Up { t, wl_time, id } => self.handle_up(t, wl_time, id, config, size),
             TraceEvent::Cancel { .. } => self.handle_cancel(config),
         }
@@ -559,15 +597,18 @@ impl Engine {
         size: SurfaceSize,
         now_ms: u64,
     ) -> GestureAction {
-        let action = config.keymap.resolve_release(
-            self.mode,
-            &self.layer_stack,
+        let context = KeymapContext {
+            mode: self.mode,
+            layers: &self.layer_stack,
+            size,
+        };
+        let action = config.keymap.resolve_release(ReleaseQuery {
+            context,
             gesture,
             config,
-            size,
-            &mut self.last_tap,
+            last_tap: &mut self.last_tap,
             now_ms,
-        );
+        });
         if action != GestureAction::None {
             return action;
         }
@@ -668,13 +709,15 @@ impl Engine {
                 translation,
                 route,
             } => self.start_hold_repeat(
-                hold_id,
-                now_ms,
-                sequence,
-                start_ms,
-                interval_ms,
-                translation,
-                route,
+                HoldRepeatStart {
+                    hold_id,
+                    now_ms,
+                    sequence,
+                    start_ms,
+                    interval_ms,
+                    translation,
+                    route,
+                },
                 config,
                 effects,
             ),
@@ -684,41 +727,38 @@ impl Engine {
 
     fn start_hold_repeat(
         &mut self,
-        hold_id: i32,
-        now_ms: u64,
-        sequence: Vec<KeyChord>,
-        start_ms: Option<u32>,
-        interval_ms: Option<u32>,
-        translation: Option<KeyTranslationPolicy>,
-        route: Option<KeyRoute>,
+        repeat: HoldRepeatStart,
         config: &Config,
         effects: &mut Vec<EngineEffect>,
     ) {
-        let start_ms = start_ms.unwrap_or(config.repeat_start_ms);
-        let interval_ms = interval_ms.unwrap_or(config.repeat_interval_ms).max(1);
-        if translation.is_some() || route.is_some() {
+        let start_ms = repeat.start_ms.unwrap_or(config.repeat_start_ms);
+        let interval_ms = repeat
+            .interval_ms
+            .unwrap_or(config.repeat_interval_ms)
+            .max(1);
+        if repeat.translation.is_some() || repeat.route.is_some() {
             effects.push(EngineEffect::Dispatch(
                 GestureAction::KeySequenceWithOptions {
-                    sequence: sequence.clone(),
-                    translation,
-                    route,
+                    sequence: repeat.sequence.clone(),
+                    translation: repeat.translation,
+                    route: repeat.route,
                 },
             ));
         } else {
             effects.push(EngineEffect::Dispatch(GestureAction::KeySequence(
-                sequence.clone(),
+                repeat.sequence.clone(),
             )));
         }
 
         self.repeaters
-            .retain(|repeater| repeater.hold_id != hold_id);
+            .retain(|repeater| repeater.hold_id != repeat.hold_id);
         self.repeaters.push(RepeatState {
-            hold_id,
-            next_ms: now_ms + u64::from(start_ms),
+            hold_id: repeat.hold_id,
+            next_ms: repeat.now_ms + u64::from(start_ms),
             interval_ms,
-            sequence,
-            translation,
-            route,
+            sequence: repeat.sequence,
+            translation: repeat.translation,
+            route: repeat.route,
         });
     }
 
@@ -1191,6 +1231,40 @@ mod tests {
             .collect()
     }
 
+    fn sample(
+        now_ms: u64,
+        time: u32,
+        id: i32,
+        x: f64,
+        y: f64,
+    ) -> TouchSample {
+        TouchSample {
+            now_ms,
+            time,
+            id,
+            x,
+            y,
+        }
+    }
+
+    fn handle_down(
+        engine: &mut Engine,
+        sample: TouchSample,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        engine.handle_down(sample, config, size)
+    }
+
+    fn handle_motion(
+        engine: &mut Engine,
+        sample: TouchSample,
+        config: &Config,
+        size: SurfaceSize,
+    ) -> Vec<EngineEffect> {
+        engine.handle_motion(sample, config, size)
+    }
+
     fn run_trace(trace: &str, config: &Config) -> Vec<EngineEffect> {
         let mut engine = Engine::default();
         let size = test_size();
@@ -1280,8 +1354,8 @@ mod tests {
         let mut engine = Engine::default();
         let (x, y) = test_slot_center("bottom_edge");
 
-        engine.handle_down(0, 0, 1, x, y, &config, size);
-        engine.handle_motion(80, 1, 80, x, y - 300.0, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
+        handle_motion(&mut engine, sample(80, 80, 1, x, y - 300.0), &config, size);
         let effects = engine.handle_up(100, 100, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Text);
@@ -1297,7 +1371,7 @@ mod tests {
         engine.set_mode(Mode::Text, &mut effects, &config);
         let (x, y) = test_slot_center("key_q");
 
-        engine.handle_down(0, 0, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
@@ -1316,8 +1390,8 @@ mod tests {
         engine.set_mode(Mode::Text, &mut effects, &config);
         let (x, y) = test_slot_center("key_n1");
 
-        engine.handle_down(0, 0, 1, x, y, &config, size);
-        engine.handle_motion(60, 1, 60, x, y - 220.0, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
+        handle_motion(&mut engine, sample(60, 60, 1, x, y - 220.0), &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
@@ -1336,8 +1410,8 @@ mod tests {
         engine.set_mode(Mode::Text, &mut effects, &config);
         let (x, y) = test_slot_center("key_h");
 
-        engine.handle_down(0, 0, 1, x, y, &config, size);
-        let mut effects = engine.handle_motion(60, 1, 60, x - 220.0, y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
+        let mut effects = handle_motion(&mut engine, sample(60, 60, 1, x - 220.0, y), &config, size);
         effects.extend(engine.handle_up(80, 80, 1, &config, size));
 
         assert!(
@@ -1390,7 +1464,7 @@ mod tests {
             &config,
             None,
         );
-        engine.handle_down(0, 0, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
@@ -1446,7 +1520,7 @@ mod tests {
             &config,
             None,
         );
-        engine.handle_down(0, 0, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         let effects = engine.handle_up(80, 80, 1, &config, size);
 
         assert!(
@@ -1506,7 +1580,7 @@ mod tests {
             consume: true,
         }];
 
-        engine.handle_down(0, 0, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         engine.process_timers(181, &config, size);
         assert_eq!(engine.current_layer(), Layer::Niri);
         assert_eq!(engine.layer_stack, vec![Layer::Base, Layer::Niri]);
@@ -1523,7 +1597,7 @@ mod tests {
         let mut engine = Engine::default();
         let (x, y) = test_slot_center("left_bottom");
 
-        engine.handle_down(0, 0, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         let effects = engine.process_timers(181, &config, size);
         assert_eq!(engine.mode, Mode::NiriMomentary);
         assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
@@ -1540,17 +1614,17 @@ mod tests {
         let mut engine = Engine::default();
         let (x, y) = test_slot_center("left_bottom");
 
-        engine.handle_down(0, 0, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         engine.handle_up(80, 80, 1, &config, size);
-        engine.handle_down(160, 160, 1, x + 4.0, y + 4.0, &config, size);
+        handle_down(&mut engine, sample(160, 160, 1, x + 4.0, y + 4.0), &config, size);
         let effects = engine.handle_up(220, 220, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::NiriLocked);
         assert!(effects.contains(&EngineEffect::SetCapture(CapturePolicy::Fullscreen)));
 
-        engine.handle_down(400, 400, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(400, 400, 1, x, y), &config, size);
         engine.handle_up(460, 460, 1, &config, size);
-        engine.handle_down(540, 540, 1, x + 2.0, y + 2.0, &config, size);
+        handle_down(&mut engine, sample(540, 540, 1, x + 2.0, y + 2.0), &config, size);
         let effects = engine.handle_up(600, 600, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Base);
@@ -1564,9 +1638,9 @@ mod tests {
         let mut engine = Engine::default();
         let (x, y) = test_slot_center("bottom_edge");
 
-        engine.handle_down(0, 0, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         engine.handle_up(60, 60, 1, &config, size);
-        engine.handle_down(140, 140, 1, x + 4.0, y + 2.0, &config, size);
+        handle_down(&mut engine, sample(140, 140, 1, x + 4.0, y + 2.0), &config, size);
         let effects = engine.handle_up(200, 200, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Passthrough);
@@ -1586,9 +1660,9 @@ mod tests {
         assert!(rects.contains(&test_target("top_left").rect));
         assert!(!rects.contains(&test_target("center").rect));
 
-        engine.handle_down(380, 380, 1, x, y, &config, size);
+        handle_down(&mut engine, sample(380, 380, 1, x, y), &config, size);
         engine.handle_up(430, 430, 1, &config, size);
-        engine.handle_down(500, 500, 1, x + 4.0, y + 2.0, &config, size);
+        handle_down(&mut engine, sample(500, 500, 1, x + 4.0, y + 2.0), &config, size);
         let effects = engine.handle_up(550, 550, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Base);
@@ -1603,13 +1677,13 @@ mod tests {
         let (bottom_x, bottom_y) = test_slot_center("bottom_edge");
         let (left_x, left_y) = test_slot_center("left_bottom");
 
-        engine.handle_down(0, 0, 1, bottom_x, bottom_y, &config, size);
+        handle_down(&mut engine, sample(0, 0, 1, bottom_x, bottom_y), &config, size);
         engine.handle_up(60, 60, 1, &config, size);
-        engine.handle_down(140, 140, 1, bottom_x + 4.0, bottom_y + 2.0, &config, size);
+        handle_down(&mut engine, sample(140, 140, 1, bottom_x + 4.0, bottom_y + 2.0), &config, size);
         engine.handle_up(200, 200, 1, &config, size);
         assert_eq!(engine.mode, Mode::Passthrough);
 
-        engine.handle_down(300, 300, 1, left_x, left_y, &config, size);
+        handle_down(&mut engine, sample(300, 300, 1, left_x, left_y), &config, size);
         engine.process_timers(481, &config, size);
         assert_eq!(engine.mode, Mode::NiriMomentary);
 

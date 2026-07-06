@@ -18,25 +18,48 @@ pub(crate) struct Keymap {
     pub(crate) bindings: Vec<Binding>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct KeymapContext<'a> {
+    pub(crate) mode: Mode,
+    pub(crate) layers: &'a [Layer],
+    pub(crate) size: SurfaceSize,
+}
+
+#[derive(Debug)]
+pub(crate) struct HoldQuery<'a> {
+    pub(crate) context: KeymapContext<'a>,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) default_hold_ms: u32,
+    pub(crate) default_repeat_start_ms: u32,
+}
+
+pub(crate) struct ReleaseQuery<'a> {
+    pub(crate) context: KeymapContext<'a>,
+    pub(crate) gesture: &'a Gesture,
+    pub(crate) config: &'a Config,
+    pub(crate) last_tap: &'a mut Option<TapRecord>,
+    pub(crate) now_ms: u64,
+}
+
+pub(crate) struct ActiveSwipeQuery<'a> {
+    pub(crate) context: KeymapContext<'a>,
+    pub(crate) contact: &'a Contact,
+    pub(crate) config: &'a Config,
+}
+
 impl Keymap {
-    pub(crate) fn resolve_hold(
-        &self,
-        mode: Mode,
-        layers: &[Layer],
-        size: SurfaceSize,
-        x: f64,
-        y: f64,
-        default_hold_ms: u32,
-        default_repeat_start_ms: u32,
-    ) -> Option<(GestureAction, u32)> {
-        for layer in layers.iter().rev() {
+    pub(crate) fn resolve_hold(&self, query: HoldQuery<'_>) -> Option<(GestureAction, u32)> {
+        for layer in query.context.layers.iter().rev() {
             let mut matches = self
                 .bindings
                 .iter()
                 .filter(|binding| {
-                    binding.mode == mode
+                    binding.mode == query.context.mode
                         && binding.layer == *layer
-                        && binding.trigger.matches_hold(size, x, y)
+                        && binding
+                            .trigger
+                            .matches_hold(query.context.size, query.x, query.y)
                 })
                 .collect::<Vec<_>>();
             matches.sort_by_key(|binding| std::cmp::Reverse(binding.priority));
@@ -50,9 +73,9 @@ impl Keymap {
                     binding.behavior.clone().into_action(),
                     binding.trigger.hold_ms().unwrap_or_else(|| {
                         if binding.behavior.is_repeat() {
-                            default_repeat_start_ms
+                            query.default_repeat_start_ms
                         } else {
-                            default_hold_ms
+                            query.default_hold_ms
                         }
                     }),
                 ));
@@ -62,79 +85,74 @@ impl Keymap {
         None
     }
 
-    pub(crate) fn resolve_release(
-        &self,
-        mode: Mode,
-        layers: &[Layer],
-        gesture: &Gesture,
-        config: &Config,
-        size: SurfaceSize,
-        last_tap: &mut Option<TapRecord>,
-        now_ms: u64,
-    ) -> GestureAction {
-        let Some(kind) = recognize_gesture_kind(gesture, config, size) else {
+    pub(crate) fn resolve_release(&self, query: ReleaseQuery<'_>) -> GestureAction {
+        let Some(kind) =
+            recognize_gesture_kind(query.gesture, query.config, query.context.size)
+        else {
             return GestureAction::None;
         };
 
-        let Some(contact) = gesture.finished.first() else {
+        let Some(contact) = query.gesture.finished.first() else {
             return GestureAction::None;
         };
 
         if kind == GestureKind::Tap {
-            let double_tap_binding = self.find_release_binding(mode, layers, |binding| {
+            let double_tap_binding = self.find_release_binding(
+                query.context.mode,
+                query.context.layers,
+                |binding| {
                 binding.trigger.matches_double_tap_start(
-                    size,
+                    query.context.size,
                     contact.start_x,
                     contact.start_y,
-                    gesture.max_active,
+                    query.gesture.max_active,
                 )
-            });
+                },
+            );
 
             if let Some(binding) = double_tap_binding {
-                let max_ms = binding.trigger.max_ms().unwrap_or(config.double_tap_ms);
-                let is_double_tap = last_tap.is_some_and(|last| {
-                    now_ms.saturating_sub(last.t_ms) <= u64::from(max_ms)
+                let max_ms = binding.trigger.max_ms().unwrap_or(query.config.double_tap_ms);
+                let is_double_tap = query.last_tap.is_some_and(|last| {
+                    query.now_ms.saturating_sub(last.t_ms) <= u64::from(max_ms)
                         && (contact.start_x - last.x).hypot(contact.start_y - last.y)
-                            <= config.tap_radius * 2.0
-                        && binding.trigger.rect().contains_px(size, last.x, last.y)
+                            <= query.config.tap_radius * 2.0
+                        && binding
+                            .trigger
+                            .rect()
+                            .contains_px(query.context.size, last.x, last.y)
                 });
 
                 if is_double_tap {
-                    *last_tap = None;
+                    *query.last_tap = None;
                     return binding.behavior.clone().into_action();
                 }
 
-                *last_tap = Some(TapRecord {
-                    t_ms: now_ms,
+                *query.last_tap = Some(TapRecord {
+                    t_ms: query.now_ms,
                     x: contact.start_x,
                     y: contact.start_y,
                 });
                 return GestureAction::None;
             }
         } else {
-            *last_tap = None;
+            *query.last_tap = None;
         }
 
-        self.find_release_binding(mode, layers, |binding| {
-            binding.trigger.matches_release(kind, gesture, config, size)
+        self.find_release_binding(query.context.mode, query.context.layers, |binding| {
+            binding
+                .trigger
+                .matches_release(kind, query.gesture, query.config, query.context.size)
         })
         .map(|binding| binding.behavior.clone().into_action())
         .unwrap_or(GestureAction::None)
     }
 
-    pub(crate) fn resolve_active_swipe(
-        &self,
-        mode: Mode,
-        layers: &[Layer],
-        contact: &Contact,
-        config: &Config,
-        size: SurfaceSize,
-    ) -> GestureAction {
+    pub(crate) fn resolve_active_swipe(&self, query: ActiveSwipeQuery<'_>) -> GestureAction {
         let gesture = Gesture {
             max_active: 1,
-            finished: vec![*contact],
+            finished: vec![*query.contact],
         };
-        let Some(kind) = recognize_gesture_kind(&gesture, config, size) else {
+        let Some(kind) = recognize_gesture_kind(&gesture, query.config, query.context.size) else {
             return GestureAction::None;
         };
         if !matches!(
@@ -147,10 +165,10 @@ impl Keymap {
             return GestureAction::None;
         }
 
-        self.find_release_binding(mode, layers, |binding| {
+        self.find_release_binding(query.context.mode, query.context.layers, |binding| {
             binding
                 .trigger
-                .matches_release(kind, &gesture, config, size)
+                .matches_release(kind, &gesture, query.config, query.context.size)
         })
         .map(|binding| binding.behavior.clone().into_action())
         .filter(GestureAction::is_active_swipe_action)

@@ -1579,9 +1579,17 @@ impl App {
 
         let config = self.config.clone();
         let size = self.surface_size();
-        let effects = self
-            .engine
-            .handle_down(now_ms, time, id, x, y, &config, size);
+        let effects = self.engine.handle_down(
+            TouchSample {
+                now_ms,
+                time,
+                id,
+                x,
+                y,
+            },
+            &config,
+            size,
+        );
         self.apply_effects_or_stop(qh, effects);
     }
 
@@ -1600,9 +1608,17 @@ impl App {
 
         let config = self.config.clone();
         let size = self.surface_size();
-        let effects = self
-            .engine
-            .handle_motion(now_ms, id, time, x, y, &config, size);
+        let effects = self.engine.handle_motion(
+            TouchSample {
+                now_ms,
+                time,
+                id,
+                x,
+                y,
+            },
+            &config,
+            size,
+        );
         self.apply_effects_or_stop(qh, effects);
     }
 
