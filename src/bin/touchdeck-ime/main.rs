@@ -82,6 +82,7 @@ struct ImeApp {
     fcitx_capability: u64,
     fcitx_supported_capability: u64,
     x11_geometry: Option<X11GeometryProbe>,
+    xim_cursor_rect: Option<ImeCursorRect>,
     physical_keyboard: Option<PhysicalKeyboard>,
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
@@ -392,9 +393,24 @@ impl ImeApp {
                 hardware_keycode,
                 state_mask,
                 state,
+                client_window,
+                app_window,
+                focus_window,
+                spot_x,
+                spot_y,
                 response,
             } => {
-                let result = self.handle_xim_key(time, hardware_keycode, state_mask, state);
+                let result = self.handle_xim_key(
+                    time,
+                    hardware_keycode,
+                    state_mask,
+                    state,
+                    client_window,
+                    app_window,
+                    focus_window,
+                    spot_x,
+                    spot_y,
+                );
                 let _ = response.send(result);
             }
             XimRequest::Reset { response } => {
@@ -403,6 +419,7 @@ impl ImeApp {
                 }
                 self.preedit.clear();
                 self.status = ImeStatus::default();
+                self.xim_cursor_rect = None;
                 self.broadcast_status("xim");
                 let _ = response.send(String::new());
             }
@@ -620,7 +637,14 @@ impl ImeApp {
         hardware_keycode: u8,
         state_mask: u16,
         state: KeyState,
+        client_window: u32,
+        app_window: Option<u32>,
+        focus_window: Option<u32>,
+        spot_x: i32,
+        spot_y: i32,
     ) -> XimKeyResponse {
+        self.update_xim_cursor_rect(client_window, app_window, focus_window, spot_x, spot_y);
+
         let Some(keysym) = x_keycode_to_keysym(hardware_keycode) else {
             eprintln!(
                 "touchdeck-ime: xim forward unknown hardware keycode {}",
@@ -810,6 +834,7 @@ impl ImeApp {
         };
         status.active = match status.display_kind.as_str() {
             "fcitx-dbus" => self.fcitx_focus.is_some(),
+            "xim" => !status_is_empty(&status),
             _ => self.active,
         };
         status.client_side_input_panel = self.fcitx_uses_client_side_input_panel();
@@ -817,33 +842,90 @@ impl ImeApp {
             "touchdeck" => "touchdeck-overlay".to_string(),
             "fcitx-dbus" if status.client_side_input_panel => "client".to_string(),
             "fcitx-dbus" => "touchdeck-server-popup".to_string(),
+            "xim" => "touchdeck-server-popup".to_string(),
             "wayland-im" if source == "physical" => "native-popup".to_string(),
             _ => "none".to_string(),
         };
-        status.cursor_rect = self
-            .fcitx_cursor_rect
-            .as_ref()
-            .filter(|rect| {
-                self.fcitx_focus
-                    .as_ref()
-                    .map(|target| rect.target.matches(target))
-                    .unwrap_or(false)
-            })
-            .map(|rect| ImeCursorRect {
-                x: rect.x,
-                y: rect.y,
-                w: rect.w,
-                h: rect.h,
-                scale: rect.scale,
-                space: rect.space.clone(),
-                window_x: rect.x11_window.map(|window| window.x),
-                window_y: rect.x11_window.map(|window| window.y),
-                window_w: rect.x11_window.map(|window| window.w),
-                window_h: rect.x11_window.map(|window| window.h),
-                root_w: rect.x11_window.map(|window| window.root_w),
-                root_h: rect.x11_window.map(|window| window.root_h),
-            });
+        status.cursor_rect = if status.display_kind == "xim" {
+            self.xim_cursor_rect.clone()
+        } else {
+            self.fcitx_cursor_rect
+                .as_ref()
+                .filter(|rect| {
+                    self.fcitx_focus
+                        .as_ref()
+                        .map(|target| rect.target.matches(target))
+                        .unwrap_or(false)
+                })
+                .map(|rect| ImeCursorRect {
+                    x: rect.x,
+                    y: rect.y,
+                    w: rect.w,
+                    h: rect.h,
+                    scale: rect.scale,
+                    space: rect.space.clone(),
+                    window_x: rect.x11_window.map(|window| window.x),
+                    window_y: rect.x11_window.map(|window| window.y),
+                    window_w: rect.x11_window.map(|window| window.w),
+                    window_h: rect.x11_window.map(|window| window.h),
+                    root_w: rect.x11_window.map(|window| window.root_w),
+                    root_h: rect.x11_window.map(|window| window.root_h),
+                })
+        };
         status
+    }
+
+    fn update_xim_cursor_rect(
+        &mut self,
+        client_window: u32,
+        app_window: Option<u32>,
+        focus_window: Option<u32>,
+        spot_x: i32,
+        spot_y: i32,
+    ) {
+        let anchor_window = focus_window.or(app_window).unwrap_or(client_window);
+        let Some(anchor) = self.query_x11_window_geometry(anchor_window) else {
+            eprintln!(
+                "touchdeck-ime: xim cursor rect has no anchor geometry client=0x{client_window:x} app={app_window:?} focus={focus_window:?}"
+            );
+            self.xim_cursor_rect = None;
+            return;
+        };
+
+        let Some(top_level) = self.query_x11_active_window_geometry() else {
+            eprintln!(
+                "touchdeck-ime: xim cursor rect has no active-window geometry client=0x{client_window:x} app={app_window:?} focus={focus_window:?}"
+            );
+            self.xim_cursor_rect = None;
+            return;
+        };
+
+        let x = anchor.x + spot_x;
+        let y = anchor.y + spot_y;
+        self.xim_cursor_rect = Some(ImeCursorRect {
+            x,
+            y,
+            w: 2,
+            h: 24,
+            scale: 1.0,
+            space: "x11-root".to_string(),
+            window_x: Some(top_level.x),
+            window_y: Some(top_level.y),
+            window_w: Some(top_level.w),
+            window_h: Some(top_level.h),
+            root_w: Some(top_level.root_w),
+            root_h: Some(top_level.root_h),
+        });
+        eprintln!(
+            "touchdeck-ime: xim cursor rect client=0x{client_window:x} app={app_window:?} focus={focus_window:?} spot=({spot_x},{spot_y}) root=({x},{y}) top=0x{:x}=({},{} {}x{}) root={}x{}",
+            top_level.window,
+            top_level.x,
+            top_level.y,
+            top_level.w,
+            top_level.h,
+            top_level.root_w,
+            top_level.root_h
+        );
     }
 
     fn query_x11_active_window_geometry(&mut self) -> Option<X11WindowGeometry> {
@@ -882,6 +964,27 @@ impl ImeApp {
         );
 
         active
+    }
+
+    fn query_x11_window_geometry(&mut self, window: u32) -> Option<X11WindowGeometry> {
+        if self.x11_geometry.is_none() {
+            self.x11_geometry = match X11GeometryProbe::connect() {
+                Ok(probe) => Some(probe),
+                Err(err) => {
+                    eprintln!("touchdeck-ime: failed to initialize x11 geometry probe: {err:?}");
+                    None
+                }
+            };
+        }
+
+        let probe = self.x11_geometry.as_ref()?;
+        match probe.window_geometry(window) {
+            Ok(geometry) => Some(geometry),
+            Err(err) => {
+                eprintln!("touchdeck-ime: failed to query x11 window 0x{window:x}: {err:?}");
+                None
+            }
+        }
     }
 
     fn add_status_subscriber(&mut self, response: Sender<ImeStatus>) {

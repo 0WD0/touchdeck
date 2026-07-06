@@ -18,6 +18,11 @@ pub(super) enum XimRequest {
         hardware_keycode: u8,
         state_mask: u16,
         state: KeyState,
+        client_window: u32,
+        app_window: Option<u32>,
+        focus_window: Option<u32>,
+        spot_x: i32,
+        spot_y: i32,
         response: Sender<XimKeyResponse>,
     },
     Reset {
@@ -175,6 +180,11 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
                 hardware_keycode: xev.detail,
                 state_mask: u16::from(xev.state),
                 state,
+                client_window: user_ic.ic.client_win(),
+                app_window: user_ic.ic.app_win().map(|window| window.get()),
+                focus_window: user_ic.ic.app_focus_win().map(|window| window.get()),
+                spot_x: i32::from(user_ic.ic.preedit_spot().x),
+                spot_y: i32::from(user_ic.ic.preedit_spot().y),
                 response: response_tx,
             })
             .is_err()

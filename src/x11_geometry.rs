@@ -80,7 +80,7 @@ impl X11GeometryProbe {
         self.window_geometry(focus).map(Some)
     }
 
-    fn window_geometry(&self, window: Window) -> Result<X11WindowGeometry> {
+    pub fn window_geometry(&self, window: Window) -> Result<X11WindowGeometry> {
         let geometry = self
             .conn
             .get_geometry(window)
