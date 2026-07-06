@@ -66,7 +66,7 @@ pub(crate) fn send_niri_action_socket(action: NiriAction) -> Result<()> {
     Ok(())
 }
 
-fn niri_action_request_json(action: NiriAction) -> &'static str {
+pub(crate) fn niri_action_request_json(action: NiriAction) -> &'static str {
     action.ipc_request_json()
 }
 

@@ -6011,7 +6011,7 @@ mod tests {
                 backend: TextOutputBackend::VirtualKeyboard,
                 ime_socket: default_ime_socket_path(),
             },
-            slots: SlotRegistry::default(),
+            slots: test_slots(),
             keymap: Keymap::default(),
             macros: MacroRegistry::default(),
             exit_corner_enabled: true,
@@ -6026,6 +6026,15 @@ mod tests {
             height: 2000,
         }
     }
+
+    fn test_slots() -> SlotRegistry {
+        SlotRegistry::from_svg_str(include_str!("../layouts/phone-portrait.svg")).unwrap()
+    }
+
+    fn test_target(name: &str) -> SlotTarget {
+        test_slots().get(name).unwrap()
+    }
+
 
     #[test]
     fn maps_supported_niri_actions_to_ipc_json() {
@@ -6198,7 +6207,7 @@ behavior = { type = "key", key = "BSPC" }
         let file_config: FileConfig = toml::from_str(source).unwrap();
         let binding = Binding::from_file_config(
             file_config.bindings.unwrap().remove(0),
-            &SlotRegistry::default(),
+            &test_slots(),
             &MacroRegistry::default(),
             &BehaviorRegistry::default(),
         )
@@ -6209,7 +6218,7 @@ behavior = { type = "key", key = "BSPC" }
         assert_eq!(
             binding.trigger,
             Trigger::Swipe {
-                target: configured_target("left_bottom").unwrap(),
+                target: test_target("left_bottom"),
                 fingers: 1,
                 direction: SwipeDirection::Left,
                 min_px: None,
@@ -6236,7 +6245,7 @@ behavior = { type = "mod_morph", mods = ["MOD_LSFT"], keep-mods = [], bindings =
         let file_config: FileConfig = toml::from_str(source).unwrap();
         let binding = Binding::from_file_config(
             file_config.bindings.unwrap().remove(0),
-            &SlotRegistry::default(),
+            &test_slots(),
             &MacroRegistry::default(),
             &BehaviorRegistry::default(),
         )
@@ -6344,7 +6353,7 @@ key_c = "&kp LEFT"
         let maps = file_config.keyboard.unwrap().layers.unwrap();
         let bindings = expand_keyboard_maps(
             maps,
-            &SlotRegistry::default(),
+            &test_slots(),
             &MacroRegistry::default(),
             &BehaviorRegistry::default(),
         )
@@ -6496,7 +6505,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
         let file_config: FileConfig = toml::from_str(source).unwrap();
         let binding = Binding::from_file_config(
             file_config.bindings.unwrap().remove(0),
-            &SlotRegistry::default(),
+            &test_slots(),
             &MacroRegistry::default(),
             &BehaviorRegistry::default(),
         )
@@ -6610,7 +6619,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 mode: Mode::Base,
                 layer: Layer::Base,
                 trigger: Trigger::Tap {
-                    target: configured_target("left_bottom").unwrap(),
+                    target: test_target("left_bottom"),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -6624,7 +6633,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 mode: Mode::Base,
                 layer: Layer::Niri,
                 trigger: Trigger::Tap {
-                    target: configured_target("left_bottom").unwrap(),
+                    target: test_target("left_bottom"),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -6667,7 +6676,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 mode: Mode::Base,
                 layer: Layer::Base,
                 trigger: Trigger::Tap {
-                    target: configured_target("left_bottom").unwrap(),
+                    target: test_target("left_bottom"),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -6681,7 +6690,7 @@ behavior = { type = "key", key = "LC(X) LC(S)" }
                 mode: Mode::Base,
                 layer: Layer::Niri,
                 trigger: Trigger::Tap {
-                    target: configured_target("left_bottom").unwrap(),
+                    target: test_target("left_bottom"),
                     fingers: 1,
                     max_ms: None,
                 },
@@ -6730,7 +6739,7 @@ behavior = { type = "macro", macro = "copy" }
         }
         let binding = Binding::from_file_config(
             file_config.bindings.unwrap().remove(0),
-            &SlotRegistry::default(),
+            &test_slots(),
             &macros,
             &BehaviorRegistry::default(),
         )
@@ -6786,7 +6795,7 @@ behavior = { type = "macro", macro = "copy" }
             mode: Mode::Base,
             layer: Layer::Base,
             trigger: Trigger::Hold {
-                target: configured_target("left_bottom").unwrap(),
+                target: test_target("left_bottom"),
                 fingers: 1,
                 min_ms: None,
             },
@@ -6867,10 +6876,10 @@ behavior = { type = "macro", macro = "copy" }
         let CapturePolicy::Zones(rects) = engine.capture_policy(&config) else {
             panic!("passthrough should use zoned capture");
         };
-        assert!(rects.contains(&configured_target("left_bottom").unwrap().rect));
-        assert!(rects.contains(&configured_target("bottom_edge").unwrap().rect));
-        assert!(rects.contains(&configured_target("top_left").unwrap().rect));
-        assert!(!rects.contains(&configured_target("center").unwrap().rect));
+        assert!(rects.contains(&test_target("left_bottom").rect));
+        assert!(rects.contains(&test_target("bottom_edge").rect));
+        assert!(rects.contains(&test_target("top_left").rect));
+        assert!(!rects.contains(&test_target("center").rect));
 
         engine.handle_down(380, 380, 1, 500.0, 1950.0, &config, size);
         engine.handle_up(430, 430, 1, &config, size);
