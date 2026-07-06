@@ -650,6 +650,11 @@ impl App {
         {
             self.start_raw_source_switch_guard(index);
             self.discard_pending_raw_touch(index)?;
+        } else if self.config.input.touch_backend == TouchInputBackend::Evdev
+            && !matches!(old_policy, CapturePolicy::Zones(_))
+            && matches!(policy, CapturePolicy::Zones(_))
+        {
+            self.clear_raw_source_switch_guard(index);
         }
 
         if self.raw_touch_should_grab(index, policy) {
@@ -693,6 +698,11 @@ impl App {
     fn start_raw_source_switch_guard(&mut self, index: usize) {
         self.sessions[index].raw_discard_until_ms =
             Some(self.now_ms() + RAW_TOUCH_SOURCE_SWITCH_GUARD_MS);
+    }
+
+    fn clear_raw_source_switch_guard(&mut self, index: usize) {
+        self.sessions[index].raw_discard_active.clear();
+        self.sessions[index].raw_discard_until_ms = None;
     }
 
     fn should_discard_raw_touch(&mut self, index: usize) -> bool {
@@ -1079,6 +1089,26 @@ impl App {
                 .clone()
                 .or(device.sunshine_output.clone());
             if let Some(output) = &sunshine_output {
+                if let Some(index) = self.disconnected_session_for_output(output) {
+                    if self.sessions[index].touch_device.as_deref() != Some(device.path.as_path()) {
+                        eprintln!(
+                            "touchdeck: rebinding session {} sunshine_output={} to device={}",
+                            self.sessions[index].id,
+                            output,
+                            device.path.display()
+                        );
+                        self.sessions[index].touch_device = Some(device.path.clone());
+                    }
+                    self.sessions[index].raw_touch_last_error = None;
+                    self.sessions[index].raw_touch_retry_at_ms = Some(now_ms);
+                    self.clear_raw_source_switch_guard(index);
+                    self.connect_raw_touch_session(qh, index, now_ms);
+                    claimed_devices.insert(device.path);
+                    claimed_outputs.insert(output.clone());
+                    continue;
+                }
+            }
+            if let Some(output) = &sunshine_output {
                 if claimed_outputs.contains(output) {
                     continue;
                 }
@@ -1145,42 +1175,63 @@ impl App {
             {
                 continue;
             }
-            let Some(path) = self.sessions[index].touch_device.clone() else {
-                continue;
-            };
-            let output = self.sessions[index].sunshine_output.clone();
-            match self.open_raw_touch_for_device(&path, output.as_deref()) {
-                Ok(mut raw_touch) => {
-                    let policy = self.sessions[index].capture_policy.clone();
-                    let should_grab = self.raw_touch_should_grab(index, &policy);
-                    if let Err(err) = raw_touch.set_grab(should_grab) {
-                        let message = format!("{err:#}");
-                        if self.sessions[index].raw_touch_last_error.as_deref()
-                            != Some(message.as_str())
-                        {
-                            eprintln!("touchdeck: waiting for evdev touch device: {message}");
-                            self.sessions[index].raw_touch_last_error = Some(message);
-                        }
-                        self.sessions[index].raw_touch_retry_at_ms = Some(now_ms + RAW_TOUCH_RETRY_MS);
-                        continue;
-                    }
-                    self.sessions[index].raw_touch = Some(raw_touch);
-                    self.sessions[index].raw_touch_last_error = None;
-                    self.sessions[index].raw_touch_retry_at_ms = None;
-                    if let Err(err) = self.try_init_session_overlay(qh, index) {
-                        eprintln!("touchdeck: failed to initialize overlay after evdev reconnect: {err:?}");
-                        self.running = false;
-                        return;
-                    }
-                }
-                Err(err) => {
+            self.connect_raw_touch_session(qh, index, now_ms);
+            if !self.running {
+                return;
+            }
+        }
+    }
+
+    fn disconnected_session_for_output(&self, output: &str) -> Option<usize> {
+        self.sessions.iter().position(|session| {
+            session.raw_touch.is_none()
+                && session.output_name(&self.config) == Some(output)
+                && session.touch_device.is_some()
+        })
+    }
+
+    fn connect_raw_touch_session(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        index: usize,
+        now_ms: u64,
+    ) {
+        let Some(path) = self.sessions[index].touch_device.clone() else {
+            return;
+        };
+        let output = self.sessions[index].sunshine_output.clone();
+        match self.open_raw_touch_for_device(&path, output.as_deref()) {
+            Ok(mut raw_touch) => {
+                let policy = self.sessions[index].capture_policy.clone();
+                let should_grab = self.raw_touch_should_grab(index, &policy);
+                if let Err(err) = raw_touch.set_grab(should_grab) {
                     let message = format!("{err:#}");
-                    if self.sessions[index].raw_touch_last_error.as_deref() != Some(message.as_str()) {
+                    if self.sessions[index].raw_touch_last_error.as_deref() != Some(message.as_str())
+                    {
                         eprintln!("touchdeck: waiting for evdev touch device: {message}");
                         self.sessions[index].raw_touch_last_error = Some(message);
                     }
                     self.sessions[index].raw_touch_retry_at_ms = Some(now_ms + RAW_TOUCH_RETRY_MS);
+                    return;
                 }
+                self.clear_raw_source_switch_guard(index);
+                self.sessions[index].raw_touch = Some(raw_touch);
+                self.sessions[index].raw_touch_last_error = None;
+                self.sessions[index].raw_touch_retry_at_ms = None;
+                if let Err(err) = self.try_init_session_overlay(qh, index) {
+                    eprintln!(
+                        "touchdeck: failed to initialize overlay after evdev reconnect: {err:?}"
+                    );
+                    self.running = false;
+                }
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                if self.sessions[index].raw_touch_last_error.as_deref() != Some(message.as_str()) {
+                    eprintln!("touchdeck: waiting for evdev touch device: {message}");
+                    self.sessions[index].raw_touch_last_error = Some(message);
+                }
+                self.sessions[index].raw_touch_retry_at_ms = Some(now_ms + RAW_TOUCH_RETRY_MS);
             }
         }
     }
@@ -1208,6 +1259,7 @@ impl App {
         self.sessions[index].raw_touch_last_error = None;
         self.sessions[index].raw_touch_retry_at_ms = Some(self.now_ms() + RAW_TOUCH_RETRY_MS);
         self.touch_cancel(qh, index);
+        self.clear_raw_source_switch_guard(index);
     }
 
     fn session_for_surface(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
