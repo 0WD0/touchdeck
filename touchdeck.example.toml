@@ -306,13 +306,13 @@ behavior = { type = "mode", mode = "base" }
 mode = "niri"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "left", fingers = 1 }
-behavior = { type = "niri", action = "focus-workspace-down" }
+behavior = { type = "niri", action = "focus-window-up" }
 
 [[bindings]]
 mode = "niri"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "right", fingers = 1 }
-behavior = { type = "niri", action = "focus-workspace-up" }
+behavior = { type = "niri", action = "focus-window-down" }
 
 [[bindings]]
 mode = "niri"
@@ -335,13 +335,13 @@ behavior = { type = "niri", action = "toggle-overview" }
 [[bindings]]
 mode = "niri"
 layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "left", fingers = 2 }
+trigger = { type = "swipe", target = "full", direction = "left", fingers = 3 }
 behavior = { type = "niri", action = "focus-workspace-down" }
 
 [[bindings]]
 mode = "niri"
 layer = "niri"
-trigger = { type = "swipe", target = "full", direction = "right", fingers = 2 }
+trigger = { type = "swipe", target = "full", direction = "right", fingers = 3 }
 behavior = { type = "niri", action = "focus-workspace-up" }
 
 [[bindings]]
@@ -366,13 +366,13 @@ behavior = { type = "niri", action = "toggle-overview" }
 mode = "niri_locked"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "left", fingers = 1 }
-behavior = { type = "niri", action = "focus-workspace-down" }
+behavior = { type = "niri", action = "focus-window-up" }
 
 [[bindings]]
 mode = "niri_locked"
 layer = "niri"
 trigger = { type = "swipe", target = "full", direction = "right", fingers = 1 }
-behavior = { type = "niri", action = "focus-workspace-up" }
+behavior = { type = "niri", action = "focus-window-down" }
 
 [[bindings]]
 mode = "niri_locked"
