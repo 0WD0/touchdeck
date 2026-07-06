@@ -3004,6 +3004,44 @@ impl App {
 
         fill_rect(mmap, width, height, panel, [0x1a, 0x22, 0x26, 0xe6]);
         draw_rect_frame(mmap, width, height, panel, [0x79, 0x8b, 0x86, 0x96]);
+        if std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some() {
+            fill_rect(
+                mmap,
+                width,
+                height,
+                RectPx {
+                    x: cursor_x - 14,
+                    y: cursor_y - 1,
+                    w: 29,
+                    h: 3,
+                },
+                [0x20, 0x40, 0xff, 0xf0],
+            );
+            fill_rect(
+                mmap,
+                width,
+                height,
+                RectPx {
+                    x: cursor_x - 1,
+                    y: cursor_y - 14,
+                    w: 3,
+                    h: 29,
+                },
+                [0x20, 0x40, 0xff, 0xf0],
+            );
+            draw_rect_frame(
+                mmap,
+                width,
+                height,
+                RectPx {
+                    x: cursor_x - 6,
+                    y: cursor_y - 6,
+                    w: 13,
+                    h: 13,
+                },
+                [0xff, 0xff, 0xff, 0xf0],
+            );
+        }
 
         let header_h = if candidate_count == 0 {
             panel.h

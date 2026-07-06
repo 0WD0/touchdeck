@@ -7,6 +7,7 @@ use x11rb::rust_connection::RustConnection;
 
 #[derive(Clone, Copy, Debug)]
 pub struct X11WindowGeometry {
+    pub window: Window,
     pub x: i32,
     pub y: i32,
     pub w: i32,
@@ -62,12 +63,32 @@ impl X11GeometryProbe {
             return Ok(None);
         }
 
+        self.window_geometry(active).map(Some)
+    }
+
+    pub fn input_focus_geometry(&self) -> Result<Option<X11WindowGeometry>> {
+        let focus = self
+            .conn
+            .get_input_focus()
+            .context("query X11 input focus")?
+            .reply()
+            .context("read X11 input focus")?
+            .focus;
+
+        if focus == x11rb::NONE || focus == 1 {
+            return Ok(None);
+        }
+
+        self.window_geometry(focus).map(Some)
+    }
+
+    fn window_geometry(&self, window: Window) -> Result<X11WindowGeometry> {
         let geometry = self
             .conn
-            .get_geometry(active)
-            .context("query active X11 window geometry")?
+            .get_geometry(window)
+            .context("query X11 window geometry")?
             .reply()
-            .context("read active X11 window geometry")?;
+            .context("read X11 window geometry")?;
         let root_geometry = self
             .conn
             .get_geometry(self.root)
@@ -76,18 +97,19 @@ impl X11GeometryProbe {
             .context("read X11 root geometry")?;
         let translated = self
             .conn
-            .translate_coordinates(active, self.root, 0, 0)
-            .context("translate active X11 window to root")?
+            .translate_coordinates(window, self.root, 0, 0)
+            .context("translate X11 window to root")?
             .reply()
-            .context("read active X11 window root position")?;
+            .context("read X11 window root position")?;
 
-        Ok(Some(X11WindowGeometry {
+        Ok(X11WindowGeometry {
+            window,
             x: i32::from(translated.dst_x),
             y: i32::from(translated.dst_y),
             w: i32::from(geometry.width),
             h: i32::from(geometry.height),
             root_w: i32::from(root_geometry.width),
             root_h: i32::from(root_geometry.height),
-        }))
+        })
     }
 }

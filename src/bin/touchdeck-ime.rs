@@ -1457,14 +1457,29 @@ impl ImeApp {
             return None;
         };
 
-        match probe.active_window_geometry() {
+        let active = match probe.active_window_geometry() {
             Ok(geometry) => geometry,
             Err(err) => {
                 eprintln!("touchdeck-ime: failed to query x11 active window geometry: {err:?}");
                 self.x11_geometry = None;
+                return None;
+            }
+        };
+        let focus = match probe.input_focus_geometry() {
+            Ok(geometry) => geometry,
+            Err(err) => {
+                eprintln!("touchdeck-ime: failed to query x11 input focus geometry: {err:?}");
                 None
             }
-        }
+        };
+
+        eprintln!(
+            "touchdeck-ime: x11 geometry active={} focus={}",
+            format_x11_geometry(active),
+            format_x11_geometry(focus)
+        );
+
+        active
     }
 
     fn add_status_subscriber(&mut self, response: Sender<ImeStatus>) {
@@ -3604,6 +3619,22 @@ fn keysym_to_text(keysym: u32, rime_mask: u32) -> Option<String> {
 
 fn status_is_empty(status: &ImeStatus) -> bool {
     status.preedit.is_empty() && status.commit_preview.is_empty() && status.candidates.is_empty()
+}
+
+fn format_x11_geometry(geometry: Option<X11WindowGeometry>) -> String {
+    match geometry {
+        Some(geometry) => format!(
+            "0x{:x}=({}, {} {}x{}) root={}x{}",
+            geometry.window,
+            geometry.x,
+            geometry.y,
+            geometry.w,
+            geometry.h,
+            geometry.root_w,
+            geometry.root_h
+        ),
+        None => "none".to_string(),
+    }
 }
 
 fn is_empty_state_passthrough_key(keysym: u32) -> bool {
