@@ -566,14 +566,22 @@ pub(crate) fn expand_keyboard_maps(
         let priority = map.priority.unwrap_or(0);
         let consume = map.consume.unwrap_or(true);
 
-        expand_keyboard_gesture_map(
-            &mut bindings,
+        let mut expansion = KeyboardMapExpansion {
+            bindings: &mut bindings,
             slots,
             macros,
             behavior_registry,
             map_index,
             mode,
             layer,
+            fingers,
+            priority,
+            consume,
+            repeat_start_ms,
+            repeat_interval_ms,
+        };
+
+        expansion.expand_gesture(
             "tap",
             map.tap,
             |target| Trigger::Tap {
@@ -581,50 +589,10 @@ pub(crate) fn expand_keyboard_maps(
                 fingers,
                 max_ms,
             },
-            priority,
-            consume,
-            repeat_start_ms,
-            repeat_interval_ms,
         )?;
-        expand_keyboard_hold_map(
-            &mut bindings,
-            slots,
-            macros,
-            behavior_registry,
-            map_index,
-            mode,
-            layer,
-            map.hold,
-            fingers,
-            hold_ms,
-            priority,
-            consume,
-            repeat_start_ms,
-            repeat_interval_ms,
-        )?;
-        expand_keyboard_repeat_map(
-            &mut bindings,
-            slots,
-            macros,
-            behavior_registry,
-            map_index,
-            mode,
-            layer,
-            map.repeat,
-            fingers,
-            repeat_start_ms,
-            repeat_interval_ms,
-            priority,
-            consume,
-        )?;
-        expand_keyboard_gesture_map(
-            &mut bindings,
-            slots,
-            macros,
-            behavior_registry,
-            map_index,
-            mode,
-            layer,
+        expansion.expand_hold(map.hold, hold_ms)?;
+        expansion.expand_repeat(map.repeat)?;
+        expansion.expand_gesture(
             "swipe_up",
             map.swipe_up,
             |target| Trigger::Swipe {
@@ -634,19 +602,8 @@ pub(crate) fn expand_keyboard_maps(
                 min_px,
                 max_ms,
             },
-            priority,
-            consume,
-            repeat_start_ms,
-            repeat_interval_ms,
         )?;
-        expand_keyboard_gesture_map(
-            &mut bindings,
-            slots,
-            macros,
-            behavior_registry,
-            map_index,
-            mode,
-            layer,
+        expansion.expand_gesture(
             "swipe_down",
             map.swipe_down,
             |target| Trigger::Swipe {
@@ -656,19 +613,8 @@ pub(crate) fn expand_keyboard_maps(
                 min_px,
                 max_ms,
             },
-            priority,
-            consume,
-            repeat_start_ms,
-            repeat_interval_ms,
         )?;
-        expand_keyboard_gesture_map(
-            &mut bindings,
-            slots,
-            macros,
-            behavior_registry,
-            map_index,
-            mode,
-            layer,
+        expansion.expand_gesture(
             "swipe_left",
             map.swipe_left,
             |target| Trigger::Swipe {
@@ -678,19 +624,8 @@ pub(crate) fn expand_keyboard_maps(
                 min_px,
                 max_ms,
             },
-            priority,
-            consume,
-            repeat_start_ms,
-            repeat_interval_ms,
         )?;
-        expand_keyboard_gesture_map(
-            &mut bindings,
-            slots,
-            macros,
-            behavior_registry,
-            map_index,
-            mode,
-            layer,
+        expansion.expand_gesture(
             "swipe_right",
             map.swipe_right,
             |target| Trigger::Swipe {
@@ -700,60 +635,137 @@ pub(crate) fn expand_keyboard_maps(
                 min_px,
                 max_ms,
             },
-            priority,
-            consume,
-            repeat_start_ms,
-            repeat_interval_ms,
         )?;
     }
 
     Ok(bindings)
 }
 
-fn expand_keyboard_hold_map(
-    bindings: &mut Vec<Binding>,
-    slots: &SlotRegistry,
-    macros: &MacroRegistry,
-    behavior_registry: &BehaviorRegistry,
+struct KeyboardMapExpansion<'a> {
+    bindings: &'a mut Vec<Binding>,
+    slots: &'a SlotRegistry,
+    macros: &'a MacroRegistry,
+    behavior_registry: &'a BehaviorRegistry,
     map_index: usize,
     mode: Mode,
     layer: Layer,
-    behavior_invocations: Option<HashMap<String, String>>,
     fingers: usize,
-    hold_ms: Option<u32>,
     priority: i32,
     consume: bool,
     repeat_start_ms: Option<u32>,
     repeat_interval_ms: Option<u32>,
-) -> Result<()> {
-    let Some(behavior_invocations) = behavior_invocations else {
-        return Ok(());
-    };
+}
 
-    for (slot_id, invocation) in behavior_invocations {
-        let target = slots
-            .get(&slot_id)
-            .with_context(|| format!("keyboard map {map_index} hold target {slot_id}"))?;
-        let mut behavior = parse_behavior_invocation(&invocation, macros, behavior_registry)
+impl KeyboardMapExpansion<'_> {
+    fn target(&self, gesture_name: &str, slot_id: &str) -> Result<SlotTarget> {
+        self.slots
+            .get(slot_id)
             .with_context(|| {
-                format!("parse keyboard map {map_index} hold behavior for {slot_id} ({invocation})")
-            })?;
-        apply_hold_repeat_defaults(&mut behavior, repeat_start_ms, repeat_interval_ms);
-        bindings.push(Binding {
-            mode,
-            layer,
-            trigger: Trigger::Hold {
-                target,
-                fingers,
-                min_ms: hold_ms,
-            },
+                format!(
+                    "keyboard map {} {} target {}",
+                    self.map_index, gesture_name, slot_id
+                )
+            })
+    }
+
+    fn behavior(&self, gesture_name: &str, slot_id: &str, invocation: &str) -> Result<Behavior> {
+        let mut behavior =
+            parse_behavior_invocation(invocation, self.macros, self.behavior_registry)
+                .with_context(|| {
+                    format!(
+                        "parse keyboard map {} {} behavior for {} ({})",
+                        self.map_index, gesture_name, slot_id, invocation
+                    )
+                })?;
+        apply_hold_repeat_defaults(
+            &mut behavior,
+            self.repeat_start_ms,
+            self.repeat_interval_ms,
+        );
+        Ok(behavior)
+    }
+
+    fn push(&mut self, trigger: Trigger, behavior: Behavior) {
+        self.bindings.push(Binding {
+            mode: self.mode,
+            layer: self.layer,
+            trigger,
             behavior,
-            priority,
-            consume,
+            priority: self.priority,
+            consume: self.consume,
         });
     }
 
-    Ok(())
+    fn expand_hold(
+        &mut self,
+        behavior_invocations: Option<HashMap<String, String>>,
+        hold_ms: Option<u32>,
+    ) -> Result<()> {
+        let Some(behavior_invocations) = behavior_invocations else {
+            return Ok(());
+        };
+
+        for (slot_id, invocation) in behavior_invocations {
+            let target = self.target("hold", &slot_id)?;
+            let behavior = self.behavior("hold", &slot_id, &invocation)?;
+            self.push(
+                Trigger::Hold {
+                    target,
+                    fingers: self.fingers,
+                    min_ms: hold_ms,
+                },
+                behavior,
+            );
+        }
+
+        Ok(())
+    }
+
+    fn expand_repeat(
+        &mut self,
+        behavior_invocations: Option<HashMap<String, String>>,
+    ) -> Result<()> {
+        let Some(behavior_invocations) = behavior_invocations else {
+            return Ok(());
+        };
+
+        for (slot_id, invocation) in behavior_invocations {
+            let target = self.target("repeat", &slot_id)?;
+            let behavior = self.behavior("repeat", &slot_id, &invocation)?;
+            self.push(
+                Trigger::Hold {
+                    target,
+                    fingers: self.fingers,
+                    min_ms: self.repeat_start_ms,
+                },
+                behavior,
+            );
+        }
+
+        Ok(())
+    }
+
+    fn expand_gesture<F>(
+        &mut self,
+        gesture_name: &str,
+        behavior_invocations: Option<HashMap<String, String>>,
+        make_trigger: F,
+    ) -> Result<()>
+    where
+        F: Fn(SlotTarget) -> Trigger,
+    {
+        let Some(behavior_invocations) = behavior_invocations else {
+            return Ok(());
+        };
+
+        for (slot_id, invocation) in behavior_invocations {
+            let target = self.target(gesture_name, &slot_id)?;
+            let behavior = self.behavior(gesture_name, &slot_id, &invocation)?;
+            self.push(make_trigger(target), behavior);
+        }
+
+        Ok(())
+    }
 }
 
 fn apply_hold_repeat_defaults(
@@ -774,100 +786,6 @@ fn apply_hold_repeat_defaults(
             *behavior_interval_ms = interval_ms;
         }
     }
-}
-
-fn expand_keyboard_repeat_map(
-    bindings: &mut Vec<Binding>,
-    slots: &SlotRegistry,
-    macros: &MacroRegistry,
-    behavior_registry: &BehaviorRegistry,
-    map_index: usize,
-    mode: Mode,
-    layer: Layer,
-    behavior_invocations: Option<HashMap<String, String>>,
-    fingers: usize,
-    repeat_start_ms: Option<u32>,
-    repeat_interval_ms: Option<u32>,
-    priority: i32,
-    consume: bool,
-) -> Result<()> {
-    let Some(behavior_invocations) = behavior_invocations else {
-        return Ok(());
-    };
-
-    for (slot_id, invocation) in behavior_invocations {
-        let target = slots
-            .get(&slot_id)
-            .with_context(|| format!("keyboard map {map_index} repeat target {slot_id}"))?;
-        let mut behavior = parse_behavior_invocation(&invocation, macros, behavior_registry)
-            .with_context(|| {
-                format!(
-                    "parse keyboard map {map_index} repeat behavior for {slot_id} ({invocation})"
-                )
-            })?;
-        apply_hold_repeat_defaults(&mut behavior, repeat_start_ms, repeat_interval_ms);
-        bindings.push(Binding {
-            mode,
-            layer,
-            trigger: Trigger::Hold {
-                target,
-                fingers,
-                min_ms: repeat_start_ms,
-            },
-            behavior,
-            priority,
-            consume,
-        });
-    }
-
-    Ok(())
-}
-
-fn expand_keyboard_gesture_map<F>(
-    bindings: &mut Vec<Binding>,
-    slots: &SlotRegistry,
-    macros: &MacroRegistry,
-    behavior_registry: &BehaviorRegistry,
-    map_index: usize,
-    mode: Mode,
-    layer: Layer,
-    gesture_name: &str,
-    behavior_invocations: Option<HashMap<String, String>>,
-    make_trigger: F,
-    priority: i32,
-    consume: bool,
-    repeat_start_ms: Option<u32>,
-    repeat_interval_ms: Option<u32>,
-) -> Result<()>
-where
-    F: Fn(SlotTarget) -> Trigger,
-{
-    let Some(behavior_invocations) = behavior_invocations else {
-        return Ok(());
-    };
-
-    for (slot_id, invocation) in behavior_invocations {
-        let target = slots
-            .get(&slot_id)
-            .with_context(|| format!("keyboard map {map_index} {gesture_name} target {slot_id}"))?;
-        let mut behavior =
-            parse_behavior_invocation(&invocation, macros, behavior_registry).with_context(|| {
-                format!(
-                    "parse keyboard map {map_index} {gesture_name} behavior for {slot_id} ({invocation})"
-                )
-            })?;
-        apply_hold_repeat_defaults(&mut behavior, repeat_start_ms, repeat_interval_ms);
-        bindings.push(Binding {
-            mode,
-            layer,
-            trigger: make_trigger(target),
-            behavior,
-            priority,
-            consume,
-        });
-    }
-
-    Ok(())
 }
 
 fn parse_trigger(value: TriggerFileConfig, slots: &SlotRegistry) -> Result<Trigger> {
@@ -953,11 +871,13 @@ fn parse_behavior(
         }
         "mod_morph" => parse_mod_morph_behavior(
             "inline",
-            value.mods.as_deref(),
-            value.keep_mods.as_deref(),
-            value.bindings.as_deref(),
-            value.normal.as_deref(),
-            value.morph.as_deref(),
+            ModMorphDefinition {
+                mods: value.mods.as_deref(),
+                keep_mods: value.keep_mods.as_deref(),
+                bindings: value.bindings.as_deref(),
+                normal: value.normal.as_deref(),
+                morph: value.morph.as_deref(),
+            },
             &[],
             macros,
             behavior_registry,
@@ -1096,11 +1016,13 @@ fn parse_defined_behavior_invocation(
     if normalize_name(kind) == "mod_morph" {
         return parse_mod_morph_behavior(
             name,
-            definition.mods.as_deref(),
-            definition.keep_mods.as_deref(),
-            definition.bindings.as_deref(),
-            definition.normal.as_deref(),
-            definition.morph.as_deref(),
+            ModMorphDefinition {
+                mods: definition.mods.as_deref(),
+                keep_mods: definition.keep_mods.as_deref(),
+                bindings: definition.bindings.as_deref(),
+                normal: definition.normal.as_deref(),
+                morph: definition.morph.as_deref(),
+            },
             args,
             macros,
             behavior_registry,
@@ -1138,25 +1060,37 @@ fn parse_builtin_behavior_invocation(
     parse_behavior_invocation_kind(name, args, BehaviorFields::default(), macros)
 }
 
+struct ModMorphDefinition<'a> {
+    mods: Option<&'a [String]>,
+    keep_mods: Option<&'a [String]>,
+    bindings: Option<&'a [String]>,
+    normal: Option<&'a str>,
+    morph: Option<&'a str>,
+}
+
 fn parse_mod_morph_behavior(
     name: &str,
-    mods: Option<&[String]>,
-    keep_mods: Option<&[String]>,
-    bindings: Option<&[String]>,
-    normal: Option<&str>,
-    morph: Option<&str>,
+    definition: ModMorphDefinition<'_>,
     args: &[&str],
     macros: &MacroRegistry,
     behavior_registry: &BehaviorRegistry,
 ) -> Result<Behavior> {
     let mods = parse_modifier_flags(
-        mods.ok_or_else(|| anyhow!("mod_morph behavior {name} is missing mods"))?,
+        definition
+            .mods
+            .ok_or_else(|| anyhow!("mod_morph behavior {name} is missing mods"))?,
     )?;
-    let keep_mods = keep_mods
+    let keep_mods = definition
+        .keep_mods
         .map(parse_modifier_flags)
         .transpose()?
         .unwrap_or(0);
-    let (normal, morph) = parse_mod_morph_bindings(name, bindings, normal, morph)?;
+    let (normal, morph) = parse_mod_morph_bindings(
+        name,
+        definition.bindings,
+        definition.normal,
+        definition.morph,
+    )?;
 
     Ok(Behavior::ModMorph {
         mods,
