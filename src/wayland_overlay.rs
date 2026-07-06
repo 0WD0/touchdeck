@@ -5,7 +5,9 @@ use std::os::fd::AsFd;
 use anyhow::{anyhow, Context, Result};
 use memmap2::MmapMut;
 use tempfile::tempfile;
-use wayland_client::protocol::{wl_buffer, wl_compositor, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_output, wl_shm, wl_shm_pool, wl_surface,
+};
 use wayland_client::QueueHandle;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -35,13 +37,14 @@ impl Overlay {
         &mut self,
         compositor: &wl_compositor::WlCompositor,
         layer_shell: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
+        output: Option<&wl_output::WlOutput>,
         qh: &QueueHandle<App>,
         namespace: &str,
     ) {
         let surface = compositor.create_surface(qh, ());
         let layer_surface = layer_shell.get_layer_surface(
             &surface,
-            None,
+            output,
             zwlr_layer_shell_v1::Layer::Overlay,
             String::from(namespace),
             qh,

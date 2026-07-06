@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use tempfile::tempfile;
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
-    wl_touch,
+    wl_buffer, wl_compositor, wl_output, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface, wl_touch,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
@@ -59,6 +59,7 @@ struct App {
     virtual_keyboard_manager: Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
     seat: Option<wl_seat::WlSeat>,
     touch: Option<wl_touch::WlTouch>,
+    outputs: Vec<OutputInfo>,
     raw_touch: Option<EvdevTouchBackend>,
     raw_touch_retry_at_ms: Option<u64>,
     raw_touch_last_error: Option<String>,
@@ -78,6 +79,13 @@ struct App {
     running: bool,
 }
 
+#[derive(Clone)]
+struct OutputInfo {
+    global_name: u32,
+    output: wl_output::WlOutput,
+    name: Option<String>,
+}
+
 impl Default for App {
     fn default() -> Self {
         let config = Config::default();
@@ -90,6 +98,7 @@ impl Default for App {
             virtual_keyboard_manager: None,
             seat: None,
             touch: None,
+            outputs: Vec::new(),
             raw_touch: None,
             raw_touch_retry_at_ms: None,
             raw_touch_last_error: None,
@@ -228,11 +237,38 @@ impl App {
             .as_ref()
             .ok_or_else(|| anyhow!("zwlr_layer_shell_v1 global is unavailable"))?;
 
-        self.overlay.init(compositor, layer_shell, qh, NAMESPACE);
+        let output = self.target_output()?;
+        self.overlay
+            .init(compositor, layer_shell, output.as_ref(), qh, NAMESPACE);
 
         self.init_virtual_keyboard(qh)?;
 
         Ok(())
+    }
+
+    fn target_output(&self) -> Result<Option<wl_output::WlOutput>> {
+        let Some(name) = self.config.input.sunshine_output.as_deref() else {
+            return Ok(None);
+        };
+
+        let Some(output) = self
+            .outputs
+            .iter()
+            .find(|output| output.name.as_deref() == Some(name))
+        else {
+            let known_outputs = self
+                .outputs
+                .iter()
+                .filter_map(|output| output.name.as_deref())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(anyhow!(
+                "no Wayland output named {name:?} for [input].sunshine_output; known outputs: {known_outputs}"
+            ));
+        };
+
+        eprintln!("touchdeck: binding overlay to sunshine_output={name}");
+        Ok(Some(output.output.clone()))
     }
 
     fn init_virtual_keyboard(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
@@ -1102,6 +1138,15 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     state.shm =
                         Some(registry.bind::<wl_shm::WlShm, _, _>(name, version.min(1), qh, ()));
                 }
+                "wl_output" => {
+                    let output =
+                        registry.bind::<wl_output::WlOutput, _, _>(name, version.min(4), qh, name);
+                    state.outputs.push(OutputInfo {
+                        global_name: name,
+                        output,
+                        name: None,
+                    });
+                }
                 "wl_seat" => {
                     let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(8), qh, ());
                     let touch = seat.get_touch(qh, ());
@@ -1157,6 +1202,27 @@ impl Dispatch<wl_region::WlRegion, ()> for App {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
+    }
+}
+
+impl Dispatch<wl_output::WlOutput, u32> for App {
+    fn event(
+        state: &mut Self,
+        _proxy: &wl_output::WlOutput,
+        event: wl_output::Event,
+        global_name: &u32,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let wl_output::Event::Name { name } = event {
+            if let Some(output) = state
+                .outputs
+                .iter_mut()
+                .find(|output| output.global_name == *global_name)
+            {
+                output.name = Some(name);
+            }
+        }
     }
 }
 
