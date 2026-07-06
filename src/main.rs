@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
@@ -26,6 +26,7 @@ use touchdeck::niri;
 use touchdeck::protocol::{ImeCandidate, ImeCursorRect, ImeStatus};
 
 mod action;
+mod action_executor;
 mod config;
 mod engine;
 mod geometry;
@@ -37,15 +38,12 @@ mod mode;
 mod niri_backend;
 
 
-use action::*;
+use action_executor::*;
 use config::*;
 use engine::*;
 use geometry::*;
-use key::*;
-use keymap::*;
 use layout::*;
 use mode::*;
-use niri_backend::*;
 
 const NAMESPACE: &str = "touchdeck";
 
@@ -54,8 +52,6 @@ struct App {
     shm: Option<wl_shm::WlShm>,
     layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     virtual_keyboard_manager: Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
-    virtual_keyboard: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
-    virtual_keyboard_keymap: Option<File>,
     seat: Option<wl_seat::WlSeat>,
     touch: Option<wl_touch::WlTouch>,
     surface: Option<wl_surface::WlSurface>,
@@ -74,11 +70,7 @@ struct App {
     ime_status_dirty: bool,
     ime_status_rx: Option<Receiver<ImeStatus>>,
     text_renderer: TextRenderer,
-    modifier_mask: u32,
-    held_modifier_mask: u32,
-    modifier_mask_stack: Vec<u32>,
-    last_key_sequence: Option<LastKeySequence>,
-    active_actions: HashMap<i32, PressedAction>,
+    executor: ActionExecutor,
     running: bool,
 }
 
@@ -92,8 +84,6 @@ impl Default for App {
             shm: None,
             layer_shell: None,
             virtual_keyboard_manager: None,
-            virtual_keyboard: None,
-            virtual_keyboard_keymap: None,
             seat: None,
             touch: None,
             surface: None,
@@ -112,11 +102,7 @@ impl Default for App {
             ime_status_dirty: false,
             ime_status_rx: None,
             text_renderer: TextRenderer::new(),
-            modifier_mask: 0,
-            held_modifier_mask: 0,
-            modifier_mask_stack: Vec::new(),
-            last_key_sequence: None,
-            active_actions: HashMap::new(),
+            executor: ActionExecutor::default(),
             running: false,
         }
     }
@@ -246,16 +232,6 @@ fn spawn_ime_status_subscriber(socket_path: PathBuf) -> Receiver<ImeStatus> {
         thread::sleep(Duration::from_millis(500));
     });
     rx
-}
-
-#[derive(Debug)]
-enum PressedAction {
-    None,
-    Key(u32),
-    ModMorph {
-        masked_mods: u32,
-        pressed: Box<PressedAction>,
-    },
 }
 
 struct TraceRecorder {
@@ -398,6 +374,7 @@ impl App {
 
     fn init_virtual_keyboard(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
         let Some(manager) = self.virtual_keyboard_manager.as_ref() else {
+            self.executor.clear_virtual_keyboard();
             eprintln!("touchdeck: zwp_virtual_keyboard_manager_v1 is unavailable; key actions will be ignored");
             return Ok(());
         };
@@ -414,14 +391,7 @@ impl App {
         file.flush().context("flush virtual keyboard keymap")?;
         keyboard.keymap(1, file.as_fd(), keymap_bytes.len() as u32);
         keyboard.modifiers(0, 0, 0, 0);
-        self.modifier_mask = 0;
-        self.held_modifier_mask = 0;
-        self.modifier_mask_stack.clear();
-        self.active_actions.clear();
-        self.last_key_sequence = None;
-
-        self.virtual_keyboard = Some(keyboard);
-        self.virtual_keyboard_keymap = Some(file);
+        self.executor.set_virtual_keyboard(keyboard, file);
         eprintln!("touchdeck: virtual keyboard initialized");
 
         Ok(())
@@ -1464,18 +1434,37 @@ impl App {
                     self.apply_input_region(qh, &policy)
                 }
                 EngineEffect::Dispatch(action) => {
-                    self.dispatch_action(action);
+                    let outcome = self.executor.dispatch_action(
+                        action,
+                        self.now_ms(),
+                        &self.config,
+                        &mut self.ime_status,
+                        &mut self.ime_status_dirty,
+                    );
+                    self.apply_executor_outcome(outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
                 EngineEffect::Press { hold_id, action } => {
-                    let pressed = self.press_action(action);
-                    self.active_actions.insert(hold_id, pressed);
+                    let outcome = self.executor.press_action(
+                        hold_id,
+                        action,
+                        self.now_ms(),
+                        &self.config,
+                        &mut self.ime_status,
+                        &mut self.ime_status_dirty,
+                    );
+                    self.apply_executor_outcome(outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
                 EngineEffect::Release { hold_id } => {
-                    if let Some(pressed) = self.active_actions.remove(&hold_id) {
-                        self.release_pressed_action(pressed);
-                    }
+                    let outcome = self.executor.release_action(
+                        hold_id,
+                        self.now_ms(),
+                        &self.config,
+                        &mut self.ime_status,
+                        &mut self.ime_status_dirty,
+                    );
+                    self.apply_executor_outcome(outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
                 EngineEffect::Redraw => {
@@ -1492,6 +1481,15 @@ impl App {
                 self.running = false;
                 break;
             }
+        }
+    }
+
+    fn apply_executor_outcome(&mut self, outcome: ExecutorOutcome) {
+        if let Some(last_action) = outcome.last_action {
+            self.engine.last_action = Some(last_action);
+        }
+        if outcome.exit {
+            self.running = false;
         }
     }
 
@@ -1520,341 +1518,6 @@ impl App {
             mode,
             until_ms: self.now_ms() + u64::from(self.config.mode_hint_ms),
         });
-    }
-
-    fn dispatch_action(&mut self, action: GestureAction) {
-        match action {
-            GestureAction::Niri(action) => {
-                self.engine.last_action = Some(action.as_str().to_string());
-                eprintln!("touchdeck: niri action {action}");
-                spawn_niri_action(action);
-            }
-            GestureAction::KeySequence(sequence) => {
-                self.send_key_sequence(&sequence, None, None);
-            }
-            GestureAction::KeySequenceWithOptions {
-                sequence,
-                translation,
-                route,
-            } => {
-                self.send_key_sequence(&sequence, translation, route);
-            }
-            GestureAction::ModMorph {
-                mods,
-                keep_mods,
-                normal,
-                morph,
-            } => {
-                let pressed = self.press_action(GestureAction::ModMorph {
-                    mods,
-                    keep_mods,
-                    normal,
-                    morph,
-                });
-                self.release_pressed_action(pressed);
-            }
-            GestureAction::KeyRepeat => {
-                self.repeat_last_key_sequence();
-            }
-            GestureAction::HoldRepeat {
-                sequence,
-                translation,
-                route,
-                ..
-            } => {
-                self.send_key_sequence(&sequence, translation, route);
-            }
-            GestureAction::KeyHold(key) => {
-                self.send_key_state(key, true);
-            }
-            GestureAction::Sequence(steps) => {
-                self.run_action_steps(&steps);
-            }
-            GestureAction::Exit => {
-                eprintln!("touchdeck: exit gesture");
-                self.running = false;
-            }
-            GestureAction::ModeSet(_)
-            | GestureAction::ModeToggle(_)
-            | GestureAction::ModeMomentary(_)
-            | GestureAction::LayerSet(_)
-            | GestureAction::LayerToggle(_)
-            | GestureAction::LayerMomentary(_) => {}
-            GestureAction::None => {}
-        }
-    }
-
-    fn press_action(&mut self, action: GestureAction) -> PressedAction {
-        match action {
-            GestureAction::KeyHold(key) => {
-                self.send_key_state(key, true);
-                if let Some(mask) = modifier_mask_for_key(key) {
-                    self.held_modifier_mask |= mask;
-                }
-                PressedAction::Key(key)
-            }
-            GestureAction::ModMorph {
-                mods,
-                keep_mods,
-                normal,
-                morph,
-            } => {
-                if self.held_modifier_mask & mods == 0 {
-                    self.press_action(*normal)
-                } else {
-                    let masked_mods = mods & !keep_mods;
-                    self.push_modifier_mask(masked_mods);
-                    let pressed = self.press_action(*morph);
-                    PressedAction::ModMorph {
-                        masked_mods,
-                        pressed: Box::new(pressed),
-                    }
-                }
-            }
-            action => {
-                self.dispatch_action(action);
-                PressedAction::None
-            }
-        }
-    }
-
-    fn release_pressed_action(&mut self, pressed: PressedAction) {
-        match pressed {
-            PressedAction::None => {}
-            PressedAction::Key(key) => {
-                self.send_key_state(key, false);
-                if let Some(mask) = modifier_mask_for_key(key) {
-                    self.held_modifier_mask &= !mask;
-                    self.restore_held_modifiers();
-                }
-            }
-            PressedAction::ModMorph {
-                masked_mods,
-                pressed,
-            } => {
-                self.release_pressed_action(*pressed);
-                self.pop_modifier_mask(masked_mods);
-            }
-        }
-    }
-
-    fn send_key(&mut self, key: u32) {
-        let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
-        let release_time = time.saturating_add(self.key_tap_gap_ms(key));
-        eprintln!("touchdeck: key {key}");
-        self.emit_key_output(time, key, true, None, None);
-        self.emit_key_output(release_time, key, false, None, None);
-        self.restore_held_modifiers();
-    }
-
-    fn send_key_sequence(
-        &mut self,
-        sequence: &[KeyChord],
-        translation: Option<KeyTranslationPolicy>,
-        route: Option<KeyRoute>,
-    ) {
-        let mut time = self.now_ms().min(u64::from(u32::MAX)) as u32;
-        eprintln!("touchdeck: key sequence {sequence:?}");
-        if !sequence.is_empty() {
-            self.last_key_sequence = Some(LastKeySequence {
-                sequence: sequence.to_vec(),
-                translation,
-                route,
-            });
-        }
-        for chord in sequence {
-            for key in &chord.keys {
-                self.emit_key_output(time, *key, true, translation, route);
-                time = time.saturating_add(1);
-            }
-            if chord.keys.len() == 1 {
-                time = time.saturating_add(self.key_tap_gap_ms(chord.keys[0]));
-            }
-            for key in chord.keys.iter().rev() {
-                self.emit_key_output(time, *key, false, translation, route);
-                time = time.saturating_add(1);
-            }
-        }
-        self.restore_held_modifiers();
-    }
-
-    fn repeat_last_key_sequence(&mut self) {
-        let Some(last) = self.last_key_sequence.clone() else {
-            eprintln!("touchdeck: key_repeat ignored; no previous key sequence");
-            return;
-        };
-        eprintln!("touchdeck: repeat last key sequence {:?}", last.sequence);
-        self.send_key_sequence(&last.sequence, last.translation, last.route);
-    }
-
-    fn run_action_steps(&mut self, steps: &[ActionStep]) {
-        for step in steps {
-            match step {
-                ActionStep::KeyDown(key) => self.send_key_state(*key, true),
-                ActionStep::KeyUp(key) => self.send_key_state(*key, false),
-                ActionStep::TapKey(key) => self.send_key(*key),
-                ActionStep::KeySequence(sequence) => self.send_key_sequence(sequence, None, None),
-                ActionStep::Niri(action) => spawn_niri_action(action.clone()),
-                ActionStep::DelayMs(ms) => {
-                    std::thread::sleep(Duration::from_millis(u64::from(*ms)))
-                }
-            }
-        }
-    }
-
-    fn send_key_state(&mut self, key: u32, pressed: bool) {
-        let time = self.now_ms().min(u64::from(u32::MAX)) as u32;
-        self.emit_key_output(time, key, pressed, None, None);
-    }
-
-    fn emit_key_output(
-        &mut self,
-        time: u32,
-        key: u32,
-        pressed: bool,
-        translation: Option<KeyTranslationPolicy>,
-        route: Option<KeyRoute>,
-    ) {
-        let keyboard = if self.config.text_output.backend.uses_virtual_keyboard() {
-            self.virtual_keyboard.clone()
-        } else {
-            None
-        };
-
-        if self.config.text_output.backend.uses_virtual_keyboard() && keyboard.is_none() {
-            eprintln!("touchdeck: virtual keyboard unavailable; ignored key state {key}");
-        }
-
-        if let Some(keyboard) = &keyboard {
-            keyboard.key(time, key, if pressed { 1 } else { 0 });
-        }
-
-        let Some(mask) = modifier_mask_for_key(key) else {
-            self.emit_ime_key_state(time, key, pressed, translation, route);
-            return;
-        };
-
-        if pressed {
-            self.set_modifier_mask(self.modifier_mask | mask);
-        } else {
-            self.set_modifier_mask(self.modifier_mask & !mask);
-        }
-        self.emit_ime_key_state(time, key, pressed, translation, route);
-    }
-
-    fn set_modifier_mask(&mut self, modifier_mask: u32) {
-        self.modifier_mask = modifier_mask;
-        if self.config.text_output.backend.uses_virtual_keyboard() {
-            if let Some(keyboard) = &self.virtual_keyboard {
-                keyboard.modifiers(self.modifier_mask, 0, 0, 0);
-            }
-        }
-    }
-
-    fn push_modifier_mask(&mut self, masked_mods: u32) {
-        if masked_mods == 0 {
-            return;
-        }
-        self.modifier_mask_stack.push(masked_mods);
-        self.restore_held_modifiers();
-    }
-
-    fn pop_modifier_mask(&mut self, masked_mods: u32) {
-        if masked_mods == 0 {
-            return;
-        }
-        if let Some(index) = self
-            .modifier_mask_stack
-            .iter()
-            .rposition(|value| *value == masked_mods)
-        {
-            self.modifier_mask_stack.remove(index);
-        }
-        self.restore_held_modifiers();
-    }
-
-    fn restore_held_modifiers(&mut self) {
-        let masked_mods = self
-            .modifier_mask_stack
-            .iter()
-            .copied()
-            .fold(0, |mask, value| mask | value);
-        self.set_modifier_mask(self.held_modifier_mask & !masked_mods);
-    }
-
-    fn emit_ime_key_state(
-        &mut self,
-        time: u32,
-        key: u32,
-        pressed: bool,
-        translation: Option<KeyTranslationPolicy>,
-        route: Option<KeyRoute>,
-    ) {
-        if !self.config.text_output.backend.uses_ime() {
-            return;
-        }
-
-        let message = serde_json::json!({
-            "protocol": "touchdeck-ime-v1",
-            "type": "key",
-            "source": "touchdeck",
-            "time": time,
-            "key": key,
-            "state": if pressed { "pressed" } else { "released" },
-            "modifiers": self.modifier_mask,
-            "translation": translation.map(KeyTranslationPolicy::as_str),
-            "route": route.map(KeyRoute::as_str),
-        });
-
-        let mut stream = match UnixStream::connect(&self.config.text_output.ime_socket) {
-            Ok(stream) => stream,
-            Err(err) => {
-                eprintln!(
-                    "touchdeck: failed to connect touchdeck-ime socket {}: {err}",
-                    self.config.text_output.ime_socket.display()
-                );
-                return;
-            }
-        };
-
-        if let Err(err) = serde_json::to_writer(&mut stream, &message)
-            .and_then(|()| stream.write_all(b"\n").map_err(serde_json::Error::io))
-        {
-            eprintln!("touchdeck: failed to write touchdeck-ime event: {err}");
-            return;
-        }
-
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {}
-            Ok(_) => match serde_json::from_str::<ImeStatus>(line.trim()) {
-                Ok(status) if status.protocol == "touchdeck-ime-v1" && status.kind == "status" => {
-                    if status != self.ime_status {
-                        self.ime_status = status;
-                        self.ime_status_dirty = true;
-                    }
-                }
-                Ok(status) => {
-                    eprintln!("touchdeck: ignored unsupported touchdeck-ime status {status:?}");
-                }
-                Err(err) => {
-                    eprintln!("touchdeck: failed to parse touchdeck-ime status: {err}");
-                }
-            },
-            Err(err) => {
-                eprintln!("touchdeck: failed to read touchdeck-ime status: {err}");
-            }
-        }
-    }
-
-    fn key_tap_gap_ms(&self, key: u32) -> u32 {
-        if modifier_mask_for_key(key).is_some() {
-            self.config.modifier_tap_ms.max(1)
-        } else {
-            1
-        }
     }
 
     fn record_trace(&mut self, event: TraceEvent) {
@@ -2708,173 +2371,5 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for App {
             }
             _ => {}
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    fn test_config() -> Config {
-        let mut config = Config {
-            action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
-            action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
-            action_swipe_up: Some(NiriAction::FocusColumnRight),
-            action_swipe_down: Some(NiriAction::FocusColumnLeft),
-            action_two_finger_tap: Some(NiriAction::ToggleOverview),
-            tap_radius: 48.0,
-            two_finger_tap_ms: 350,
-            exit_tap_ms: 450,
-            hold_ms: 180,
-            repeat_start_ms: 360,
-            repeat_interval_ms: 45,
-            double_tap_ms: 280,
-            swipe_threshold_ratio: 0.08,
-            swipe_threshold_min: 64.0,
-            swipe_threshold_max: 140.0,
-            debug_alpha: 0,
-            debug_draw: false,
-            mode_hint_ms: 700,
-            modifier_tap_ms: 40,
-            log_touch: false,
-            record_trace_path: None,
-            xkb_keymap_path: None,
-            text_output: TextOutputConfig {
-                backend: TextOutputBackend::VirtualKeyboard,
-                ime_socket: default_ime_socket_path(),
-            },
-            slots: test_slots(),
-            keymap: Keymap::default(),
-            macros: MacroRegistry::default(),
-            exit_corner_enabled: true,
-            exit_corner_ratio: 0.12,
-            exit_corner_tap_ms: 350,
-        };
-        apply_example_keymap(&mut config);
-        config
-    }
-
-    fn test_slots() -> SlotRegistry {
-        SlotRegistry::from_svg_str(include_str!("../layouts/phone-portrait.svg")).unwrap()
-    }
-
-    fn apply_example_keymap(config: &mut Config) {
-        let mut file_config: FileConfig =
-            toml::from_str(include_str!("../touchdeck.example.toml")).unwrap();
-
-        if let Some(macros) = file_config.macros.take() {
-            config.macros.clear();
-            for (name, macro_config) in macros {
-                config
-                    .macros
-                    .insert(&name, parse_action_steps(macro_config.steps).unwrap());
-            }
-        }
-
-        let mut behavior_registry = BehaviorRegistry::default();
-        if let Some(behaviors) = file_config.behaviors.take() {
-            behavior_registry.extend(behaviors);
-        }
-        if let Some(keyboard) = &file_config.keyboard {
-            if let Some(behaviors) = &keyboard.behaviors {
-                behavior_registry.extend(behaviors.clone());
-            }
-        }
-
-        config.keymap.bindings.clear();
-        if let Some(bindings) = file_config.bindings.take() {
-            for binding in bindings {
-                config
-                    .keymap
-                    .bindings
-                    .push(
-                        Binding::from_file_config(
-                            binding,
-                            &config.slots,
-                            &config.macros,
-                            &behavior_registry,
-                        )
-                        .unwrap(),
-                    );
-            }
-        }
-
-        if let Some(keyboard) = file_config.keyboard {
-            if let Some(maps) = keyboard.layers {
-                config
-                    .keymap
-                    .bindings
-                    .extend(
-                        expand_keyboard_maps(
-                            maps,
-                            &config.slots,
-                            &config.macros,
-                            &behavior_registry,
-                        )
-                        .unwrap(),
-                    );
-            }
-        }
-    }
-
-    #[test]
-    fn mod_morph_hold_keeps_selected_binding_until_release() {
-        let mut app = App::default();
-        app.config = test_config();
-
-        let shift = app.press_action(GestureAction::KeyHold(KEY_LEFTSHIFT));
-        assert_eq!(app.held_modifier_mask & XKB_MOD_SHIFT, XKB_MOD_SHIFT);
-        assert_eq!(app.modifier_mask & XKB_MOD_SHIFT, XKB_MOD_SHIFT);
-
-        let morph = app.press_action(GestureAction::ModMorph {
-            mods: XKB_MOD_SHIFT,
-            keep_mods: 0,
-            normal: Box::new(GestureAction::KeyHold(KEY_A)),
-            morph: Box::new(GestureAction::KeyHold(KEY_B)),
-        });
-
-        let PressedAction::ModMorph {
-            masked_mods,
-            pressed,
-        } = &morph
-        else {
-            panic!("expected active mod-morph state");
-        };
-        assert_eq!(*masked_mods, XKB_MOD_SHIFT);
-        assert!(matches!(pressed.as_ref(), PressedAction::Key(KEY_B)));
-        assert_eq!(app.modifier_mask & XKB_MOD_SHIFT, 0);
-
-        app.release_pressed_action(shift);
-        assert_eq!(app.held_modifier_mask & XKB_MOD_SHIFT, 0);
-
-        app.release_pressed_action(morph);
-        assert_eq!(app.modifier_mask & XKB_MOD_SHIFT, 0);
-        assert!(app.modifier_mask_stack.is_empty());
-    }
-
-    #[test]
-    fn one_shot_mod_morph_restores_held_modifiers_after_shifted_morph() {
-        let mut app = App::default();
-        app.config = test_config();
-
-        let shift = app.press_action(GestureAction::KeyHold(KEY_LEFTSHIFT));
-        app.dispatch_action(GestureAction::ModMorph {
-            mods: XKB_MOD_SHIFT,
-            keep_mods: 0,
-            normal: Box::new(GestureAction::KeySequence(vec![KeyChord {
-                keys: vec![KEY_SLASH],
-            }])),
-            morph: Box::new(GestureAction::KeySequence(vec![KeyChord {
-                keys: vec![KEY_LEFTSHIFT, KEY_SLASH],
-            }])),
-        });
-
-        assert_eq!(app.held_modifier_mask & XKB_MOD_SHIFT, XKB_MOD_SHIFT);
-        assert_eq!(app.modifier_mask & XKB_MOD_SHIFT, XKB_MOD_SHIFT);
-        assert!(app.modifier_mask_stack.is_empty());
-
-        app.release_pressed_action(shift);
-        assert_eq!(app.modifier_mask & XKB_MOD_SHIFT, 0);
     }
 }
