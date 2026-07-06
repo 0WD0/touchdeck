@@ -1,5 +1,4 @@
-use std::collections::VecDeque;
-use std::fs::{self, File};
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -9,7 +8,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use memmap2::MmapMut;
 use tempfile::tempfile;
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
@@ -37,6 +35,7 @@ mod mode;
 mod niri_backend;
 mod renderer;
 mod trace;
+mod wayland_overlay;
 
 
 use action_executor::*;
@@ -47,6 +46,7 @@ use layout::*;
 use mode::*;
 use renderer::*;
 use trace::*;
+use wayland_overlay::*;
 
 const NAMESPACE: &str = "touchdeck";
 
@@ -57,12 +57,8 @@ struct App {
     virtual_keyboard_manager: Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
     seat: Option<wl_seat::WlSeat>,
     touch: Option<wl_touch::WlTouch>,
-    surface: Option<wl_surface::WlSurface>,
-    layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
-    buffers: VecDeque<BufferBacking>,
+    overlay: Overlay,
     config: Config,
-    width: u32,
-    height: u32,
     engine: Engine,
     capture_policy: CapturePolicy,
     trace: Option<TraceRecorder>,
@@ -89,12 +85,8 @@ impl Default for App {
             virtual_keyboard_manager: None,
             seat: None,
             touch: None,
-            surface: None,
-            layer_surface: None,
-            buffers: VecDeque::new(),
+            overlay: Overlay::default(),
             config,
-            width: 0,
-            height: 0,
             capture_policy,
             engine,
             trace: None,
@@ -109,14 +101,6 @@ impl Default for App {
             running: false,
         }
     }
-}
-
-struct BufferBacking {
-    _file: File,
-    _mmap: MmapMut,
-    _pool: wl_shm_pool::WlShmPool,
-    buffer: wl_buffer::WlBuffer,
-    released: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -267,30 +251,8 @@ impl App {
             .as_ref()
             .ok_or_else(|| anyhow!("wl_touch is unavailable on this Wayland seat"))?;
 
-        let surface = compositor.create_surface(qh, ());
-        let layer_surface = layer_shell.get_layer_surface(
-            &surface,
-            None,
-            zwlr_layer_shell_v1::Layer::Overlay,
-            String::from(NAMESPACE),
-            qh,
-            (),
-        );
-
-        layer_surface.set_anchor(
-            zwlr_layer_surface_v1::Anchor::Top
-                | zwlr_layer_surface_v1::Anchor::Bottom
-                | zwlr_layer_surface_v1::Anchor::Left
-                | zwlr_layer_surface_v1::Anchor::Right,
-        );
-        layer_surface.set_size(0, 0);
-        layer_surface
-            .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
-
-        surface.commit();
-
-        self.surface = Some(surface);
-        self.layer_surface = Some(layer_surface);
+        self.overlay
+            .init(compositor, layer_shell, qh, NAMESPACE);
 
         self.init_virtual_keyboard(qh)?;
 
@@ -323,10 +285,7 @@ impl App {
     }
 
     fn surface_size(&self) -> SurfaceSize {
-        SurfaceSize {
-            width: self.width.max(1),
-            height: self.height.max(1),
-        }
+        self.overlay.surface_size()
     }
 
     fn now_ms(&self) -> u64 {
@@ -361,8 +320,8 @@ impl App {
         }
 
         self.mode_hint = None;
-        if self.width != 0 && self.height != 0 {
-            self.attach_overlay_buffer(qh, self.width, self.height)?;
+        if let Some((width, height)) = self.overlay.dimensions() {
+            self.attach_overlay_buffer(qh, width, height)?;
         }
         Ok(())
     }
@@ -386,8 +345,8 @@ impl App {
         }
 
         self.ime_status = status;
-        if self.width != 0 && self.height != 0 {
-            self.attach_overlay_buffer(qh, self.width, self.height)?;
+        if let Some((width, height)) = self.overlay.dimensions() {
+            self.attach_overlay_buffer(qh, width, height)?;
         }
         Ok(())
     }
@@ -398,56 +357,17 @@ impl App {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        let width = width.max(1);
-        let height = height.max(1);
-        let stride = width
-            .checked_mul(4)
-            .ok_or_else(|| anyhow!("invalid buffer stride"))?;
-        let size = stride
-            .checked_mul(height)
-            .ok_or_else(|| anyhow!("invalid buffer size"))?;
-
-        let file = tempfile().context("create shm backing file")?;
-        file.set_len(u64::from(size))
-            .context("resize shm backing file")?;
-
-        let mut mmap = unsafe { MmapMut::map_mut(&file).context("map shm backing file")? };
-        self.render_overlay(&mut mmap, width, height);
-
         let shm = self
             .shm
             .as_ref()
-            .ok_or_else(|| anyhow!("wl_shm global is unavailable"))?;
-        let surface = self
-            .surface
-            .as_ref()
-            .ok_or_else(|| anyhow!("overlay surface is not initialized"))?;
-
-        let pool = shm.create_pool(file.as_fd(), size as i32, qh, ());
-        let buffer = pool.create_buffer(
-            0,
-            width as i32,
-            height as i32,
-            stride as i32,
-            wl_shm::Format::Argb8888,
-            qh,
-            (),
-        );
-
-        surface.attach(Some(&buffer), 0, 0);
-        surface.damage_buffer(0, 0, width as i32, height as i32);
-        surface.commit();
-
-        self.buffers.retain(|backing| !backing.released);
-        self.buffers.push_back(BufferBacking {
-            _file: file,
-            _mmap: mmap,
-            _pool: pool,
-            buffer,
-            released: false,
+            .ok_or_else(|| anyhow!("wl_shm global is unavailable"))?
+            .clone();
+        let mut overlay = std::mem::take(&mut self.overlay);
+        let result = overlay.attach_buffer(&shm, qh, width, height, |mmap, width, height| {
+            self.render_overlay(mmap, width, height);
         });
-
-        Ok(())
+        self.overlay = overlay;
+        result
     }
 
     fn render_overlay(&mut self, mmap: &mut [u8], width: u32, height: u32) {
@@ -1320,40 +1240,11 @@ impl App {
     }
 
     fn apply_input_region(&self, qh: &QueueHandle<Self>, policy: &CapturePolicy) -> Result<()> {
-        let surface = self
-            .surface
-            .as_ref()
-            .ok_or_else(|| anyhow!("overlay surface is not initialized"))?;
         let compositor = self
             .compositor
             .as_ref()
             .ok_or_else(|| anyhow!("Wayland compositor global is unavailable"))?;
-        let size = self.surface_size();
-
-        match policy {
-            CapturePolicy::Fullscreen => {
-                surface.set_input_region(None);
-            }
-            CapturePolicy::Zones(rects) => {
-                let region = compositor.create_region(qh, ());
-                for rect in rects {
-                    let rect = rect.to_px(size);
-                    if rect.w > 0 && rect.h > 0 {
-                        region.add(rect.x, rect.y, rect.w, rect.h);
-                    }
-                }
-                surface.set_input_region(Some(&region));
-                region.destroy();
-            }
-            CapturePolicy::None => {
-                let region = compositor.create_region(qh, ());
-                surface.set_input_region(Some(&region));
-                region.destroy();
-            }
-        }
-
-        surface.commit();
-        Ok(())
+        self.overlay.apply_input_region(compositor, qh, policy)
     }
 
     fn apply_effects_or_stop(&mut self, qh: &QueueHandle<Self>, effects: Vec<EngineEffect>) {
@@ -1399,8 +1290,8 @@ impl App {
                     self.redraw_ime_if_dirty(qh)
                 }
                 EngineEffect::Redraw => {
-                    if self.width != 0 && self.height != 0 {
-                        self.attach_overlay_buffer(qh, self.width, self.height)
+                    if let Some((width, height)) = self.overlay.dimensions() {
+                        self.attach_overlay_buffer(qh, width, height)
                     } else {
                         Ok(())
                     }
@@ -1425,9 +1316,9 @@ impl App {
     }
 
     fn redraw_ime_if_dirty(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
-        if self.ime_status_dirty && self.width != 0 && self.height != 0 {
+        if let Some((width, height)) = self.overlay.dimensions().filter(|_| self.ime_status_dirty) {
             self.ime_status_dirty = false;
-            self.attach_overlay_buffer(qh, self.width, self.height)
+            self.attach_overlay_buffer(qh, width, height)
         } else {
             Ok(())
         }
@@ -1766,13 +1657,7 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for App {
         _qh: &QueueHandle<Self>,
     ) {
         if matches!(event, wl_buffer::Event::Release) {
-            for backing in &mut state.buffers {
-                if backing.buffer == proxy.clone() {
-                    backing.released = true;
-                    break;
-                }
-            }
-            state.buffers.retain(|backing| !backing.released);
+            state.overlay.mark_buffer_released(proxy);
         }
     }
 }
@@ -1879,9 +1764,9 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for App {
                 width,
                 height,
             } => {
-                layer_surface.ack_configure(serial);
-                state.width = width;
-                state.height = height;
+                state
+                    .overlay
+                    .ack_configure(layer_surface, serial, width, height);
                 state.capture_policy = state.engine.capture_policy(&state.config);
                 if let Err(err) = state.attach_overlay_buffer(qh, width, height) {
                     eprintln!("touchdeck: failed to attach overlay buffer: {err:?}");
