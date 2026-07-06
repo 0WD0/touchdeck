@@ -19,6 +19,8 @@ The current project has two binaries:
 - `touchdeck`: the fullscreen layer-shell overlay, gesture engine, keymap engine, niri dispatcher, and key sender.
 - `touchdeck-ime`: an input-method-v2 + librime frontend used when TouchDeck key events should pass through Rime.
 
+For application-specific setup, see [Usage scenarios](docs/usage-scenarios.md).
+
 ## Quick start
 
 Run the IME frontend first if the config uses `output = "ime"`:
