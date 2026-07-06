@@ -29,6 +29,7 @@ use touchdeck::protocol::{ImeCandidate, ImeCursorRect, ImeStatus};
 mod action;
 mod config;
 mod geometry;
+mod gesture;
 mod key;
 mod layout;
 mod mode;
@@ -36,6 +37,7 @@ mod mode;
 use action::*;
 use config::*;
 use geometry::*;
+use gesture::*;
 use key::*;
 use layout::*;
 use mode::*;
@@ -560,34 +562,6 @@ impl MacroRegistry {
             .get(&normalize_name(name))
             .cloned()
             .ok_or_else(|| anyhow!("unknown macro {name}"))
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GestureKind {
-    Tap,
-    SwipeLeft,
-    SwipeRight,
-    SwipeUp,
-    SwipeDown,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SwipeDirection {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
-impl SwipeDirection {
-    fn as_gesture_kind(self) -> GestureKind {
-        match self {
-            Self::Left => GestureKind::SwipeLeft,
-            Self::Right => GestureKind::SwipeRight,
-            Self::Up => GestureKind::SwipeUp,
-            Self::Down => GestureKind::SwipeDown,
-        }
     }
 }
 
@@ -1233,35 +1207,11 @@ enum CapturePolicy {
     None,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Contact {
-    id: i32,
-    start_x: f64,
-    start_y: f64,
-    last_x: f64,
-    last_y: f64,
-    start_time: u32,
-    last_time: u32,
-}
-
-#[derive(Debug, Default)]
-struct Gesture {
-    finished: Vec<Contact>,
-    max_active: usize,
-}
-
 #[derive(Clone, Debug)]
 struct HoldCandidate {
     id: i32,
     deadline_ms: u64,
     action: GestureAction,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct TapRecord {
-    t_ms: u64,
-    x: f64,
-    y: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -4614,51 +4564,6 @@ fn push_dispatch_effect(effects: &mut Vec<EngineEffect>, action: GestureAction) 
     }
 }
 
-fn recognize_gesture_kind(
-    gesture: &Gesture,
-    config: &Config,
-    size: SurfaceSize,
-) -> Option<GestureKind> {
-    if gesture.max_active != 1 || gesture.finished.len() != 1 {
-        return None;
-    }
-
-    if is_tap_like(gesture, config.tap_radius, config.two_finger_tap_ms) {
-        return Some(GestureKind::Tap);
-    }
-
-    let contact = &gesture.finished[0];
-    let min_dim = f64::from(size.width.min(size.height).max(1));
-    let swipe_threshold_min = config.swipe_threshold_min.min(config.swipe_threshold_max);
-    let swipe_threshold_max = config.swipe_threshold_min.max(config.swipe_threshold_max);
-    let swipe_threshold =
-        (min_dim * config.swipe_threshold_ratio).clamp(swipe_threshold_min, swipe_threshold_max);
-    let dx = contact.last_x - contact.start_x;
-    let dy = contact.last_y - contact.start_y;
-    let abs_dx = dx.abs();
-    let abs_dy = dy.abs();
-
-    if abs_dx.max(abs_dy) < swipe_threshold {
-        return None;
-    }
-
-    if abs_dx >= abs_dy * 1.25 {
-        if dx < 0.0 {
-            Some(GestureKind::SwipeLeft)
-        } else {
-            Some(GestureKind::SwipeRight)
-        }
-    } else if abs_dy >= abs_dx * 1.25 {
-        if dy < 0.0 {
-            Some(GestureKind::SwipeUp)
-        } else {
-            Some(GestureKind::SwipeDown)
-        }
-    } else {
-        None
-    }
-}
-
 fn resolve_niri_gesture(gesture: &Gesture, config: &Config, size: SurfaceSize) -> GestureAction {
     if gesture.finished.is_empty() {
         return GestureAction::None;
@@ -4726,36 +4631,6 @@ fn niri_action(action: Option<NiriAction>) -> GestureAction {
     action
         .map(GestureAction::Niri)
         .unwrap_or(GestureAction::None)
-}
-
-fn is_tap_like(gesture: &Gesture, radius: f64, max_ms: u32) -> bool {
-    let start = gesture
-        .finished
-        .iter()
-        .map(|contact| contact.start_time)
-        .min()
-        .unwrap_or(0);
-    let end = gesture
-        .finished
-        .iter()
-        .map(|contact| contact.last_time)
-        .max()
-        .unwrap_or(start);
-
-    if end.saturating_sub(start) > max_ms {
-        return false;
-    }
-
-    gesture
-        .finished
-        .iter()
-        .all(|contact| contact_movement(contact) <= radius)
-}
-
-fn contact_movement(contact: &Contact) -> f64 {
-    let dx = contact.last_x - contact.start_x;
-    let dy = contact.last_y - contact.start_y;
-    dx.hypot(dy)
 }
 
 fn is_top_left_corner(contact: &Contact, config: &Config, size: SurfaceSize) -> bool {
