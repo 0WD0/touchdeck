@@ -22,6 +22,7 @@ mod action;
 mod action_executor;
 mod config;
 mod engine;
+mod evdev_touch;
 mod geometry;
 mod gesture;
 mod ime_overlay;
@@ -35,8 +36,9 @@ mod trace;
 mod wayland_overlay;
 
 use action_executor::{ActionExecutor, ExecutorOutcome};
-use config::Config;
+use config::{Config, TouchInputBackend};
 use engine::{CapturePolicy, Engine, EngineEffect, TouchSample, TraceEvent};
+use evdev_touch::{EvdevTouchBackend, RawTouchEvent};
 use geometry::{RectNorm, RectPx, SurfaceSize};
 use layout::{Slot, SlotRole, SlotTarget};
 use mode::{mode_hint_color, mode_hint_label, Mode, SlotGestureKind};
@@ -56,6 +58,7 @@ struct App {
     virtual_keyboard_manager: Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
     seat: Option<wl_seat::WlSeat>,
     touch: Option<wl_touch::WlTouch>,
+    raw_touch: Option<EvdevTouchBackend>,
     overlay: Overlay,
     config: Config,
     engine: Engine,
@@ -84,6 +87,7 @@ impl Default for App {
             virtual_keyboard_manager: None,
             seat: None,
             touch: None,
+            raw_touch: None,
             overlay: Overlay::default(),
             config,
             capture_policy,
@@ -142,7 +146,13 @@ fn main() -> Result<()> {
 
     app.init_overlay(&qh)?;
     eprintln!(
-        "touchdeck: overlay initialized; base mode captures fullscreen; double-tap bottom edge for passthrough"
+        "touchdeck: overlay initialized; touch backend={}; Wayland input region {}",
+        app.config.input.touch_backend.as_str(),
+        if app.config.input.touch_backend == TouchInputBackend::Evdev {
+            "disabled"
+        } else {
+            "follows capture policy"
+        }
     );
 
     while app.running {
@@ -167,14 +177,22 @@ fn main() -> Result<()> {
         event_queue.flush().context("flush Wayland requests")?;
         let timeout = app.poll_timeout();
         let wayland_fd = event_queue.as_fd().as_raw_fd();
+        let raw_touch_fd = app.raw_touch.as_ref().map(EvdevTouchBackend::fd);
 
         let Some(guard) = event_queue.prepare_read() else {
             continue;
         };
 
         event_queue.flush().context("flush Wayland requests")?;
-        if poll_fd(wayland_fd, timeout).context("poll Wayland fd")? {
+        let poll_result =
+            poll_fds(wayland_fd, raw_touch_fd, timeout).context("poll input fds")?;
+        if poll_result.wayland {
             guard.read().context("read Wayland events")?;
+        } else {
+            drop(guard);
+        }
+        if poll_result.raw_touch {
+            app.drain_raw_touch(&qh).context("drain raw touch events")?;
         }
     }
 
@@ -191,9 +209,16 @@ impl App {
             .layer_shell
             .as_ref()
             .ok_or_else(|| anyhow!("zwlr_layer_shell_v1 global is unavailable"))?;
-        self.touch
-            .as_ref()
-            .ok_or_else(|| anyhow!("wl_touch is unavailable on this Wayland seat"))?;
+        match self.config.input.touch_backend {
+            TouchInputBackend::Wayland => {
+                self.touch
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("wl_touch is unavailable on this Wayland seat"))?;
+            }
+            TouchInputBackend::Evdev => {
+                self.raw_touch = Some(EvdevTouchBackend::open(&self.config.input)?);
+            }
+        }
 
         self.overlay.init(compositor, layer_shell, qh, NAMESPACE);
 
@@ -611,7 +636,12 @@ impl App {
             .compositor
             .as_ref()
             .ok_or_else(|| anyhow!("Wayland compositor global is unavailable"))?;
-        self.overlay.apply_input_region(compositor, qh, policy)
+        let effective_policy = match self.config.input.touch_backend {
+            TouchInputBackend::Wayland => policy.clone(),
+            TouchInputBackend::Evdev => CapturePolicy::None,
+        };
+        self.overlay
+            .apply_input_region(compositor, qh, &effective_policy)
     }
 
     fn apply_effects_or_stop(&mut self, qh: &QueueHandle<Self>, effects: Vec<EngineEffect>) {
@@ -791,29 +821,83 @@ impl App {
         let effects = self.engine.handle_cancel(&config);
         self.apply_effects_or_stop(qh, effects);
     }
+
+    fn drain_raw_touch(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        let size = self.surface_size();
+        let events = {
+            let Some(raw_touch) = self.raw_touch.as_mut() else {
+                return Ok(());
+            };
+            raw_touch.drain_events(size)?
+        };
+
+        for event in events {
+            match event {
+                RawTouchEvent::Down { id, time, x, y } => {
+                    self.touch_down(qh, id, time, x, y);
+                }
+                RawTouchEvent::Motion { id, time, x, y } => {
+                    self.touch_motion(qh, id, time, x, y);
+                }
+                RawTouchEvent::Up { id, time } => {
+                    self.touch_up(qh, id, time);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
-fn poll_fd(fd: RawFd, timeout: Option<Duration>) -> Result<bool> {
+#[derive(Clone, Copy, Debug)]
+struct PollResult {
+    wayland: bool,
+    raw_touch: bool,
+}
+
+fn poll_fds(
+    wayland_fd: RawFd,
+    raw_touch_fd: Option<RawFd>,
+    timeout: Option<Duration>,
+) -> Result<PollResult> {
     let timeout_ms = timeout
         .map(|timeout| timeout.as_millis().min(i32::MAX as u128) as i32)
         .unwrap_or(-1);
-    let mut pollfd = libc::pollfd {
-        fd,
+    let mut pollfds = vec![libc::pollfd {
+        fd: wayland_fd,
         events: libc::POLLIN,
         revents: 0,
-    };
+    }];
+    if let Some(fd) = raw_touch_fd {
+        pollfds.push(libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        });
+    }
 
-    let rc = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+    let rc =
+        unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, timeout_ms) };
     if rc > 0 {
-        return Ok(true);
+        let event_mask = libc::POLLIN | libc::POLLERR | libc::POLLHUP;
+        return Ok(PollResult {
+            wayland: pollfds[0].revents & event_mask != 0,
+            raw_touch: raw_touch_fd.is_some() && pollfds[1].revents & event_mask != 0,
+        });
     }
     if rc == 0 {
-        return Ok(false);
+        return Ok(PollResult {
+            wayland: false,
+            raw_touch: false,
+        });
     }
 
     let err = std::io::Error::last_os_error();
     if err.kind() == std::io::ErrorKind::Interrupted {
-        return Ok(false);
+        return Ok(PollResult {
+            wayland: false,
+            raw_touch: false,
+        });
     }
     Err(err.into())
 }
@@ -921,8 +1005,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 }
                 "wl_seat" => {
                     let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(8), qh, ());
-                    let touch = seat.get_touch(qh, ());
-                    state.touch = Some(touch);
+                    if state.config.input.touch_backend == TouchInputBackend::Wayland {
+                        let touch = seat.get_touch(qh, ());
+                        state.touch = Some(touch);
+                    }
                     state.seat = Some(seat);
                 }
                 "zwlr_layer_shell_v1" => {

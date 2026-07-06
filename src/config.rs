@@ -18,6 +18,7 @@ use crate::mode::{parse_layer, parse_mode, Layer, Mode};
 
 #[derive(Clone)]
 pub(crate) struct Config {
+    pub(crate) input: InputConfig,
     pub(crate) action_swipe_left: Option<NiriAction>,
     pub(crate) action_swipe_right: Option<NiriAction>,
     pub(crate) action_swipe_up: Option<NiriAction>,
@@ -52,6 +53,7 @@ pub(crate) struct Config {
 impl Default for Config {
     fn default() -> Self {
         let mut config = Self {
+            input: InputConfig::from_env(),
             action_swipe_left: env_niri_action(
                 "TOUCHDECK_ACTION_SWIPE_LEFT",
                 "focus-workspace-down",
@@ -103,6 +105,7 @@ impl Default for Config {
 
 impl Config {
     fn apply_env_overrides(&mut self) {
+        self.input.apply_env_overrides();
         if let Some(backend) = env_text_output_backend() {
             self.text_output.backend = backend;
         }
@@ -123,6 +126,28 @@ impl Config {
             .with_context(|| format!("read config file {}", path.display()))?;
         let file_config: FileConfig = toml::from_str(&source)
             .with_context(|| format!("parse config file {}", path.display()))?;
+        if let Some(input) = &file_config.input {
+            if let Some(backend) = input.backend.as_deref().or(input.touch_backend.as_deref()) {
+                self.input.touch_backend = parse_touch_input_backend(backend)?;
+            }
+            if let Some(device) = input
+                .touch_device
+                .as_deref()
+                .or(input.device.as_deref())
+            {
+                self.input.evdev_touch_device = Some(resolve_config_relative(&path, device));
+            }
+            if let Some(name) = &input.device_name_contains {
+                self.input.evdev_device_name_contains = Some(name.clone());
+            }
+            if let Some(output) = &input.sunshine_output {
+                self.input.sunshine_output = Some(output.clone());
+            }
+            if let Some(grab) = input.grab {
+                self.input.evdev_grab = grab;
+            }
+        }
+
         let keyboard = file_config.keyboard;
 
         if let Some(keyboard) = &keyboard {
@@ -189,6 +214,85 @@ impl Config {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct InputConfig {
+    pub(crate) touch_backend: TouchInputBackend,
+    pub(crate) evdev_touch_device: Option<PathBuf>,
+    pub(crate) evdev_device_name_contains: Option<String>,
+    pub(crate) sunshine_output: Option<String>,
+    pub(crate) evdev_grab: bool,
+}
+
+impl InputConfig {
+    fn from_env() -> Self {
+        let mut config = Self {
+            touch_backend: TouchInputBackend::Wayland,
+            evdev_touch_device: None,
+            evdev_device_name_contains: None,
+            sunshine_output: None,
+            evdev_grab: true,
+        };
+        config.apply_env_overrides();
+        config
+    }
+
+    fn apply_env_overrides(&mut self) {
+        if let Some(backend) = env::var("TOUCHDECK_TOUCH_BACKEND")
+            .or_else(|_| env::var("TOUCHDECK_INPUT_BACKEND"))
+            .ok()
+        {
+            match parse_touch_input_backend(&backend) {
+                Ok(backend) => self.touch_backend = backend,
+                Err(err) => eprintln!("touchdeck: invalid touch input backend {backend:?}: {err}"),
+            }
+        }
+        if let Some(device) = env::var_os("TOUCHDECK_TOUCH_DEVICE")
+            .or_else(|| env::var_os("TOUCHDECK_EVDEV_TOUCH_DEVICE"))
+        {
+            self.evdev_touch_device = Some(PathBuf::from(device));
+        }
+        if let Ok(name) = env::var("TOUCHDECK_TOUCH_DEVICE_NAME") {
+            self.evdev_device_name_contains = Some(name);
+        }
+        if let Ok(output) = env::var("TOUCHDECK_SUNSHINE_OUTPUT") {
+            self.sunshine_output = Some(output);
+        }
+        if env::var_os("TOUCHDECK_TOUCH_GRAB").is_some()
+            || env::var_os("TOUCHDECK_EVDEV_GRAB").is_some()
+        {
+            self.evdev_grab = env_bool(
+                "TOUCHDECK_TOUCH_GRAB",
+                env_bool("TOUCHDECK_EVDEV_GRAB", self.evdev_grab),
+            );
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TouchInputBackend {
+    Wayland,
+    Evdev,
+}
+
+impl TouchInputBackend {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Wayland => "wayland",
+            Self::Evdev => "evdev",
+        }
+    }
+}
+
+pub(crate) fn parse_touch_input_backend(value: &str) -> Result<TouchInputBackend> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "wayland" | "wl_touch" | "wl" => Ok(TouchInputBackend::Wayland),
+        "evdev" | "raw" | "raw_touch" | "linux_input" => Ok(TouchInputBackend::Evdev),
+        other => Err(anyhow!(
+            "unsupported touch input backend {other}; supported: wayland, evdev"
+        )),
     }
 }
 
@@ -283,12 +387,24 @@ pub(crate) fn parse_text_output_backend(value: &str) -> Result<TextOutputBackend
 
 #[derive(Deserialize)]
 pub(crate) struct FileConfig {
+    pub(crate) input: Option<InputFileConfig>,
     pub(crate) layout: Option<LayoutFileConfig>,
     pub(crate) keyboard: Option<KeyboardFileConfig>,
     pub(crate) ime: Option<ImeFileConfig>,
     pub(crate) behaviors: Option<HashMap<String, BehaviorDefinitionFileConfig>>,
     pub(crate) macros: Option<HashMap<String, MacroFileConfig>>,
     pub(crate) bindings: Option<Vec<BindingFileConfig>>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct InputFileConfig {
+    pub(crate) backend: Option<String>,
+    pub(crate) touch_backend: Option<String>,
+    pub(crate) device: Option<String>,
+    pub(crate) touch_device: Option<String>,
+    pub(crate) device_name_contains: Option<String>,
+    pub(crate) sunshine_output: Option<String>,
+    pub(crate) grab: Option<bool>,
 }
 
 #[derive(Deserialize)]

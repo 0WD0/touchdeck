@@ -76,6 +76,11 @@ For real use, set `TOUCHDECK_CONFIG` explicitly.
 Important environment overrides:
 
 - `TOUCHDECK_CONFIG`: path to TOML config.
+- `TOUCHDECK_TOUCH_BACKEND`: `wayland` or `evdev`.
+- `TOUCHDECK_TOUCH_DEVICE`: `/dev/input/event*` or `/dev/input/by-id/...` path for `evdev`.
+- `TOUCHDECK_TOUCH_DEVICE_NAME`: device-name substring for evdev auto-discovery.
+- `TOUCHDECK_SUNSHINE_OUTPUT`: match Sunshine's `[sunshine-output=...]` device tag.
+- `TOUCHDECK_TOUCH_GRAB=0|1`: whether the evdev backend grabs the touch device.
 - `TOUCHDECK_TEXT_OUTPUT`: `virtual-keyboard`, `ime`, or `both`.
 - `TOUCHDECK_XKB_KEYMAP`: raw XKB keymap file for virtual keyboard output.
 - `TOUCHDECK_DEBUG_DRAW=1`: draw overlay debug/keycap UI.
@@ -283,6 +288,39 @@ repeat_interval_ms = 55
 
 This makes a short swipe produce one movement, while a deliberate hold starts
 continuous movement later.
+
+## Touch input backends
+
+The default backend is `wayland`, which receives `wl_touch` through the
+fullscreen layer-shell overlay. In this mode the overlay input region follows
+the current capture policy, so pointer buttons and scroll wheels inside that
+region also hit TouchDeck first.
+
+For daily use with a separate mouse or touchpad, use the `evdev` backend:
+
+```toml
+[input]
+backend = "evdev"
+sunshine_output = "DP-2"
+grab = true
+```
+
+In `evdev` mode the Wayland overlay is display-only and always uses an empty
+input region. TouchDeck reads and optionally grabs only the configured
+touchscreen event node; mouse buttons, pointer motion, and scroll wheels remain
+routed by the compositor.
+
+With the Sunshine fork, TouchDeck can auto-discover the per-client virtual
+touchscreen created by inputtino. Sunshine names it like:
+
+```text
+Touch passthrough [sunshine-output=DP-2]
+```
+
+This is the same output tag that the niri fork uses to map virtual absolute
+devices to the correct output and to avoid applying output rotation twice.
+If there is only one matching Sunshine touch device, `touch_device` can be
+omitted. If there are several, set `sunshine_output` or `touch_device`.
 
 ## Text output backends
 

@@ -2,6 +2,21 @@
 # Set TOUCHDECK_CONFIG=/home/disk/Projects/touchdeck/touchdeck.example.toml
 # or copy this to ./touchdeck.toml before running.
 
+[input]
+# wayland: use wl_touch from the fullscreen layer-shell surface.
+# evdev: read a Linux touchscreen event node directly and keep the Wayland
+#        overlay input region empty, so mouse buttons and scroll wheels pass
+#        through to niri/apps.
+backend = "wayland"
+# In evdev mode, leaving touch_device unset auto-discovers Sunshine's
+# "Touch passthrough" uinput device. Set sunshine_output to match the
+# [sunshine-output=...] tag from your Sunshine/niri setup when multiple
+# streaming outputs or clients exist.
+# sunshine_output = "DP-2"
+# device_name_contains = "Touch passthrough"
+# touch_device = "/dev/input/by-id/..."
+# grab = true
+
 [layout]
 svg = "layouts/phone-portrait.svg"
 
