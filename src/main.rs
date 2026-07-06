@@ -629,8 +629,16 @@ impl App {
         &mut self,
         qh: &QueueHandle<Self>,
         index: usize,
+        old_policy: &CapturePolicy,
         policy: &CapturePolicy,
     ) -> Result<()> {
+        if self.config.input.touch_backend == TouchInputBackend::Evdev
+            && matches!(old_policy, CapturePolicy::Zones(_))
+            && !matches!(policy, CapturePolicy::Zones(_))
+        {
+            self.discard_pending_raw_touch(index)?;
+        }
+
         if self.raw_touch_should_grab(index, policy) {
             self.sync_raw_touch_grab(index, policy)?;
             self.apply_input_region(qh, index, policy)
@@ -652,6 +660,22 @@ impl App {
             && matches!(self.sessions[index].capture_policy, CapturePolicy::Zones(_))
     }
 
+    fn discard_pending_raw_touch(&mut self, index: usize) -> Result<()> {
+        let size = self.sessions[index].overlay.surface_size();
+        let Some(raw_touch) = self.sessions[index].raw_touch.as_mut() else {
+            return Ok(());
+        };
+        let discarded = raw_touch.drain_events(size)?;
+        if self.config.log_touch && !discarded.is_empty() {
+            eprintln!(
+                "touchdeck: session={} discarded {} stale raw touch events after passthrough",
+                self.sessions[index].id,
+                discarded.len()
+            );
+        }
+        Ok(())
+    }
+
     fn sync_raw_touch_grab(&mut self, index: usize, policy: &CapturePolicy) -> Result<()> {
         let should_grab = self.raw_touch_should_grab(index, policy);
         if let Some(raw_touch) = self.sessions[index].raw_touch.as_mut() {
@@ -669,9 +693,10 @@ impl App {
         for effect in effects {
             let result = match effect {
                 EngineEffect::SetCapture(policy) => {
+                    let old_policy = self.sessions[index].capture_policy.clone();
                     self.sessions[index].capture_policy = policy.clone();
                     self.present_mode_hint_if_changed(index);
-                    self.apply_capture_policy(qh, index, &policy)
+                    self.apply_capture_policy(qh, index, &old_policy, &policy)
                 }
                 EngineEffect::Dispatch(action) => {
                     let outcome = self
