@@ -883,14 +883,52 @@ impl ImeApp {
         spot_x: i32,
         spot_y: i32,
     ) {
-        let anchor_window = focus_window.or(app_window).unwrap_or(client_window);
-        let Some(anchor) = self.query_x11_window_geometry(anchor_window) else {
-            eprintln!(
-                "touchdeck-ime: xim cursor rect has no anchor geometry client=0x{client_window:x} app={app_window:?} focus={focus_window:?}"
-            );
-            self.xim_cursor_rect = None;
-            return;
+        let client_geometry = self.query_x11_window_geometry(client_window);
+        let app_geometry = app_window.and_then(|window| self.query_x11_window_geometry(window));
+        let focus_geometry = focus_window.and_then(|window| self.query_x11_window_geometry(window));
+
+        let (anchor_window, anchor) = if let Some(window) = focus_window {
+            match focus_geometry {
+                Some(geometry) => (window, geometry),
+                None => {
+                    eprintln!(
+                        "touchdeck-ime: xim cursor rect focus window has no geometry focus=0x{window:x}"
+                    );
+                    self.xim_cursor_rect = None;
+                    return;
+                }
+            }
+        } else if let Some(window) = app_window {
+            match app_geometry {
+                Some(geometry) => (window, geometry),
+                None => {
+                    eprintln!(
+                        "touchdeck-ime: xim cursor rect app window has no geometry app=0x{window:x}"
+                    );
+                    self.xim_cursor_rect = None;
+                    return;
+                }
+            }
+        } else {
+            match client_geometry {
+                Some(geometry) => (client_window, geometry),
+                None => {
+                    eprintln!(
+                        "touchdeck-ime: xim cursor rect client window has no geometry client=0x{client_window:x}"
+                    );
+                    self.xim_cursor_rect = None;
+                    return;
+                }
+            }
         };
+
+        eprintln!(
+            "touchdeck-ime: xim geometry client=0x{client_window:x} {} app={} focus={} anchor=0x{anchor_window:x} {} spot=({spot_x},{spot_y})",
+            format_x11_geometry(client_geometry),
+            format_x11_window_geometry(app_window, app_geometry),
+            format_x11_window_geometry(focus_window, focus_geometry),
+            format_x11_geometry(Some(anchor))
+        );
 
         let Some(top_level) = self.query_x11_active_window_geometry() else {
             eprintln!(
@@ -1370,6 +1408,13 @@ fn format_x11_geometry(geometry: Option<X11WindowGeometry>) -> String {
             geometry.root_w,
             geometry.root_h
         ),
+        None => "none".to_string(),
+    }
+}
+
+fn format_x11_window_geometry(window: Option<u32>, geometry: Option<X11WindowGeometry>) -> String {
+    match window {
+        Some(window) => format!("0x{window:x} {}", format_x11_geometry(geometry)),
         None => "none".to_string(),
     }
 }
