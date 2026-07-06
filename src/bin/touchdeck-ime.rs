@@ -4,7 +4,6 @@ use std::ffi::{CStr, CString};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
-use std::os::raw::{c_char, c_int, c_void};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -28,6 +27,7 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 use touchdeck::protocol::{ImeCandidate, ImeCursorRect, ImeStatus};
+use touchdeck::rime::*;
 use touchdeck::x11_geometry::{X11GeometryProbe, X11WindowGeometry};
 use x11rb::connection::Connection as X11Connection;
 use x11rb::protocol::xproto::{KeyPressEvent, KEY_PRESS_EVENT};
@@ -3907,142 +3907,3 @@ fn poll_fd(fd: RawFd, timeout: Option<Duration>) -> Result<bool> {
     Ok(ret > 0 && poll_fd.revents & libc::POLLIN != 0)
 }
 
-type Bool = c_int;
-type RimeSessionId = usize;
-
-#[repr(C)]
-struct RimeTraits {
-    data_size: c_int,
-    shared_data_dir: *const c_char,
-    user_data_dir: *const c_char,
-    distribution_name: *const c_char,
-    distribution_code_name: *const c_char,
-    distribution_version: *const c_char,
-    app_name: *const c_char,
-    modules: *const *const c_char,
-    min_log_level: c_int,
-    log_dir: *const c_char,
-    prebuilt_data_dir: *const c_char,
-    staging_dir: *const c_char,
-}
-
-#[repr(C)]
-struct RimeComposition {
-    length: c_int,
-    cursor_pos: c_int,
-    sel_start: c_int,
-    sel_end: c_int,
-    preedit: *mut c_char,
-}
-
-#[repr(C)]
-struct RimeCandidate {
-    text: *mut c_char,
-    comment: *mut c_char,
-    reserved: *mut c_void,
-}
-
-#[repr(C)]
-struct RimeMenu {
-    page_size: c_int,
-    page_no: c_int,
-    is_last_page: Bool,
-    highlighted_candidate_index: c_int,
-    num_candidates: c_int,
-    candidates: *mut RimeCandidate,
-    select_keys: *mut c_char,
-}
-
-#[repr(C)]
-struct RimeCommit {
-    data_size: c_int,
-    text: *mut c_char,
-}
-
-#[repr(C)]
-struct RimeContext {
-    data_size: c_int,
-    composition: RimeComposition,
-    menu: RimeMenu,
-    commit_text_preview: *mut c_char,
-    select_labels: *mut *mut c_char,
-}
-
-#[repr(C)]
-struct RimeApi {
-    data_size: c_int,
-    setup: Option<unsafe extern "C" fn(*mut RimeTraits)>,
-    set_notification_handler: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
-    initialize: Option<unsafe extern "C" fn(*mut RimeTraits)>,
-    finalize: Option<unsafe extern "C" fn()>,
-    start_maintenance: Option<unsafe extern "C" fn(Bool) -> Bool>,
-    is_maintenance_mode: Option<unsafe extern "C" fn() -> Bool>,
-    join_maintenance_thread: Option<unsafe extern "C" fn()>,
-    deployer_initialize: Option<unsafe extern "C" fn(*mut RimeTraits)>,
-    prebuild: Option<unsafe extern "C" fn() -> Bool>,
-    deploy: Option<unsafe extern "C" fn() -> Bool>,
-    deploy_schema: Option<unsafe extern "C" fn(*const c_char) -> Bool>,
-    deploy_config_file: Option<unsafe extern "C" fn(*const c_char, *const c_char) -> Bool>,
-    sync_user_data: Option<unsafe extern "C" fn() -> Bool>,
-    create_session: Option<unsafe extern "C" fn() -> RimeSessionId>,
-    find_session: Option<unsafe extern "C" fn(RimeSessionId) -> Bool>,
-    destroy_session: Option<unsafe extern "C" fn(RimeSessionId) -> Bool>,
-    cleanup_stale_sessions: Option<unsafe extern "C" fn()>,
-    cleanup_all_sessions: Option<unsafe extern "C" fn()>,
-    process_key: Option<unsafe extern "C" fn(RimeSessionId, c_int, c_int) -> Bool>,
-    commit_composition: Option<unsafe extern "C" fn(RimeSessionId) -> Bool>,
-    clear_composition: Option<unsafe extern "C" fn(RimeSessionId)>,
-    get_commit: Option<unsafe extern "C" fn(RimeSessionId, *mut RimeCommit) -> Bool>,
-    free_commit: Option<unsafe extern "C" fn(*mut RimeCommit) -> Bool>,
-    get_context: Option<unsafe extern "C" fn(RimeSessionId, *mut RimeContext) -> Bool>,
-    free_context: Option<unsafe extern "C" fn(*mut RimeContext) -> Bool>,
-    get_status: Option<unsafe extern "C" fn(RimeSessionId, *mut c_void) -> Bool>,
-    free_status: Option<unsafe extern "C" fn(*mut c_void) -> Bool>,
-    set_option: Option<unsafe extern "C" fn(RimeSessionId, *const c_char, Bool)>,
-    get_option: Option<unsafe extern "C" fn(RimeSessionId, *const c_char) -> Bool>,
-}
-
-#[link(name = "rime")]
-unsafe extern "C" {
-    fn rime_get_api() -> *mut RimeApi;
-}
-
-fn rime_traits_data_size() -> c_int {
-    (std::mem::size_of::<RimeTraits>() - std::mem::size_of::<c_int>()) as c_int
-}
-
-fn rime_commit_data_size() -> c_int {
-    (std::mem::size_of::<RimeCommit>() - std::mem::size_of::<c_int>()) as c_int
-}
-
-fn empty_rime_context() -> RimeContext {
-    RimeContext {
-        data_size: (std::mem::size_of::<RimeContext>() - std::mem::size_of::<c_int>()) as c_int,
-        composition: RimeComposition {
-            length: 0,
-            cursor_pos: 0,
-            sel_start: 0,
-            sel_end: 0,
-            preedit: ptr::null_mut(),
-        },
-        menu: RimeMenu {
-            page_size: 0,
-            page_no: 0,
-            is_last_page: RIME_FALSE,
-            highlighted_candidate_index: 0,
-            num_candidates: 0,
-            candidates: ptr::null_mut(),
-            select_keys: ptr::null_mut(),
-        },
-        commit_text_preview: ptr::null_mut(),
-        select_labels: ptr::null_mut(),
-    }
-}
-
-fn call_void<T>(func: Option<T>, name: &'static str) -> Result<T> {
-    func.ok_or_else(|| anyhow!("{name} unavailable"))
-}
-
-fn call_ret<T>(func: Option<T>, name: &'static str) -> Result<T> {
-    func.ok_or_else(|| anyhow!("{name} unavailable"))
-}
