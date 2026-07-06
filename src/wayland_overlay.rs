@@ -49,6 +49,17 @@ impl Overlay {
         self.surface.is_some() && self.layer_surface.is_some()
     }
 
+    pub(crate) fn matches_surface(&self, surface: &wl_surface::WlSurface) -> bool {
+        self.surface.as_ref() == Some(surface)
+    }
+
+    pub(crate) fn matches_layer_surface(
+        &self,
+        layer_surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    ) -> bool {
+        self.layer_surface.as_ref() == Some(layer_surface)
+    }
+
     pub(crate) fn init(
         &mut self,
         compositor: &wl_compositor::WlCompositor,

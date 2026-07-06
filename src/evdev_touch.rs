@@ -48,6 +48,13 @@ pub(crate) enum RawTouchEvent {
     },
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct TouchDeviceInfo {
+    pub(crate) path: PathBuf,
+    pub(crate) name: Option<String>,
+    pub(crate) sunshine_output: Option<String>,
+}
+
 #[derive(Debug)]
 pub(crate) struct EvdevTouchBackend {
     file: File,
@@ -155,8 +162,8 @@ impl EvdevTouchBackend {
         self.file.as_raw_fd()
     }
 
-    pub(crate) fn sunshine_output(&self) -> Option<&str> {
-        self.sunshine_output.as_deref()
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
     pub(crate) fn set_grab(&mut self, grab: bool) -> Result<()> {
@@ -298,6 +305,26 @@ impl EvdevTouchBackend {
             }
         }
     }
+}
+
+pub(crate) fn discover_touch_device_infos(config: &InputConfig) -> Result<Vec<TouchDeviceInfo>> {
+    if let Some(path) = &config.evdev_touch_device {
+        let name = input_device_name_from_event_path(path);
+        return Ok(vec![TouchDeviceInfo {
+            path: path.clone(),
+            sunshine_output: name.as_deref().and_then(parse_sunshine_output),
+            name,
+        }]);
+    }
+
+    Ok(discover_touch_devices(config)?
+        .into_iter()
+        .map(|device| TouchDeviceInfo {
+            sunshine_output: parse_sunshine_output(&device.name),
+            name: Some(device.name),
+            path: device.path,
+        })
+        .collect())
 }
 
 fn resolve_touch_device(config: &InputConfig) -> Result<ResolvedTouchDevice> {
