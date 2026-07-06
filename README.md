@@ -79,7 +79,7 @@ Important environment overrides:
 - `TOUCHDECK_TOUCH_BACKEND`: `wayland` or `evdev`.
 - `TOUCHDECK_TOUCH_DEVICE`: `/dev/input/event*` or `/dev/input/by-id/...` path for `evdev`.
 - `TOUCHDECK_TOUCH_DEVICE_NAME`: device-name substring for evdev auto-discovery.
-- `TOUCHDECK_SUNSHINE_OUTPUT`: match Sunshine's `[sunshine-output=...]` device tag.
+- `TOUCHDECK_SUNSHINE_OUTPUT`: optional single-output pin. Leave unset for dynamic Sunshine output discovery.
 - `TOUCHDECK_TOUCH_GRAB=0|1`: whether the evdev backend grabs the touch device.
 - `TOUCHDECK_TEXT_OUTPUT`: `virtual-keyboard`, `ime`, or `both`.
 - `TOUCHDECK_XKB_KEYMAP`: raw XKB keymap file for virtual keyboard output.
@@ -301,7 +301,6 @@ For daily use with a separate mouse or touchpad, use the `evdev` backend:
 ```toml
 [input]
 backend = "evdev"
-sunshine_output = "DP-2"
 grab = true
 ```
 
@@ -319,8 +318,11 @@ Touch passthrough [sunshine-output=DP-2]
 
 This is the same output tag that the niri fork uses to map virtual absolute
 devices to the correct output and to avoid applying output rotation twice.
-If there is only one matching Sunshine touch device, `touch_device` can be
-omitted. If there are several, set `sunshine_output` or `touch_device`.
+Leave `sunshine_output` unset for normal use. TouchDeck will create one session
+per discovered Sunshine touch device and bind each session to that device's
+`[sunshine-output=...]` tag. Set `sunshine_output` only when you intentionally
+want to restrict TouchDeck to one output, or set `touch_device` when you want to
+bind to a specific event node.
 
 The evdev backend supports hotplug. If TouchDeck starts before Sunshine creates
 the per-client touchscreen, it will keep running and retry discovery until the

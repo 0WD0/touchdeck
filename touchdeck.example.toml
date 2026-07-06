@@ -9,10 +9,9 @@
 #        through to niri/apps.
 backend = "wayland"
 # In evdev mode, leaving touch_device unset auto-discovers Sunshine's
-# "Touch passthrough" uinput device. Set sunshine_output to match the
-# [sunshine-output=...] tag from your Sunshine/niri setup when multiple
-# streaming outputs or clients exist.
-# sunshine_output = "DP-2"
+# "Touch passthrough" uinput devices. Leave sunshine_output unset for
+# dynamic multi-output binding; set it only if you intentionally want to pin
+# TouchDeck to one Sunshine/niri output.
 # device_name_contains = "Touch passthrough"
 # touch_device = "/dev/input/by-id/..."
 # grab = true
