@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::action::{NiriAction, NiriResizeEdge};
+use crate::action::{NiriCommand, NiriResizeEdge};
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{contact_movement, is_tap_like, Contact, Gesture, TapRecord};
@@ -1475,7 +1475,7 @@ pub(crate) fn resolve_niri_gesture(
 
     if gesture.max_active == 2 && is_tap_like(gesture, config.tap_radius, config.two_finger_tap_ms)
     {
-        return niri_action(config.action_two_finger_tap);
+        return niri_action(config.action_two_finger_tap.clone());
     }
 
     if gesture.max_active != 1 || gesture.finished.len() != 1 {
@@ -1494,15 +1494,15 @@ pub(crate) fn resolve_niri_gesture(
 
     if abs_dx >= abs_dy * 1.25 {
         if dx < 0.0 {
-            niri_action(config.action_swipe_left)
+            niri_action(config.action_swipe_left.clone())
         } else {
-            niri_action(config.action_swipe_right)
+            niri_action(config.action_swipe_right.clone())
         }
     } else if abs_dy >= abs_dx * 1.25 {
         if dy < 0.0 {
-            niri_action(config.action_swipe_up)
+            niri_action(config.action_swipe_up.clone())
         } else {
-            niri_action(config.action_swipe_down)
+            niri_action(config.action_swipe_down.clone())
         }
     } else {
         GestureAction::None
@@ -1525,7 +1525,7 @@ pub(crate) fn is_exit_gesture(gesture: &Gesture, config: &Config, size: SurfaceS
         && is_top_left_corner(&gesture.finished[0], config, size)
 }
 
-fn niri_action(action: Option<NiriAction>) -> GestureAction {
+fn niri_action(action: Option<NiriCommand>) -> GestureAction {
     action
         .map(GestureAction::Niri)
         .unwrap_or(GestureAction::None)
@@ -1555,6 +1555,10 @@ mod tests {
     use crate::layout::{SlotRegistry, SlotTarget};
     use crate::mode::{Layer, Mode};
 
+    fn niri(action: &str) -> NiriCommand {
+        crate::action::parse_niri_action(action).unwrap()
+    }
+
     fn test_config() -> Config {
         let mut config = Config {
             input: InputConfig {
@@ -1565,11 +1569,11 @@ mod tests {
                 sunshine_router_socket: std::path::PathBuf::from("/tmp/touchdeck-test.sock"),
                 evdev_grab: true,
             },
-            action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
-            action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
-            action_swipe_up: Some(NiriAction::FocusColumnRight),
-            action_swipe_down: Some(NiriAction::FocusColumnLeft),
-            action_two_finger_tap: Some(NiriAction::ToggleOverview),
+            action_swipe_left: Some(niri("focus-workspace-down")),
+            action_swipe_right: Some(niri("focus-workspace-up")),
+            action_swipe_up: Some(niri("focus-column-right")),
+            action_swipe_down: Some(niri("focus-column-left")),
+            action_two_finger_tap: Some(niri("toggle-overview")),
             tap_radius: 48.0,
             two_finger_tap_ms: 350,
             exit_tap_ms: 450,
@@ -1761,7 +1765,7 @@ mod tests {
 
         assert_eq!(
             resolve_niri_gesture(&gesture, &config, test_size()),
-            GestureAction::Niri(NiriAction::FocusColumnLeft)
+            GestureAction::Niri(niri("focus-column-left"))
         );
     }
 
@@ -1772,7 +1776,7 @@ mod tests {
 
         assert_eq!(
             resolve_niri_gesture(&gesture, &config, test_size()),
-            GestureAction::Niri(NiriAction::FocusColumnRight)
+            GestureAction::Niri(niri("focus-column-right"))
         );
     }
 
@@ -1787,7 +1791,7 @@ mod tests {
 
         assert_eq!(
             resolve_niri_gesture(&gesture, &config, test_size()),
-            GestureAction::Niri(NiriAction::ToggleOverview)
+            GestureAction::Niri(niri("toggle-overview"))
         );
     }
 
@@ -2028,7 +2032,7 @@ mod tests {
                     fingers: 1,
                     max_ms: None,
                 },
-                behavior: Behavior::Niri(NiriAction::ToggleOverview),
+                behavior: Behavior::Niri(niri("toggle-overview")),
                 priority: 0,
                 consume: true,
             },
@@ -2047,7 +2051,7 @@ mod tests {
 
         let effects = engine.handle_up(120, 120, 2, &config, size);
         assert!(
-            dispatched_actions(&effects).contains(&GestureAction::Niri(NiriAction::ToggleOverview))
+            dispatched_actions(&effects).contains(&GestureAction::Niri(niri("toggle-overview")))
         );
     }
 
@@ -2308,8 +2312,9 @@ mod tests {
     "#;
 
         let effects = run_trace(trace, &config);
-        assert!(dispatched_actions(&effects)
-            .contains(&GestureAction::Niri(NiriAction::FocusColumnRight)));
+        assert!(
+            dispatched_actions(&effects).contains(&GestureAction::Niri(niri("focus-column-right")))
+        );
     }
 
     #[test]
@@ -2324,7 +2329,8 @@ mod tests {
     "#;
 
         let effects = run_trace(trace, &config);
-        assert!(dispatched_actions(&effects)
-            .contains(&GestureAction::Niri(NiriAction::FocusColumnLeft)));
+        assert!(
+            dispatched_actions(&effects).contains(&GestureAction::Niri(niri("focus-column-left")))
+        );
     }
 }

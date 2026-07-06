@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 
-use crate::action::{ActionStep, NiriAction, NiriResizeEdge};
+use crate::action::{ActionStep, NiriCommand, NiriResizeEdge};
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{
@@ -639,7 +639,7 @@ pub(crate) fn gesture_centroid(gesture: &Gesture) -> Option<(f64, f64, f64, f64)
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Behavior {
-    Niri(NiriAction),
+    Niri(NiriCommand),
     NiriInteractiveMove,
     NiriInteractiveResize {
         edge: NiriResizeEdge,
@@ -785,7 +785,7 @@ impl Behavior {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum GestureAction {
-    Niri(NiriAction),
+    Niri(NiriCommand),
     NiriInteractiveMove,
     NiriInteractiveResize {
         edge: NiriResizeEdge,
@@ -841,7 +841,7 @@ impl GestureAction {
 
 fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
-        Behavior::Niri(action) => Some(action.as_str().to_string()),
+        Behavior::Niri(action) => Some(action.label().to_string()),
         Behavior::NiriInteractiveMove => Some("drag".to_string()),
         Behavior::NiriInteractiveResize { edge, .. } => Some(format!("resize:{}", edge.as_str())),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),
@@ -889,6 +889,7 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
 mod tests {
 
     use super::*;
+    use crate::action::parse_niri_action;
     use crate::config::{
         expand_keyboard_maps, parse_action_steps, BehaviorRegistry, Config, FileConfig,
         InputConfig, TextOutputBackend, TextOutputConfig, TouchInputBackend,
@@ -906,11 +907,11 @@ mod tests {
                 sunshine_router_socket: std::path::PathBuf::from("/tmp/touchdeck-test.sock"),
                 evdev_grab: true,
             },
-            action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
-            action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
-            action_swipe_up: Some(NiriAction::FocusColumnRight),
-            action_swipe_down: Some(NiriAction::FocusColumnLeft),
-            action_two_finger_tap: Some(NiriAction::ToggleOverview),
+            action_swipe_left: Some(parse_niri_action("focus-workspace-down").unwrap()),
+            action_swipe_right: Some(parse_niri_action("focus-workspace-up").unwrap()),
+            action_swipe_up: Some(parse_niri_action("focus-column-right").unwrap()),
+            action_swipe_down: Some(parse_niri_action("focus-column-left").unwrap()),
+            action_two_finger_tap: Some(parse_niri_action("toggle-overview").unwrap()),
             tap_radius: 48.0,
             two_finger_tap_ms: 350,
             exit_tap_ms: 450,

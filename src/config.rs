@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-use crate::action::{parse_niri_action, parse_niri_resize_edge, ActionStep, NiriAction};
+use crate::action::{parse_niri_action, parse_niri_resize_edge, ActionStep, NiriCommand};
 use crate::gesture::SwipeDirection;
 use crate::key::{
     normalize_name, parse_key_sequence, parse_single_key, XKB_MOD_ALT, XKB_MOD_CONTROL,
@@ -19,11 +19,11 @@ use crate::mode::{parse_layer, parse_mode, Layer, Mode};
 #[derive(Clone)]
 pub(crate) struct Config {
     pub(crate) input: InputConfig,
-    pub(crate) action_swipe_left: Option<NiriAction>,
-    pub(crate) action_swipe_right: Option<NiriAction>,
-    pub(crate) action_swipe_up: Option<NiriAction>,
-    pub(crate) action_swipe_down: Option<NiriAction>,
-    pub(crate) action_two_finger_tap: Option<NiriAction>,
+    pub(crate) action_swipe_left: Option<NiriCommand>,
+    pub(crate) action_swipe_right: Option<NiriCommand>,
+    pub(crate) action_swipe_up: Option<NiriCommand>,
+    pub(crate) action_swipe_down: Option<NiriCommand>,
+    pub(crate) action_two_finger_tap: Option<NiriCommand>,
     pub(crate) tap_radius: f64,
     pub(crate) two_finger_tap_ms: u32,
     pub(crate) exit_tap_ms: u32,
@@ -619,7 +619,7 @@ pub(crate) fn env_bool(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
-fn env_niri_action(name: &str, default: &str) -> Option<NiriAction> {
+fn env_niri_action(name: &str, default: &str) -> Option<NiriCommand> {
     let value = env::var(name).unwrap_or_else(|_| default.to_string());
     if value.trim().is_empty() {
         return None;
@@ -1508,14 +1508,16 @@ fn parse_behavior_invocation_kind(
             if command.is_empty() {
                 return Err(anyhow!("&spawn is missing command"));
             }
-            Ok(Behavior::Sequence(vec![ActionStep::Spawn(command)]))
+            Ok(Behavior::Sequence(vec![ActionStep::Niri(
+                NiriCommand::spawn(command),
+            )]))
         }
         "spawn_sh" | "spawnsh" => {
             if args.is_empty() {
                 return Err(anyhow!("&spawn-sh is missing shell command"));
             }
-            Ok(Behavior::Sequence(vec![ActionStep::SpawnSh(
-                args.join(" "),
+            Ok(Behavior::Sequence(vec![ActionStep::Niri(
+                NiriCommand::spawn_sh(args.join(" ")),
             )]))
         }
         "sequence" => {
@@ -1528,7 +1530,7 @@ fn parse_behavior_invocation_kind(
             let action = fields
                 .action
                 .map(str::to_string)
-                .or_else(|| args.first().map(|value| (*value).to_string()))
+                .or_else(|| (!args.is_empty()).then(|| args.join(" ")))
                 .ok_or_else(|| anyhow!("&niri is missing action"))?;
             Ok(Behavior::Niri(parse_niri_action(&action)?))
         }
@@ -1692,7 +1694,7 @@ fn parse_action_step(value: ActionStepFileConfig) -> Result<ActionStep> {
                 .as_deref()
                 .ok_or_else(|| anyhow!("niri step is missing action"))?,
         )?)),
-        "spawn" => Ok(ActionStep::Spawn(
+        "spawn" => Ok(ActionStep::Niri(NiriCommand::spawn(
             value
                 .keys
                 .or(value.key)
@@ -1701,12 +1703,13 @@ fn parse_action_step(value: ActionStepFileConfig) -> Result<ActionStep> {
                 .split_whitespace()
                 .map(str::to_string)
                 .collect(),
-        )),
-        "spawn_sh" | "spawn-sh" => {
-            Ok(ActionStep::SpawnSh(value.keys.or(value.key).ok_or_else(
-                || anyhow!("spawn_sh step is missing key/keys command"),
-            )?))
-        }
+        ))),
+        "spawn_sh" | "spawn-sh" => Ok(ActionStep::Niri(NiriCommand::spawn_sh(
+            value
+                .keys
+                .or(value.key)
+                .ok_or_else(|| anyhow!("spawn_sh step is missing key/keys command"))?,
+        ))),
         "delay" | "delay_ms" => Ok(ActionStep::DelayMs(
             value
                 .ms

@@ -9,7 +9,7 @@ use crate::action::ActionStep;
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::key::{modifier_mask_for_key, KeyChord, XKB_MOD_SUPER};
 use crate::keymap::{GestureAction, LastKeySequence};
-use crate::niri_backend::{spawn_niri_action, spawn_niri_command, spawn_niri_shell};
+use crate::niri_backend::spawn_niri_action;
 use touchdeck::ime::TouchDeckEvent;
 
 #[derive(Default)]
@@ -127,10 +127,11 @@ impl ActionExecutor {
         match action {
             GestureAction::Niri(action) => {
                 eprintln!("touchdeck: niri action {action}");
+                let label = action.label().to_string();
                 spawn_niri_action(action);
                 ExecutorOutcome {
                     exit: false,
-                    last_action: Some(action.as_str().to_string()),
+                    last_action: Some(label),
                 }
             }
             GestureAction::KeySequence(sequence) => {
@@ -332,20 +333,8 @@ impl ActionExecutor {
                 }
                 ActionStep::Niri(action) => {
                     eprintln!("touchdeck: niri action {action}");
-                    spawn_niri_action(*action);
-                    outcome.last_action = Some(action.as_str().to_string());
-                }
-                ActionStep::Spawn(command) => {
-                    if !command.is_empty() {
-                        eprintln!("touchdeck: niri spawn {}", command.join(" "));
-                        spawn_niri_command(command.clone());
-                        outcome.last_action = Some(format!("spawn {}", command.join(" ")));
-                    }
-                }
-                ActionStep::SpawnSh(command) => {
-                    eprintln!("touchdeck: niri spawn-sh {command}");
-                    spawn_niri_shell(command.clone());
-                    outcome.last_action = Some(format!("spawn-sh {command}"));
+                    spawn_niri_action(action.clone());
+                    outcome.last_action = Some(action.label().to_string());
                 }
                 ActionStep::DelayMs(ms) => {
                     std::thread::sleep(Duration::from_millis(u64::from(*ms)));
@@ -492,7 +481,7 @@ impl ActionExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::NiriAction;
+    use crate::action::{parse_niri_action, NiriCommand};
     use crate::config::{InputConfig, TextOutputBackend, TextOutputConfig, TouchInputBackend};
     use crate::key::*;
     use crate::keymap::MacroRegistry;
@@ -508,11 +497,11 @@ mod tests {
                 sunshine_router_socket: std::path::PathBuf::from("/tmp/touchdeck-test.sock"),
                 evdev_grab: true,
             },
-            action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
-            action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
-            action_swipe_up: Some(NiriAction::FocusColumnRight),
-            action_swipe_down: Some(NiriAction::FocusColumnLeft),
-            action_two_finger_tap: Some(NiriAction::ToggleOverview),
+            action_swipe_left: Some(niri("focus-workspace-down")),
+            action_swipe_right: Some(niri("focus-workspace-up")),
+            action_swipe_up: Some(niri("focus-column-right")),
+            action_swipe_down: Some(niri("focus-column-left")),
+            action_two_finger_tap: Some(niri("toggle-overview")),
             tap_radius: 48.0,
             two_finger_tap_ms: 350,
             exit_tap_ms: 450,
@@ -540,6 +529,10 @@ mod tests {
             exit_corner_ratio: 0.12,
             exit_corner_tap_ms: 350,
         }
+    }
+
+    fn niri(action: &str) -> NiriCommand {
+        parse_niri_action(action).unwrap()
     }
 
     fn press_for_test(
