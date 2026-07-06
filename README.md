@@ -18,9 +18,6 @@ The normal runtime is a single binary:
 
 - `touchdeck`: the fullscreen layer-shell overlay, gesture engine, keymap engine, niri dispatcher, key sender, and embedded librime IME runtime.
 
-There is still a `touchdeck-ime` binary for focused protocol/debug work, but the
-default Rime path no longer requires starting it separately.
-
 For application-specific setup, see [Usage scenarios](docs/usage-scenarios.md).
 
 ## Quick start
@@ -305,7 +302,7 @@ Supported values:
 `virtual-keyboard` is simple but may bypass input methods depending on compositor
 routing. `ime` is the preferred path for Rime input.
 
-## touchdeck-ime and Rime
+## Embedded IME and Rime
 
 The embedded touchdeck-ime runtime is a minimal Wayland input-method-v2 frontend
 backed by librime.
