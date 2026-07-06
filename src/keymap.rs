@@ -153,7 +153,7 @@ impl Keymap {
 
                 if is_double_tap {
                     *query.last_tap = None;
-                    return binding.behavior.clone().into_action();
+                    return binding.behavior.action_for_contact(contact);
                 }
 
                 *query.last_tap = Some(TapRecord {
@@ -172,7 +172,7 @@ impl Keymap {
                 .trigger
                 .matches_release(kind, query.gesture, query.config, query.context.size)
         })
-        .map(|binding| binding.behavior.clone().into_action())
+        .map(|binding| binding.behavior.action_for_contact(contact))
         .unwrap_or(GestureAction::None)
     }
 
@@ -640,6 +640,7 @@ pub(crate) fn gesture_centroid(gesture: &Gesture) -> Option<(f64, f64, f64, f64)
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Behavior {
     Niri(NiriCommand),
+    NiriFocusAtTouch,
     NiriInteractiveMove,
     NiriInteractiveResize {
         edge: NiriResizeEdge,
@@ -718,6 +719,7 @@ impl Behavior {
     fn into_action(self) -> GestureAction {
         match self {
             Self::Niri(action) => GestureAction::Niri(action),
+            Self::NiriFocusAtTouch => GestureAction::None,
             Self::NiriInteractiveMove => GestureAction::NiriInteractiveMove,
             Self::NiriInteractiveResize {
                 edge,
@@ -781,11 +783,37 @@ impl Behavior {
             Self::Transparent | Self::NoOp => GestureAction::None,
         }
     }
+
+    fn action_for_contact(&self, contact: &Contact) -> GestureAction {
+        match self {
+            Self::NiriFocusAtTouch => GestureAction::NiriFocusAt {
+                x: contact.start_x,
+                y: contact.start_y,
+            },
+            Self::ModMorph {
+                mods,
+                keep_mods,
+                normal,
+                morph,
+            } => GestureAction::ModMorph {
+                mods: *mods,
+                keep_mods: *keep_mods,
+                normal: Box::new(normal.action_for_contact(contact)),
+                morph: Box::new(morph.action_for_contact(contact)),
+            },
+            Self::HoldTap { tap, .. } => tap.action_for_contact(contact),
+            _ => self.clone().into_action(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum GestureAction {
     Niri(NiriCommand),
+    NiriFocusAt {
+        x: f64,
+        y: f64,
+    },
     NiriInteractiveMove,
     NiriInteractiveResize {
         edge: NiriResizeEdge,
@@ -842,6 +870,7 @@ impl GestureAction {
 fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
         Behavior::Niri(action) => Some(action.label().to_string()),
+        Behavior::NiriFocusAtTouch => Some("focus-at".to_string()),
         Behavior::NiriInteractiveMove => Some("drag".to_string()),
         Behavior::NiriInteractiveResize { edge, .. } => Some(format!("resize:{}", edge.as_str())),
         Behavior::KeySequence(sequence) => key_sequence_label(sequence),

@@ -227,6 +227,7 @@ key_n8 = "&niri focus-workspace 8"
 key_n9 = "&niri focus-workspace 9"
 key_n0 = "&niri focus-workspace 10"
 key_q = "&spawn foot"
+key_s = "&niri screenshot"
 key_c = "&niri close-window"
 key_e = "&spawn nautilus"
 key_r = "&spawn rofi -show drun"
@@ -301,6 +302,20 @@ mode = "niri_locked"
 layer = "niri"
 trigger = { type = "double_tap", target = "left_bottom", max_ms = 280 }
 behavior = { type = "mode", mode = "base" }
+
+[[bindings]]
+mode = "niri"
+layer = "niri"
+trigger = { type = "double_tap", target = "full", max_ms = 280 }
+behavior = { type = "niri_focus_at_touch" }
+priority = -10
+
+[[bindings]]
+mode = "niri_locked"
+layer = "niri"
+trigger = { type = "double_tap", target = "full", max_ms = 280 }
+behavior = { type = "niri_focus_at_touch" }
+priority = -10
 
 [[bindings]]
 mode = "niri"
@@ -455,13 +470,13 @@ behavior = { type = "exit" }
 [[bindings]]
 mode = "niri-momentary"
 layer = "niri"
-trigger = { type = "drag", target = "full", fingers = 2, min_px = 500 }
+trigger = { type = "drag", target = "full", fingers = 2, min_px = 800 }
 behavior = { type = "niri_interactive_move" }
 
 [[bindings]]
 mode = "niri-locked"
 layer = "niri"
-trigger = { type = "drag", target = "full", fingers = 2, min_px = 500 }
+trigger = { type = "drag", target = "full", fingers = 2, min_px = 800 }
 behavior = { type = "niri_interactive_move" }
 
 # Niri mode sticky resize.

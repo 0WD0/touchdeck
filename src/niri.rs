@@ -122,6 +122,19 @@ pub fn focused_output_name() -> Result<Option<String>> {
         .map(str::to_string))
 }
 
+pub fn focus_window_at(output: Option<&str>, x: f64, y: f64) -> Result<()> {
+    let request = serde_json::to_string(&niri_ipc::Request::Action(
+        niri_ipc::Action::FocusWindowAt {
+            output: output.map(str::to_string),
+            x,
+            y,
+        },
+    ))
+    .context("serialize niri focus-window-at request")?;
+    let _ = send_ipc_request_json(&request)?;
+    Ok(())
+}
+
 pub fn send_ipc_request_json(request: &str) -> Result<serde_json::Value> {
     let socket_path = env::var_os("NIRI_SOCKET")
         .map(PathBuf::from)

@@ -1013,6 +1013,7 @@ fn parse_behavior(
                 .as_deref()
                 .ok_or_else(|| anyhow!("niri behavior is missing action"))?,
         )?)),
+        "niri_focus_at_touch" | "focus_at_touch" => Ok(Behavior::NiriFocusAtTouch),
         "niri_interactive_move" | "interactive_move" => Ok(Behavior::NiriInteractiveMove),
         "niri_interactive_resize" | "interactive_resize" => Ok(Behavior::NiriInteractiveResize {
             edge: parse_niri_resize_edge(
@@ -1500,6 +1501,7 @@ fn parse_behavior_invocation_kind(
                 .ok_or_else(|| anyhow!("&niri is missing action"))?;
             Ok(Behavior::Niri(parse_niri_action(&action)?))
         }
+        "niri_focus_at_touch" | "focus_at_touch" => Ok(Behavior::NiriFocusAtTouch),
         "niri_interactive_move" | "interactive_move" => Ok(Behavior::NiriInteractiveMove),
         "niri_interactive_resize" | "interactive_resize" => {
             let edge = fields

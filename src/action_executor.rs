@@ -9,7 +9,7 @@ use crate::action::ActionStep;
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
 use crate::key::{modifier_mask_for_key, KeyChord, XKB_MOD_SUPER};
 use crate::keymap::{GestureAction, LastKeySequence};
-use crate::niri_backend::spawn_niri_action;
+use crate::niri_backend::{spawn_niri_action, spawn_niri_focus_at};
 use touchdeck::ime::TouchDeckEvent;
 
 #[derive(Default)]
@@ -132,6 +132,14 @@ impl ActionExecutor {
                 ExecutorOutcome {
                     exit: false,
                     last_action: Some(label),
+                }
+            }
+            GestureAction::NiriFocusAt { x, y } => {
+                eprintln!("touchdeck: niri focus-at x={x:.1} y={y:.1}");
+                spawn_niri_focus_at(x, y);
+                ExecutorOutcome {
+                    exit: false,
+                    last_action: Some("focus-at".to_string()),
                 }
             }
             GestureAction::KeySequence(sequence) => {

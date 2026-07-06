@@ -735,6 +735,7 @@ impl Engine {
 
         match action {
             GestureAction::Niri(_)
+            | GestureAction::NiriFocusAt { .. }
             | GestureAction::NiriInteractiveMove
             | GestureAction::KeySequence(_)
             | GestureAction::KeySequenceWithOptions { .. }

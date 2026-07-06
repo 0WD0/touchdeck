@@ -921,11 +921,15 @@ impl App {
                     self.apply_capture_policy(qh, index, &old_policy, &policy)
                 }
                 EngineEffect::Dispatch(action) => {
-                    let outcome =
-                        self.executor
-                            .dispatch_action(action, self.now_ms(), &self.config);
-                    self.apply_executor_outcome(index, outcome);
-                    self.redraw_ime_if_dirty(qh)
+                    if let keymap::GestureAction::NiriFocusAt { x, y } = action {
+                        self.send_focus_window_at(index, x, y)
+                    } else {
+                        let outcome =
+                            self.executor
+                                .dispatch_action(action, self.now_ms(), &self.config);
+                        self.apply_executor_outcome(index, outcome);
+                        self.redraw_ime_if_dirty(qh)
+                    }
                 }
                 EngineEffect::Press { hold_id, action } => {
                     let outcome =
@@ -983,6 +987,12 @@ impl App {
         let output = self.niri_output_name_for_session(index)?;
         niri_backend::send_niri_interactive_move_begin(&output, x, y)
             .with_context(|| format!("send niri interactive move begin to {output}"))
+    }
+
+    fn send_focus_window_at(&self, index: usize, x: f64, y: f64) -> Result<()> {
+        let output = self.niri_output_name_for_session(index)?;
+        niri_backend::send_niri_focus_at(Some(&output), x, y)
+            .with_context(|| format!("send niri focus window at x={x:.1} y={y:.1} to {output}"))
     }
 
     fn send_interactive_move_update(
