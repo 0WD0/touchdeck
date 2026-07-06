@@ -55,6 +55,7 @@ impl Overlay {
                 | zwlr_layer_surface_v1::Anchor::Right,
         );
         layer_surface.set_size(0, 0);
+        layer_surface.set_exclusive_zone(-1);
         layer_surface
             .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
 

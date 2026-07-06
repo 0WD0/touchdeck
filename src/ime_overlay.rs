@@ -1,7 +1,7 @@
 use touchdeck::niri;
 use touchdeck::protocol::{ImeCandidate, ImeCursorRect, ImeStatus};
 
-use crate::geometry::{transform_rect_to_overlay, transformed_source_size, RectPx};
+use crate::geometry::RectPx;
 use crate::mode::Mode;
 use crate::renderer::{draw_rect_frame, fill_rect, CanvasSize, TextRenderer, TextStyle};
 
@@ -399,47 +399,9 @@ fn x11_ime_anchor(
 
     let (window_output_x, window_output_y, output_window_w, output_window_h) =
         layout.window_rect_in_output;
-    let (workarea_x, workarea_y, workarea_w, workarea_h) = layout.working_area_in_output;
-    let output_layout = match niri::focused_output_layout() {
-        Ok(Some(output)) => output,
-        Ok(None) => {
-            if log_geometry() {
-                eprintln!(
-                    "touchdeck: ime geometry x11-root no focused niri output window=({}, {} {}x{}) raw=({}, {} {}x{})",
-                    window_x,
-                    window_y,
-                    window_w,
-                    window_h,
-                    cursor_rect.x,
-                    cursor_rect.y,
-                    cursor_rect.w,
-                    cursor_rect.h
-                );
-            }
-            return None;
-        }
-        Err(err) => {
-            eprintln!(
-                "touchdeck: failed to query niri focused output for xwayland IME popup: {err:?}"
-            );
-            return None;
-        }
-    };
-    let (mut source_output_w, mut source_output_h) = transformed_source_size(output_layout);
-    source_output_w = source_output_w.max(workarea_x + workarea_w);
-    source_output_h = source_output_h.max(workarea_y + workarea_h);
-    let (workarea_overlay_x, workarea_overlay_y, workarea_overlay_w, workarea_overlay_h) =
-        transform_rect_to_overlay(
-            output_layout.transform,
-            workarea_x,
-            workarea_y,
-            workarea_w,
-            workarea_h,
-            source_output_w,
-            source_output_h,
-        );
-    let origin_x = window_output_x - workarea_overlay_x;
-    let origin_y = window_output_y - workarea_overlay_y;
+    let output_layout = niri::focused_output_layout().ok().flatten();
+    let origin_x = window_output_x;
+    let origin_y = window_output_y;
     let window_size_w = output_window_w as f64;
     let window_size_h = output_window_h as f64;
     if window_size_w <= 0.0 || window_size_h <= 0.0 {
@@ -451,7 +413,7 @@ fn x11_ime_anchor(
     if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
         if log_geometry() {
             eprintln!(
-                "touchdeck: ime geometry x11-root invalid scale raw=({}, {} {}x{}) x11_window=({}, {} {}x{}) niri_output={}x{} {:?} niri_window_rect=({:.2}, {:.2} {}x{}) niri_workarea=({:.2}, {:.2} {:.2}x{:.2}) workarea_overlay=({:.2}, {:.2} {:.2}x{:.2}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4})",
+                "touchdeck: ime geometry x11-root invalid scale raw=({}, {} {}x{}) x11_window=({}, {} {}x{}) niri_output={:?} niri_window_rect=({:.2}, {:.2} {}x{}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4})",
                 cursor_rect.x,
                 cursor_rect.y,
                 cursor_rect.w,
@@ -460,21 +422,11 @@ fn x11_ime_anchor(
                 window_y,
                 window_w,
                 window_h,
-                output_layout.width,
-                output_layout.height,
-                output_layout.transform,
+                output_layout,
                 window_output_x,
                 window_output_y,
                 output_window_w,
                 output_window_h,
-                workarea_x,
-                workarea_y,
-                workarea_w,
-                workarea_h,
-                workarea_overlay_x,
-                workarea_overlay_y,
-                workarea_overlay_w,
-                workarea_overlay_h,
                 origin_x,
                 origin_y,
                 scale_x,
@@ -496,7 +448,7 @@ fn x11_ime_anchor(
 
     if log_geometry() {
         eprintln!(
-            "touchdeck: ime geometry x11-root raw=({}, {} {}x{}) root={:?}x{:?} x11_window=({}, {} {}x{}) niri_output={}x{} {:?} niri_window_rect=({:.2}, {:.2} {}x{}) niri_workarea=({:.2}, {:.2} {:.2}x{:.2}) workarea_overlay=({:.2}, {:.2} {:.2}x{:.2}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4}) local=({:.2}, {:.2}) anchor=({}, {} h={}) screen={}x{}",
+            "touchdeck: ime geometry x11-root raw=({}, {} {}x{}) root={:?}x{:?} x11_window=({}, {} {}x{}) niri_output={:?} niri_window_rect=({:.2}, {:.2} {}x{}) overlay_origin=({:.2}, {:.2}) scale=({:.4}, {:.4}) local=({:.2}, {:.2}) anchor=({}, {} h={}) screen={}x{}",
             cursor_rect.x,
             cursor_rect.y,
             cursor_rect.w,
@@ -507,21 +459,11 @@ fn x11_ime_anchor(
             window_y,
             window_w,
             window_h,
-            output_layout.width,
-            output_layout.height,
-            output_layout.transform,
+            output_layout,
             window_output_x,
             window_output_y,
             output_window_w,
             output_window_h,
-            workarea_x,
-            workarea_y,
-            workarea_w,
-            workarea_h,
-            workarea_overlay_x,
-            workarea_overlay_y,
-            workarea_overlay_w,
-            workarea_overlay_h,
             origin_x,
             origin_y,
             scale_x,

@@ -1134,34 +1134,9 @@ fn map_x11_cursor_to_surface(
         return None;
     }
 
-    let output_layout = match niri::focused_output_layout() {
-        Ok(Some(output)) => output,
-        Ok(None) => {
-            eprintln!("touchdeck-ime: xim cursor rect has no focused niri output");
-            return None;
-        }
-        Err(err) => {
-            eprintln!("touchdeck-ime: failed to query niri focused output for xim cursor: {err:?}");
-            return None;
-        }
-    };
-
-    let (workarea_x, workarea_y, workarea_w, workarea_h) = layout.working_area_in_output;
-    let (mut source_output_w, mut source_output_h) = transformed_source_size(output_layout);
-    source_output_w = source_output_w.max(workarea_x + workarea_w);
-    source_output_h = source_output_h.max(workarea_y + workarea_h);
-    let (workarea_overlay_x, workarea_overlay_y, workarea_overlay_w, workarea_overlay_h) =
-        transform_rect_to_overlay(
-            output_layout.transform,
-            workarea_x,
-            workarea_y,
-            workarea_w,
-            workarea_h,
-            source_output_w,
-            source_output_h,
-        );
-    let origin_x = window_output_x - workarea_overlay_x;
-    let origin_y = window_output_y - workarea_overlay_y;
+    let output_layout = niri::focused_output_layout().ok().flatten();
+    let origin_x = window_output_x;
+    let origin_y = window_output_y;
     let scale_x = f64::from(top_level.w) / f64::from(window_output_w);
     let scale_y = f64::from(top_level.h) / f64::from(window_output_h);
     if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
@@ -1175,85 +1150,16 @@ fn map_x11_cursor_to_surface(
     let surface_h = (f64::from(x11_h.max(0)) / scale_y).round() as i32;
 
     eprintln!(
-        "touchdeck-ime: xim surface geometry x11-root=({x11_x},{x11_y} h={x11_h}) top=0x{:x}=({},{} {}x{}) niri_output={}x{} {:?} niri_window=({window_output_x:.2},{window_output_y:.2} {window_output_w}x{window_output_h}) niri_workarea=({workarea_x:.2},{workarea_y:.2} {workarea_w:.2}x{workarea_h:.2}) workarea_overlay=({workarea_overlay_x:.2},{workarea_overlay_y:.2} {workarea_overlay_w:.2}x{workarea_overlay_h:.2}) overlay_origin=({origin_x:.2},{origin_y:.2}) scale=({scale_x:.4},{scale_y:.4}) surface=({surface_x},{surface_y} h={surface_h})",
+        "touchdeck-ime: xim surface geometry x11-root=({x11_x},{x11_y} h={x11_h}) top=0x{:x}=({},{} {}x{}) niri_output={:?} niri_window=({window_output_x:.2},{window_output_y:.2} {window_output_w}x{window_output_h}) overlay_origin=({origin_x:.2},{origin_y:.2}) scale=({scale_x:.4},{scale_y:.4}) surface=({surface_x},{surface_y} h={surface_h})",
         top_level.window,
         top_level.x,
         top_level.y,
         top_level.w,
         top_level.h,
-        output_layout.width,
-        output_layout.height,
-        output_layout.transform
+        output_layout
     );
 
     Some((surface_x, surface_y, surface_h))
-}
-
-fn transformed_source_size(output: niri::FocusedOutputLayout) -> (f64, f64) {
-    match output.transform {
-        niri::OutputTransform::_90
-        | niri::OutputTransform::_270
-        | niri::OutputTransform::Flipped90
-        | niri::OutputTransform::Flipped270 => (f64::from(output.height), f64::from(output.width)),
-        niri::OutputTransform::Normal
-        | niri::OutputTransform::_180
-        | niri::OutputTransform::Flipped
-        | niri::OutputTransform::Flipped180 => (f64::from(output.width), f64::from(output.height)),
-    }
-}
-
-fn transform_rect_to_overlay(
-    transform: niri::OutputTransform,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    source_w: f64,
-    source_h: f64,
-) -> (f64, f64, f64, f64) {
-    let points = [
-        transform_point_to_overlay(transform, x, y, source_w, source_h),
-        transform_point_to_overlay(transform, x + w, y, source_w, source_h),
-        transform_point_to_overlay(transform, x, y + h, source_w, source_h),
-        transform_point_to_overlay(transform, x + w, y + h, source_w, source_h),
-    ];
-    let min_x = points
-        .iter()
-        .map(|point| point.0)
-        .fold(f64::INFINITY, f64::min);
-    let min_y = points
-        .iter()
-        .map(|point| point.1)
-        .fold(f64::INFINITY, f64::min);
-    let max_x = points
-        .iter()
-        .map(|point| point.0)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let max_y = points
-        .iter()
-        .map(|point| point.1)
-        .fold(f64::NEG_INFINITY, f64::max);
-
-    (min_x, min_y, max_x - min_x, max_y - min_y)
-}
-
-fn transform_point_to_overlay(
-    transform: niri::OutputTransform,
-    x: f64,
-    y: f64,
-    source_w: f64,
-    source_h: f64,
-) -> (f64, f64) {
-    match transform {
-        niri::OutputTransform::Normal => (x, y),
-        niri::OutputTransform::_90 => (y, source_w - x),
-        niri::OutputTransform::_180 => (source_w - x, source_h - y),
-        niri::OutputTransform::_270 => (source_h - y, x),
-        niri::OutputTransform::Flipped => (source_w - x, y),
-        niri::OutputTransform::Flipped90 => (y, x),
-        niri::OutputTransform::Flipped180 => (x, source_h - y),
-        niri::OutputTransform::Flipped270 => (source_h - y, source_w - x),
-    }
 }
 impl Dispatch<wl_registry::WlRegistry, ()> for ImeApp {
     fn event(
