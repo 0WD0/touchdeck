@@ -89,10 +89,18 @@ pub(crate) enum NiriAction {
     MoveWindowUp,
     MoveWindowDownOrToWorkspaceDown,
     MoveWindowUpOrToWorkspaceUp,
-    MoveWindowToWorkspaceDown { focus: bool },
-    MoveWindowToWorkspaceUp { focus: bool },
-    MoveColumnToWorkspaceDown { focus: bool },
-    MoveColumnToWorkspaceUp { focus: bool },
+    MoveWindowToWorkspaceDown {
+        focus: bool,
+    },
+    MoveWindowToWorkspaceUp {
+        focus: bool,
+    },
+    MoveColumnToWorkspaceDown {
+        focus: bool,
+    },
+    MoveColumnToWorkspaceUp {
+        focus: bool,
+    },
     ConsumeOrExpelWindowLeft,
     ConsumeOrExpelWindowRight,
     ConsumeWindowIntoColumn,
@@ -263,7 +271,9 @@ impl NiriAction {
             Self::FocusColumnLast => action("FocusColumnLast", object()),
             Self::FocusColumnRightOrFirst => action("FocusColumnRightOrFirst", object()),
             Self::FocusColumnLeftOrLast => action("FocusColumnLeftOrLast", object()),
-            Self::FocusColumn(index) => action("FocusColumn", field("index", Value::from(index as u64))),
+            Self::FocusColumn(index) => {
+                action("FocusColumn", field("index", Value::from(index as u64)))
+            }
             Self::FocusWindowDown => action("FocusWindowDown", object()),
             Self::FocusWindowUp => action("FocusWindowUp", object()),
             Self::FocusWindowTop => action("FocusWindowTop", object()),
@@ -280,31 +290,38 @@ impl NiriAction {
             Self::MoveColumnRight => action("MoveColumnRight", object()),
             Self::MoveColumnToFirst => action("MoveColumnToFirst", object()),
             Self::MoveColumnToLast => action("MoveColumnToLast", object()),
-            Self::MoveColumnLeftOrToMonitorLeft => action("MoveColumnLeftOrToMonitorLeft", object()),
+            Self::MoveColumnLeftOrToMonitorLeft => {
+                action("MoveColumnLeftOrToMonitorLeft", object())
+            }
             Self::MoveColumnRightOrToMonitorRight => {
                 action("MoveColumnRightOrToMonitorRight", object())
             }
-            Self::MoveColumnToIndex(index) => {
-                action("MoveColumnToIndex", field("index", Value::from(index as u64)))
-            }
+            Self::MoveColumnToIndex(index) => action(
+                "MoveColumnToIndex",
+                field("index", Value::from(index as u64)),
+            ),
             Self::MoveWindowDown => action("MoveWindowDown", object()),
             Self::MoveWindowUp => action("MoveWindowUp", object()),
             Self::MoveWindowDownOrToWorkspaceDown => {
                 action("MoveWindowDownOrToWorkspaceDown", object())
             }
             Self::MoveWindowUpOrToWorkspaceUp => action("MoveWindowUpOrToWorkspaceUp", object()),
-            Self::MoveWindowToWorkspaceDown { focus } => {
-                action("MoveWindowToWorkspaceDown", field("focus", Value::from(focus)))
-            }
-            Self::MoveWindowToWorkspaceUp { focus } => {
-                action("MoveWindowToWorkspaceUp", field("focus", Value::from(focus)))
-            }
-            Self::MoveColumnToWorkspaceDown { focus } => {
-                action("MoveColumnToWorkspaceDown", field("focus", Value::from(focus)))
-            }
-            Self::MoveColumnToWorkspaceUp { focus } => {
-                action("MoveColumnToWorkspaceUp", field("focus", Value::from(focus)))
-            }
+            Self::MoveWindowToWorkspaceDown { focus } => action(
+                "MoveWindowToWorkspaceDown",
+                field("focus", Value::from(focus)),
+            ),
+            Self::MoveWindowToWorkspaceUp { focus } => action(
+                "MoveWindowToWorkspaceUp",
+                field("focus", Value::from(focus)),
+            ),
+            Self::MoveColumnToWorkspaceDown { focus } => action(
+                "MoveColumnToWorkspaceDown",
+                field("focus", Value::from(focus)),
+            ),
+            Self::MoveColumnToWorkspaceUp { focus } => action(
+                "MoveColumnToWorkspaceUp",
+                field("focus", Value::from(focus)),
+            ),
             Self::ConsumeOrExpelWindowLeft => {
                 action("ConsumeOrExpelWindowLeft", object_with_null_id())
             }
@@ -316,17 +333,19 @@ impl NiriAction {
             Self::SwapWindowLeft => action("SwapWindowLeft", object()),
             Self::SwapWindowRight => action("SwapWindowRight", object()),
             Self::ToggleColumnTabbedDisplay => action("ToggleColumnTabbedDisplay", object()),
-            Self::SetColumnDisplay(display) => {
-                action("SetColumnDisplay", field("display", column_display(display)))
-            }
+            Self::SetColumnDisplay(display) => action(
+                "SetColumnDisplay",
+                field("display", column_display(display)),
+            ),
             Self::CenterColumn => action("CenterColumn", object()),
             Self::CenterWindow => action("CenterWindow", object_with_null_id()),
             Self::CenterVisibleColumns => action("CenterVisibleColumns", object()),
             Self::FocusWorkspaceDown => action("FocusWorkspaceDown", object()),
             Self::FocusWorkspaceUp => action("FocusWorkspaceUp", object()),
-            Self::FocusWorkspace(reference) => {
-                action("FocusWorkspace", field("reference", workspace_reference(reference)))
-            }
+            Self::FocusWorkspace(reference) => action(
+                "FocusWorkspace",
+                field("reference", workspace_reference(reference)),
+            ),
             Self::FocusWorkspacePrevious => action("FocusWorkspacePrevious", object()),
             Self::MoveWorkspaceDown => action("MoveWorkspaceDown", object()),
             Self::MoveWorkspaceUp => action("MoveWorkspaceUp", object()),
@@ -670,7 +689,10 @@ fn parse_position_pair(value: &str) -> Result<(PositionChange, PositionChange)> 
     let (x, y) = value
         .split_once(',')
         .ok_or_else(|| anyhow!("move-floating-window expects x,y, for example +40,+0"))?;
-    Ok((parse_position_change(x.trim())?, parse_position_change(y.trim())?))
+    Ok((
+        parse_position_change(x.trim())?,
+        parse_position_change(y.trim())?,
+    ))
 }
 
 fn has_sign(value: &str) -> bool {
@@ -770,7 +792,9 @@ mod tests {
             r#"{"Action":{"MoveFloatingWindow":{"id":null,"x":{"AdjustFixed":40.0},"y":{"AdjustFixed":-10.0}}}}"#
         );
         assert_eq!(
-            niri_action_request_json(parse_niri_action("move-window-to-workspace-up:false").unwrap()),
+            niri_action_request_json(
+                parse_niri_action("move-window-to-workspace-up:false").unwrap()
+            ),
             r#"{"Action":{"MoveWindowToWorkspaceUp":{"focus":false}}}"#
         );
     }

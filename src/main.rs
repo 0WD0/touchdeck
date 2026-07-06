@@ -404,12 +404,15 @@ impl App {
         if self.sunshine_router.is_some() {
             return Ok(());
         }
-        self.sunshine_router = Some(SunshineRouter::bind(&self.config.input.sunshine_router_socket)?);
+        self.sunshine_router = Some(SunshineRouter::bind(
+            &self.config.input.sunshine_router_socket,
+        )?);
         Ok(())
     }
 
     fn ensure_wayland_session(&mut self) {
-        if self.config.input.touch_backend != TouchInputBackend::Wayland || !self.sessions.is_empty()
+        if self.config.input.touch_backend != TouchInputBackend::Wayland
+            || !self.sessions.is_empty()
         {
             return;
         }
@@ -466,7 +469,10 @@ impl App {
                 session.id
             );
         } else {
-            eprintln!("touchdeck: binding session {} without explicit output", session.id);
+            eprintln!(
+                "touchdeck: binding session {} without explicit output",
+                session.id
+            );
         }
 
         let capture_policy = session.capture_policy.clone();
@@ -576,7 +582,9 @@ impl App {
             .sessions
             .iter()
             .enumerate()
-            .filter_map(|(index, session)| (session.overlay_output_global == Some(name)).then_some(index))
+            .filter_map(|(index, session)| {
+                (session.overlay_output_global == Some(name)).then_some(index)
+            })
             .collect::<Vec<_>>();
         for index in affected {
             self.reset_overlay_binding(qh, index, &reason);
@@ -596,15 +604,17 @@ impl App {
                 deadline = Some(deadline.map_or(next, |deadline: u64| deadline.min(next)));
             }
             if let Some(hint) = session.mode_hint {
-                deadline = Some(deadline.map_or(hint.until_ms, |deadline: u64| deadline.min(hint.until_ms)));
+                deadline = Some(
+                    deadline.map_or(hint.until_ms, |deadline: u64| deadline.min(hint.until_ms)),
+                );
             }
             if let Some(retry_at) = session.raw_touch_retry_at_ms {
                 deadline = Some(deadline.map_or(retry_at, |deadline: u64| deadline.min(retry_at)));
             }
             if let Some(discard_until) = session.raw_discard_until_ms {
-                deadline = Some(deadline.map_or(discard_until, |deadline: u64| {
-                    deadline.min(discard_until)
-                }));
+                deadline = Some(
+                    deadline.map_or(discard_until, |deadline: u64| deadline.min(discard_until)),
+                );
             }
         }
         if self.ime_status_rx.is_some() {
@@ -728,7 +738,15 @@ impl App {
         let mut session = self.sessions.remove(index);
         let mut overlay = std::mem::take(&mut session.overlay);
         let result = overlay.attach_buffer(&shm, qh, width, height, |mmap, width, height| {
-            render_session_overlay(&config, &ime_status, now_ms, &mut session, mmap, width, height);
+            render_session_overlay(
+                &config,
+                &ime_status,
+                now_ms,
+                &mut session,
+                mmap,
+                width,
+                height,
+            );
         });
         session.overlay = overlay;
         self.sessions.insert(index, session);
@@ -762,12 +780,12 @@ impl App {
             CapturePolicy::None
         } else {
             match self.config.input.touch_backend {
-            TouchInputBackend::Wayland => policy.clone(),
-            TouchInputBackend::Evdev => match policy {
-                CapturePolicy::Zones(_) => policy.clone(),
-                CapturePolicy::Fullscreen | CapturePolicy::None => CapturePolicy::None,
-            },
-            TouchInputBackend::SunshineRouter => CapturePolicy::None,
+                TouchInputBackend::Wayland => policy.clone(),
+                TouchInputBackend::Evdev => match policy {
+                    CapturePolicy::Zones(_) => policy.clone(),
+                    CapturePolicy::Fullscreen | CapturePolicy::None => CapturePolicy::None,
+                },
+                TouchInputBackend::SunshineRouter => CapturePolicy::None,
             }
         };
         session
@@ -872,8 +890,7 @@ impl App {
         }
 
         if self.sessions[index].raw_discard_active.is_empty()
-            && self
-                .sessions[index]
+            && self.sessions[index]
                 .raw_discard_until_ms
                 .is_some_and(|until_ms| self.now_ms() >= until_ms)
         {
@@ -904,23 +921,23 @@ impl App {
                     self.apply_capture_policy(qh, index, &old_policy, &policy)
                 }
                 EngineEffect::Dispatch(action) => {
-                    let outcome = self
-                        .executor
-                        .dispatch_action(action, self.now_ms(), &self.config);
+                    let outcome =
+                        self.executor
+                            .dispatch_action(action, self.now_ms(), &self.config);
                     self.apply_executor_outcome(index, outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
                 EngineEffect::Press { hold_id, action } => {
-                    let outcome = self
-                        .executor
-                        .press_action(hold_id, action, self.now_ms(), &self.config);
+                    let outcome =
+                        self.executor
+                            .press_action(hold_id, action, self.now_ms(), &self.config);
                     self.apply_executor_outcome(index, outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
                 EngineEffect::Release { hold_id } => {
-                    let outcome = self
-                        .executor
-                        .release_action(hold_id, self.now_ms(), &self.config);
+                    let outcome =
+                        self.executor
+                            .release_action(hold_id, self.now_ms(), &self.config);
                     self.apply_executor_outcome(index, outcome);
                     self.redraw_ime_if_dirty(qh)
                 }
@@ -1031,10 +1048,7 @@ impl App {
             return;
         }
 
-        session.mode_hint = Some(ModeHint {
-            mode,
-            until_ms,
-        });
+        session.mode_hint = Some(ModeHint { mode, until_ms });
     }
 
     fn record_trace(&mut self, event: TraceEvent) {
@@ -1152,7 +1166,10 @@ impl App {
         let now_ms = self.now_ms();
         self.record_trace(TraceEvent::Cancel { t: now_ms });
         if self.config.log_touch {
-            eprintln!("touchdeck: session={} touch cancel", self.sessions[index].id);
+            eprintln!(
+                "touchdeck: session={} touch cancel",
+                self.sessions[index].id
+            );
         }
 
         let config = self.config.clone();
@@ -1360,7 +1377,9 @@ impl App {
         self.sessions
             .iter()
             .enumerate()
-            .filter_map(|(index, session)| session.raw_touch.as_ref().map(|touch| (index, touch.fd())))
+            .filter_map(|(index, session)| {
+                session.raw_touch.as_ref().map(|touch| (index, touch.fd()))
+            })
             .collect()
     }
 
@@ -1502,7 +1521,8 @@ impl App {
 
     fn reconnect_missing_raw_touches(&mut self, qh: &QueueHandle<Self>, now_ms: u64) {
         for index in 0..self.sessions.len() {
-            if self.sessions[index].raw_touch.is_some() || self.sessions[index].touch_device.is_none()
+            if self.sessions[index].raw_touch.is_some()
+                || self.sessions[index].touch_device.is_none()
             {
                 continue;
             }
@@ -1528,12 +1548,7 @@ impl App {
         })
     }
 
-    fn connect_raw_touch_session(
-        &mut self,
-        qh: &QueueHandle<Self>,
-        index: usize,
-        now_ms: u64,
-    ) {
+    fn connect_raw_touch_session(&mut self, qh: &QueueHandle<Self>, index: usize, now_ms: u64) {
         let Some(path) = self.sessions[index].touch_device.clone() else {
             return;
         };
@@ -1544,7 +1559,8 @@ impl App {
                 let should_grab = self.raw_touch_should_grab(index, &policy);
                 if let Err(err) = raw_touch.set_grab(should_grab) {
                     let message = format!("{err:#}");
-                    if self.sessions[index].raw_touch_last_error.as_deref() != Some(message.as_str())
+                    if self.sessions[index].raw_touch_last_error.as_deref()
+                        != Some(message.as_str())
                     {
                         eprintln!("touchdeck: waiting for evdev touch device: {message}");
                         self.sessions[index].raw_touch_last_error = Some(message);
@@ -1766,13 +1782,7 @@ fn render_session_overlay(
     }
 
     if ime_overlay::should_render_ime_status(ime_status, session.engine.mode) {
-        ime_overlay::render_ime_status(
-            &mut session.text_renderer,
-            mmap,
-            width,
-            height,
-            ime_status,
-        );
+        ime_overlay::render_ime_status(&mut session.text_renderer, mmap, width, height, ime_status);
     }
 
     render_mode_hint(now_ms, session, mmap, width, height);
@@ -1787,13 +1797,7 @@ fn ime_status_needs_display_overlay(status: &ImeStatus) -> bool {
     status.ui_owner == "touchdeck-server-popup" && status.cursor_rect.is_some()
 }
 
-fn render_mode_hint(
-    now_ms: u64,
-    session: &TouchSession,
-    mmap: &mut [u8],
-    width: u32,
-    height: u32,
-) {
+fn render_mode_hint(now_ms: u64, session: &TouchSession, mmap: &mut [u8], width: u32, height: u32) {
     let Some(hint) = session.mode_hint else {
         return;
     };
@@ -1974,17 +1978,20 @@ fn poll_fds(
         index
     });
 
-    let rc =
-        unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, timeout_ms) };
+    let rc = unsafe {
+        libc::poll(
+            pollfds.as_mut_ptr(),
+            pollfds.len() as libc::nfds_t,
+            timeout_ms,
+        )
+    };
     if rc > 0 {
         let event_mask = libc::POLLIN | libc::POLLERR | libc::POLLHUP;
         let raw_touch = pollfds
             .iter()
             .skip(1)
             .zip(raw_touch_fds.iter())
-            .filter_map(|(pollfd, (index, _))| {
-                (pollfd.revents & event_mask != 0).then_some(*index)
-            })
+            .filter_map(|(pollfd, (index, _))| (pollfd.revents & event_mask != 0).then_some(*index))
             .collect();
         return Ok(PollResult {
             wayland: pollfds[0].revents & event_mask != 0,

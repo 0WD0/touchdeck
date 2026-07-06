@@ -30,22 +30,9 @@ const IOC_WRITE: u32 = 1;
 
 #[derive(Clone, Debug)]
 pub(crate) enum RawTouchEvent {
-    Down {
-        id: i32,
-        time: u32,
-        x: f64,
-        y: f64,
-    },
-    Motion {
-        id: i32,
-        time: u32,
-        x: f64,
-        y: f64,
-    },
-    Up {
-        id: i32,
-        time: u32,
-    },
+    Down { id: i32, time: u32, x: f64, y: f64 },
+    Motion { id: i32, time: u32, x: f64, y: f64 },
+    Up { id: i32, time: u32 },
 }
 
 #[derive(Clone, Debug)]
@@ -544,12 +531,7 @@ fn eviocgabs(abs: u16) -> libc::c_ulong {
 }
 
 fn eviocgrab() -> libc::c_ulong {
-    ioc(
-        IOC_WRITE,
-        b'E',
-        0x90,
-        size_of::<libc::c_int>() as u32,
-    )
+    ioc(IOC_WRITE, b'E', 0x90, size_of::<libc::c_int>() as u32)
 }
 
 fn ioc(dir: u32, type_: u8, nr: u32, size: u32) -> libc::c_ulong {

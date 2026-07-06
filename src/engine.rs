@@ -229,12 +229,12 @@ impl Engine {
                 deadline.min(sticky.expires_at_ms)
             }));
         }
-        self.repeaters
-            .iter()
-            .map(|repeater| repeater.next_ms)
-            .fold(deadline, |deadline, repeat_deadline| {
+        self.repeaters.iter().map(|repeater| repeater.next_ms).fold(
+            deadline,
+            |deadline, repeat_deadline| {
                 Some(deadline.map_or(repeat_deadline, |deadline| deadline.min(repeat_deadline)))
-            })
+            },
+        )
     }
 
     pub(crate) fn process_timers(
@@ -442,7 +442,11 @@ impl Engine {
                 config,
             });
             if action == GestureAction::NiriInteractiveMove {
-                self.start_continuous_drag(ContinuousDragOperation::NiriMove, gesture, &mut effects);
+                self.start_continuous_drag(
+                    ContinuousDragOperation::NiriMove,
+                    gesture,
+                    &mut effects,
+                );
                 effects.extend(redraw_if_debug(config));
                 return effects;
             }

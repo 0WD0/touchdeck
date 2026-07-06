@@ -6,10 +6,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use crate::niri;
 use crate::protocol::{ImeCursorRect, ImeStatus};
 use crate::x11_geometry::{X11GeometryProbe, X11WindowGeometry};
+use anyhow::{anyhow, Context, Result};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool,
     wl_surface,
@@ -41,6 +41,7 @@ use config::{
     load_ime_config, parse_key_route, parse_key_translation_policy, ImeRuntimeConfig, KeyRoute,
     KeyTranslationPolicy,
 };
+pub use event::TouchDeckEvent;
 use fcitx_dbus::{
     spawn_fcitx_dbus_server, FcitxCursorRect, FcitxDbusKeyResponse, FcitxDbusOutput,
     FcitxDbusRequest, FcitxDbusTarget, FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL,
@@ -53,7 +54,6 @@ use key::{
 use physical_keyboard::PhysicalKeyboard;
 use popup::PopupRenderer;
 use rime_engine::RimeEngine;
-pub use event::TouchDeckEvent;
 use xim_frontend::{spawn_xim_server, XimKeyResponse, XimPreeditArea, XimRequest};
 
 #[derive(Default)]

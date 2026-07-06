@@ -3,11 +3,11 @@ use std::env;
 use std::fs::File;
 use std::os::fd::AsFd;
 
+use crate::protocol::ImeStatus;
 use anyhow::{anyhow, Context, Result};
 use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache};
 use memmap2::MmapMut;
 use tempfile::tempfile;
-use crate::protocol::ImeStatus;
 use wayland_client::protocol::{wl_buffer, wl_shm, wl_shm_pool, wl_surface};
 use wayland_client::QueueHandle;
 

@@ -50,8 +50,9 @@ impl SunshineRouter {
             Ok(()) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {}
             Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("remove stale Sunshine router socket {}", path.display()));
+                return Err(err).with_context(|| {
+                    format!("remove stale Sunshine router socket {}", path.display())
+                });
             }
         }
 
