@@ -1482,3 +1482,305 @@ fn parse_action_step(value: ActionStepFileConfig) -> Result<ActionStep> {
         other => Err(anyhow!("unknown action step type {other}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::action::ActionStep;
+    use crate::gesture::SwipeDirection;
+    use crate::key::*;
+    use crate::keymap::{Behavior, Binding, MacroRegistry, Trigger};
+    use crate::layout::{SlotRegistry, SlotTarget};
+    use crate::mode::{Layer, Mode};
+
+    fn test_slots() -> SlotRegistry {
+        SlotRegistry::from_svg_str(include_str!("../layouts/phone-portrait.svg")).unwrap()
+    }
+
+    fn test_target(name: &str) -> SlotTarget {
+        test_slots().get(name).unwrap()
+    }
+
+    #[test]
+    fn toml_binding_parses_key_action() {
+        let source = r#"
+    [[bindings]]
+    mode = "base"
+    layer = "base"
+    trigger = { type = "swipe", target = "left_bottom", direction = "left" }
+    behavior = { type = "key", key = "BSPC" }
+    "#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let binding = Binding::from_file_config(
+            file_config.bindings.unwrap().remove(0),
+            &test_slots(),
+            &MacroRegistry::default(),
+            &BehaviorRegistry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(binding.mode, Mode::Base);
+        assert_eq!(binding.layer, Layer::Base);
+        assert_eq!(
+            binding.trigger,
+            Trigger::Swipe {
+                target: test_target("left_bottom"),
+                fingers: 1,
+                direction: SwipeDirection::Left,
+                min_px: None,
+                max_ms: None,
+            }
+        );
+        assert_eq!(
+            binding.behavior,
+            Behavior::KeySequence(vec![KeyChord {
+                keys: vec![KEY_BACKSPACE],
+            }])
+        );
+    }
+
+    #[test]
+    fn toml_binding_parses_zmk_style_mod_morph_behavior() {
+        let source = r#"
+    [[bindings]]
+    mode = "base"
+    layer = "base"
+    trigger = { type = "tap", target = "left_bottom" }
+    behavior = { type = "mod_morph", mods = ["MOD_LSFT"], keep-mods = [], bindings = ["&kp SLASH", "&kpe QUESTION"] }
+    "#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let binding = Binding::from_file_config(
+            file_config.bindings.unwrap().remove(0),
+            &test_slots(),
+            &MacroRegistry::default(),
+            &BehaviorRegistry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            binding.behavior,
+            Behavior::ModMorph {
+                mods: XKB_MOD_SHIFT,
+                keep_mods: 0,
+                normal: Box::new(Behavior::KeySequence(vec![KeyChord {
+                    keys: vec![KEY_SLASH],
+                }])),
+                morph: Box::new(Behavior::KeySequenceWithOptions {
+                    sequence: vec![KeyChord {
+                        keys: vec![KEY_LEFTSHIFT, KEY_SLASH],
+                    }],
+                    translation: Some(KeyTranslationPolicy::Effective),
+                    route: None,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn toml_keyboard_map_expands_to_text_bindings() {
+        let source = r#"
+    [keyboard]
+
+    [[keyboard.layers]]
+    mode = "text"
+    layer = "base"
+
+    [keyboard.layers.tap]
+    key_a = "&kp A"
+    key_c = "&kp LC(C)"
+
+    [keyboard.layers.swipe_up]
+    key_a = "&kp EXCLAMATION"
+
+    [keyboard.layers.swipe_left]
+    key_c = "&kp LEFT"
+    "#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let maps = file_config.keyboard.unwrap().layers.unwrap();
+        let bindings = expand_keyboard_maps(
+            maps,
+            &test_slots(),
+            &MacroRegistry::default(),
+            &BehaviorRegistry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(bindings.len(), 4);
+        let key_a = bindings
+            .iter()
+            .find(|binding| {
+                matches!(binding.trigger, Trigger::Tap { .. })
+                    && binding.trigger.target_id() == "key_a"
+            })
+            .unwrap();
+        let key_c = bindings
+            .iter()
+            .find(|binding| {
+                matches!(binding.trigger, Trigger::Tap { .. })
+                    && binding.trigger.target_id() == "key_c"
+            })
+            .unwrap();
+        let key_a_up = bindings
+            .iter()
+            .find(|binding| {
+                matches!(
+                    binding.trigger,
+                    Trigger::Swipe {
+                        direction: SwipeDirection::Up,
+                        ..
+                    }
+                ) && binding.trigger.target_id() == "key_a"
+            })
+            .unwrap();
+        let key_c_left = bindings
+            .iter()
+            .find(|binding| {
+                matches!(
+                    binding.trigger,
+                    Trigger::Swipe {
+                        direction: SwipeDirection::Left,
+                        ..
+                    }
+                ) && binding.trigger.target_id() == "key_c"
+            })
+            .unwrap();
+        assert_eq!(key_a.mode, Mode::Text);
+        assert_eq!(
+            key_a.behavior,
+            Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_A] }])
+        );
+        assert_eq!(
+            key_c.behavior,
+            Behavior::KeySequence(vec![KeyChord {
+                keys: vec![KEY_LEFTCTRL, KEY_C],
+            }])
+        );
+        assert_eq!(
+            key_a_up.behavior,
+            Behavior::KeySequence(vec![KeyChord {
+                keys: vec![KEY_LEFTSHIFT, KEY_1],
+            }])
+        );
+        assert_eq!(
+            key_c_left.behavior,
+            Behavior::KeySequence(vec![KeyChord {
+                keys: vec![KEY_LEFT]
+            }])
+        );
+    }
+
+    #[test]
+    fn toml_binding_parses_zmk_key_sequence() {
+        let source = r#"
+    [[bindings]]
+    mode = "base"
+    layer = "base"
+    trigger = { type = "tap", target = "left_bottom" }
+    behavior = { type = "key", key = "LC(X) LC(S)" }
+    "#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let binding = Binding::from_file_config(
+            file_config.bindings.unwrap().remove(0),
+            &test_slots(),
+            &MacroRegistry::default(),
+            &BehaviorRegistry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            binding.behavior,
+            Behavior::KeySequence(vec![
+                KeyChord {
+                    keys: vec![KEY_LEFTCTRL, KEY_X],
+                },
+                KeyChord {
+                    keys: vec![KEY_LEFTCTRL, KEY_S],
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn checked_in_example_layout_and_config_parse() {
+        let slots =
+            SlotRegistry::from_svg_str(include_str!("../layouts/phone-portrait.svg")).unwrap();
+        assert!(slots.get("key_n1").is_ok());
+        assert!(slots.get("key_q").is_ok());
+        assert!(slots.get("thumb_spc").is_ok());
+
+        let config: FileConfig = toml::from_str(include_str!("../touchdeck.example.toml")).unwrap();
+        assert_eq!(
+            config.layout.unwrap().svg.as_deref(),
+            Some("layouts/phone-portrait.svg")
+        );
+        let maps = config.keyboard.unwrap().layers.unwrap();
+        assert_eq!(maps.len(), 1);
+        assert_eq!(
+            maps[0]
+                .tap
+                .as_ref()
+                .unwrap()
+                .get("key_n2")
+                .map(String::as_str),
+            Some("&kp N2")
+        );
+        assert_eq!(
+            maps[0]
+                .swipe_up
+                .as_ref()
+                .unwrap()
+                .get("key_n2")
+                .map(String::as_str),
+            Some("&kp AT_SIGN")
+        );
+        assert_eq!(
+            maps[0]
+                .swipe_left
+                .as_ref()
+                .unwrap()
+                .get("key_h")
+                .map(String::as_str),
+            Some("&hold_repeat LEFT")
+        );
+    }
+
+    #[test]
+    fn toml_macro_behavior_expands_to_sequence() {
+        let source = r#"
+    [macros.copy]
+    steps = [
+      { type = "key_down", key = "LCTRL" },
+      { type = "tap_key", key = "C" },
+      { type = "key_up", key = "LCTRL" },
+    ]
+
+    [[bindings]]
+    mode = "base"
+    layer = "base"
+    trigger = { type = "tap", target = "left_bottom" }
+    behavior = { type = "macro", macro = "copy" }
+    "#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let mut macros = MacroRegistry::default();
+        for (name, macro_config) in file_config.macros.unwrap() {
+            macros.insert(&name, parse_action_steps(macro_config.steps).unwrap());
+        }
+        let binding = Binding::from_file_config(
+            file_config.bindings.unwrap().remove(0),
+            &test_slots(),
+            &macros,
+            &BehaviorRegistry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            binding.behavior,
+            Behavior::Sequence(vec![
+                ActionStep::KeyDown(KEY_LEFTCTRL),
+                ActionStep::TapKey(KEY_C),
+                ActionStep::KeyUp(KEY_LEFTCTRL),
+            ])
+        );
+    }
+}

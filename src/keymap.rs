@@ -684,3 +684,146 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::config::{default_ime_socket_path, expand_keyboard_maps, parse_action_steps, BehaviorRegistry, Config, FileConfig, TextOutputBackend, TextOutputConfig};
+    use crate::layout::SlotRegistry;
+    use crate::mode::{Layer, Mode, SlotGestureKind};
+
+    fn test_config() -> Config {
+        let mut config = Config {
+            action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
+            action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
+            action_swipe_up: Some(NiriAction::FocusColumnRight),
+            action_swipe_down: Some(NiriAction::FocusColumnLeft),
+            action_two_finger_tap: Some(NiriAction::ToggleOverview),
+            tap_radius: 48.0,
+            two_finger_tap_ms: 350,
+            exit_tap_ms: 450,
+            hold_ms: 180,
+            repeat_start_ms: 360,
+            repeat_interval_ms: 45,
+            double_tap_ms: 280,
+            swipe_threshold_ratio: 0.08,
+            swipe_threshold_min: 64.0,
+            swipe_threshold_max: 140.0,
+            debug_alpha: 0,
+            debug_draw: false,
+            mode_hint_ms: 700,
+            modifier_tap_ms: 40,
+            log_touch: false,
+            record_trace_path: None,
+            xkb_keymap_path: None,
+            text_output: TextOutputConfig {
+                backend: TextOutputBackend::VirtualKeyboard,
+                ime_socket: default_ime_socket_path(),
+            },
+            slots: test_slots(),
+            keymap: Keymap::default(),
+            macros: MacroRegistry::default(),
+            exit_corner_enabled: true,
+            exit_corner_ratio: 0.12,
+            exit_corner_tap_ms: 350,
+        };
+        apply_example_keymap(&mut config);
+        config
+    }
+
+    fn test_slots() -> SlotRegistry {
+        SlotRegistry::from_svg_str(include_str!("../layouts/phone-portrait.svg")).unwrap()
+    }
+
+    fn apply_example_keymap(config: &mut Config) {
+        let mut file_config: FileConfig =
+            toml::from_str(include_str!("../touchdeck.example.toml")).unwrap();
+
+        if let Some(macros) = file_config.macros.take() {
+            config.macros.clear();
+            for (name, macro_config) in macros {
+                config
+                    .macros
+                    .insert(&name, parse_action_steps(macro_config.steps).unwrap());
+            }
+        }
+
+        let mut behavior_registry = BehaviorRegistry::default();
+        if let Some(behaviors) = file_config.behaviors.take() {
+            behavior_registry.extend(behaviors);
+        }
+        if let Some(keyboard) = &file_config.keyboard {
+            if let Some(behaviors) = &keyboard.behaviors {
+                behavior_registry.extend(behaviors.clone());
+            }
+        }
+
+        config.keymap.bindings.clear();
+        if let Some(bindings) = file_config.bindings.take() {
+            for binding in bindings {
+                config
+                    .keymap
+                    .bindings
+                    .push(
+                        Binding::from_file_config(
+                            binding,
+                            &config.slots,
+                            &config.macros,
+                            &behavior_registry,
+                        )
+                        .unwrap(),
+                    );
+            }
+        }
+
+        if let Some(keyboard) = file_config.keyboard {
+            if let Some(maps) = keyboard.layers {
+                config
+                    .keymap
+                    .bindings
+                    .extend(
+                        expand_keyboard_maps(
+                            maps,
+                            &config.slots,
+                            &config.macros,
+                            &behavior_registry,
+                        )
+                        .unwrap(),
+                    );
+            }
+        }
+    }
+
+    #[test]
+    fn default_keyboard_label_uses_tap_binding() {
+        let config = test_config();
+        let keymap = &config.keymap;
+
+        assert_eq!(
+            keymap.slot_label(Mode::Text, &[Layer::Base], "key_q"),
+            Some("Q".to_string())
+        );
+        assert_eq!(
+            keymap.slot_label(Mode::Text, &[Layer::Base], "key_h"),
+            Some("H".to_string())
+        );
+        assert_eq!(
+            keymap.slot_gesture_label(
+                Mode::Text,
+                &[Layer::Base],
+                "key_n1",
+                SlotGestureKind::SwipeUp
+            ),
+            Some("EXCLAMATION".to_string())
+        );
+        assert_eq!(
+            keymap.slot_gesture_label(
+                Mode::Text,
+                &[Layer::Base],
+                "key_h",
+                SlotGestureKind::SwipeLeft
+            ),
+            Some("LEFT...".to_string())
+        );
+    }
+}

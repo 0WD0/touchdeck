@@ -427,3 +427,25 @@ pub(crate) fn key_code_label(key: u32) -> Option<&'static str> {
 pub(crate) fn normalize_name(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace('-', "_")
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn zmk_key_parser_supports_named_symbols() {
+        assert_eq!(
+            parse_key_sequence("MINUS").unwrap(),
+            vec![KeyChord {
+                keys: vec![KEY_MINUS],
+            }]
+        );
+        assert_eq!(
+            parse_key_sequence("EXCLAMATION").unwrap(),
+            vec![KeyChord {
+                keys: vec![KEY_LEFTSHIFT, KEY_1],
+            }]
+        );
+    }
+}

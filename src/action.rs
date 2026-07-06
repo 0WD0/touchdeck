@@ -82,3 +82,25 @@ pub(crate) fn parse_niri_action(value: &str) -> Result<NiriAction> {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn maps_supported_niri_actions_to_ipc_json() {
+        assert_eq!(
+            niri_action_request_json(parse_niri_action("focus-column-left").unwrap()),
+            r#"{"Action":{"FocusColumnLeft":{}}}"#
+        );
+        assert_eq!(
+            parse_niri_action("focus_workspace_right").unwrap_err().to_string(),
+            "unsupported niri action focus_workspace_right; supported actions: focus-column-left, focus-column-right, focus-workspace-up, focus-workspace-down, toggle-overview"
+        );
+        assert_eq!(
+            niri_action_request_json(parse_niri_action("toggle-overview").unwrap()),
+            r#"{"Action":{"ToggleOverview":{}}}"#
+        );
+    }
+}

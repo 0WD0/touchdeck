@@ -214,3 +214,35 @@ pub(crate) fn parse_optional_bool(value: Option<&str>) -> Result<Option<bool>> {
         Some(other) => Err(anyhow!("invalid boolean value {other}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::geometry::RectNorm;
+
+    #[test]
+    fn svg_layout_loader_reads_rect_slots() {
+        let source = r#"
+    <svg viewBox="0 0 1000 2000" xmlns="http://www.w3.org/2000/svg">
+      <rect data-td-slot="thumb" data-td-role="key" data-td-capture="true" data-td-label="TH" x="800" y="1600" width="200" height="400" />
+    </svg>
+    "#;
+        let slots = SlotRegistry::from_svg_str(source).unwrap();
+        let target = slots.get("thumb").unwrap();
+
+        assert_eq!(target.id, "thumb");
+        assert_eq!(target.role, SlotRole::Key);
+        assert!(target.capture);
+        assert_eq!(target.label.as_deref(), Some("TH"));
+        assert_eq!(
+            target.rect,
+            RectNorm {
+                x0: 0.80,
+                x1: 1.00,
+                y0: 0.80,
+                y1: 1.00,
+            }
+        );
+    }
+}
