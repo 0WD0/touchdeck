@@ -63,9 +63,15 @@ impl Keymap {
                 .filter(|binding| {
                     binding.mode == query.context.mode
                         && &binding.layer == layer
-                        && binding
+                        && (binding
                             .trigger
                             .matches_hold(query.context.size, query.x, query.y)
+                            || (binding.behavior.is_hold_tap()
+                                && binding.trigger.matches_hold_tap_start(
+                                    query.context.size,
+                                    query.x,
+                                    query.y,
+                                )))
                 })
                 .collect::<Vec<_>>();
             matches.sort_by_key(|binding| std::cmp::Reverse(binding.priority));
@@ -73,6 +79,10 @@ impl Keymap {
             for binding in matches {
                 if binding.behavior.is_transparent() || !binding.consume {
                     continue;
+                }
+
+                if let Some((action, tapping_term_ms)) = binding.behavior.hold_tap_hold_action() {
+                    return Some((action, tapping_term_ms.unwrap_or(query.default_hold_ms)));
                 }
 
                 return Some((
@@ -361,6 +371,14 @@ impl MacroRegistry {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HoldTapFlavor {
+    HoldPreferred,
+    Balanced,
+    TapPreferred,
+    TapUnlessInterrupted,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Trigger {
     Tap {
@@ -471,6 +489,15 @@ impl Trigger {
     fn matches_hold(&self, size: SurfaceSize, x: f64, y: f64) -> bool {
         match self {
             Self::Hold {
+                target, fingers, ..
+            } => *fingers == 1 && target.rect.contains_px(size, x, y),
+            _ => false,
+        }
+    }
+
+    fn matches_hold_tap_start(&self, size: SurfaceSize, x: f64, y: f64) -> bool {
+        match self {
+            Self::Tap {
                 target, fingers, ..
             } => *fingers == 1 && target.rect.contains_px(size, x, y),
             _ => false,
@@ -614,6 +641,12 @@ pub(crate) enum Behavior {
         normal: Box<Behavior>,
         morph: Box<Behavior>,
     },
+    HoldTap {
+        hold: Box<Behavior>,
+        tap: Box<Behavior>,
+        flavor: HoldTapFlavor,
+        tapping_term_ms: Option<u32>,
+    },
     KeyRepeat,
     HoldRepeat {
         sequence: Vec<KeyChord>,
@@ -634,7 +667,10 @@ pub(crate) enum Behavior {
     LayerSet(Layer),
     LayerToggle(Layer),
     LayerMomentary(Layer),
-    LayerSticky { layer: Layer, timeout_ms: Option<u32> },
+    LayerSticky {
+        layer: Layer,
+        timeout_ms: Option<u32>,
+    },
     Transparent,
     NoOp,
     Exit,
@@ -647,6 +683,21 @@ impl Behavior {
 
     fn is_repeat(&self) -> bool {
         matches!(self, Self::HoldRepeat { .. })
+    }
+
+    fn is_hold_tap(&self) -> bool {
+        matches!(self, Self::HoldTap { .. })
+    }
+
+    fn hold_tap_hold_action(&self) -> Option<(GestureAction, Option<u32>)> {
+        match self {
+            Self::HoldTap {
+                hold,
+                tapping_term_ms,
+                ..
+            } => Some(((**hold).clone().into_action(), *tapping_term_ms)),
+            _ => None,
+        }
     }
 
     fn into_action(self) -> GestureAction {
@@ -677,6 +728,7 @@ impl Behavior {
                 normal: Box::new(normal.into_action()),
                 morph: Box::new(morph.into_action()),
             },
+            Self::HoldTap { tap, .. } => tap.into_action(),
             Self::KeyRepeat => GestureAction::KeyRepeat,
             Self::HoldRepeat {
                 sequence,
@@ -754,7 +806,10 @@ pub(crate) enum GestureAction {
     LayerSet(Layer),
     LayerToggle(Layer),
     LayerMomentary(Layer),
-    LayerSticky { layer: Layer, timeout_ms: Option<u32> },
+    LayerSticky {
+        layer: Layer,
+        timeout_ms: Option<u32>,
+    },
     Exit,
     None,
 }
@@ -793,6 +848,11 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
         }),
         Behavior::KeyHold(key) => key_code_label(*key).map(|label| format!("{}+", label)),
         Behavior::ModMorph { .. } => Some("morph".to_string()),
+        Behavior::HoldTap { tap, hold, .. } => {
+            let tap = behavior_label(tap).unwrap_or_else(|| "tap".to_string());
+            let hold = behavior_label(hold).unwrap_or_else(|| "hold".to_string());
+            Some(format!("{tap}/{hold}"))
+        }
         Behavior::KeyRepeat => Some("repeat".to_string()),
         Behavior::HoldRepeat { sequence, .. } => {
             key_sequence_label(sequence).map(|label| format!("{}...", label))

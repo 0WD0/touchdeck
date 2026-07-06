@@ -65,6 +65,13 @@ keep_mods = []
 normal = "&kp SLASH"
 morph = "&kpe QUESTION"
 
+[behaviors.niri_super]
+type = "hold_tap"
+tap = "&sl niri_bind"
+hold = "&mo niri_bind"
+flavor = "tap-preferred"
+tapping-term-ms = 180
+
 [ime]
 # output can also be set here and overrides [keyboard].output.
 # output = "ime"
@@ -155,14 +162,13 @@ key_dot = "&kp DOT"
 key_fslh = "&slash_question"
 thumb_ctrl = "&kp LCTRL"
 thumb_shift = "&kp LSHIFT"
-thumb_super = "&sl niri_bind"
+thumb_super = "&niri_super"
 thumb_ret = "&kp RET"
 thumb_spc = "&kp SPC"
 
 [keyboard.layers.hold]
 thumb_ctrl = "&hold LCTRL"
 thumb_shift = "&hold LSHIFT"
-thumb_super = "&mo niri_bind"
 
 [keyboard.layers.swipe_up]
 key_n1 = "&kp EXCLAMATION"

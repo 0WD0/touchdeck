@@ -12,7 +12,7 @@ use crate::key::{
     normalize_name, parse_key_sequence, parse_single_key, XKB_MOD_ALT, XKB_MOD_CONTROL,
     XKB_MOD_SHIFT, XKB_MOD_SUPER,
 };
-use crate::keymap::{Behavior, Binding, Keymap, MacroRegistry, Trigger};
+use crate::keymap::{Behavior, Binding, HoldTapFlavor, Keymap, MacroRegistry, Trigger};
 use crate::layout::{SlotRegistry, SlotTarget};
 use crate::mode::{parse_layer, parse_mode, Layer, Mode};
 
@@ -130,11 +130,7 @@ impl Config {
             if let Some(backend) = input.backend.as_deref().or(input.touch_backend.as_deref()) {
                 self.input.touch_backend = parse_touch_input_backend(backend)?;
             }
-            if let Some(device) = input
-                .touch_device
-                .as_deref()
-                .or(input.device.as_deref())
-            {
+            if let Some(device) = input.touch_device.as_deref().or(input.device.as_deref()) {
                 self.input.evdev_touch_device = Some(resolve_config_relative(&path, device));
             }
             if let Some(name) = &input.device_name_contains {
@@ -317,7 +313,9 @@ pub(crate) fn parse_touch_input_backend(value: &str) -> Result<TouchInputBackend
 
 fn default_sunshine_router_socket() -> PathBuf {
     if let Ok(runtime_dir) = env::var("XDG_RUNTIME_DIR") {
-        return PathBuf::from(runtime_dir).join("touchdeck").join("sunshine.sock");
+        return PathBuf::from(runtime_dir)
+            .join("touchdeck")
+            .join("sunshine.sock");
     }
     PathBuf::from("/tmp").join(format!("touchdeck-sunshine-{}.sock", std::process::id()))
 }
@@ -532,6 +530,11 @@ pub(crate) struct BehaviorFileConfig {
     pub(crate) fingers: Option<usize>,
     pub(crate) min_px: Option<f64>,
     pub(crate) timeout_ms: Option<u32>,
+    pub(crate) hold: Option<String>,
+    pub(crate) tap: Option<String>,
+    pub(crate) flavor: Option<String>,
+    #[serde(alias = "tapping-term-ms")]
+    pub(crate) tapping_term_ms: Option<u32>,
     pub(crate) bindings: Option<Vec<String>>,
     pub(crate) mods: Option<Vec<String>>,
     #[serde(alias = "keep-mods")]
@@ -562,6 +565,11 @@ pub(crate) struct BehaviorDefinitionFileConfig {
     pub(crate) fingers: Option<usize>,
     pub(crate) min_px: Option<f64>,
     pub(crate) timeout_ms: Option<u32>,
+    pub(crate) hold: Option<String>,
+    pub(crate) tap: Option<String>,
+    pub(crate) flavor: Option<String>,
+    #[serde(alias = "tapping-term-ms")]
+    pub(crate) tapping_term_ms: Option<u32>,
     pub(crate) bindings: Option<Vec<String>>,
     pub(crate) mods: Option<Vec<String>>,
     #[serde(alias = "keep-mods")]
@@ -983,6 +991,19 @@ fn parse_behavior(
             macros,
             behavior_registry,
         ),
+        "hold_tap" | "holdtap" | "ht" | "mod_tap" | "layer_tap" => parse_hold_tap_behavior(
+            "inline",
+            HoldTapDefinition {
+                bindings: value.bindings.as_deref(),
+                hold: value.hold.as_deref(),
+                tap: value.tap.as_deref(),
+                flavor: value.flavor.as_deref(),
+                tapping_term_ms: value.tapping_term_ms,
+            },
+            &[],
+            macros,
+            behavior_registry,
+        ),
         "key_repeat" => {
             if value.key.is_some() || value.keys.is_some() {
                 return Err(anyhow!(
@@ -1027,19 +1048,17 @@ fn parse_behavior(
                 .ok_or_else(|| anyhow!("niri behavior is missing action"))?,
         )?)),
         "niri_interactive_move" | "interactive_move" => Ok(Behavior::NiriInteractiveMove),
-        "niri_interactive_resize" | "interactive_resize" => {
-            Ok(Behavior::NiriInteractiveResize {
-                edge: parse_niri_resize_edge(
-                    value
-                        .edge
-                        .as_deref()
-                        .ok_or_else(|| anyhow!("interactive_resize behavior is missing edge"))?,
-                )?,
-                fingers: value.fingers.unwrap_or(1),
-                min_px: value.min_px,
-                timeout_ms: value.timeout_ms,
-            })
-        }
+        "niri_interactive_resize" | "interactive_resize" => Ok(Behavior::NiriInteractiveResize {
+            edge: parse_niri_resize_edge(
+                value
+                    .edge
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("interactive_resize behavior is missing edge"))?,
+            )?,
+            fingers: value.fingers.unwrap_or(1),
+            min_px: value.min_px,
+            timeout_ms: value.timeout_ms,
+        }),
         "mode" | "mode_set" => Ok(Behavior::ModeSet(parse_mode(
             value
                 .mode
@@ -1146,6 +1165,24 @@ fn parse_defined_behavior_invocation(
                 bindings: definition.bindings.as_deref(),
                 normal: definition.normal.as_deref(),
                 morph: definition.morph.as_deref(),
+            },
+            args,
+            macros,
+            behavior_registry,
+        );
+    }
+    if matches!(
+        normalize_name(kind).as_str(),
+        "hold_tap" | "holdtap" | "ht" | "mod_tap" | "layer_tap"
+    ) {
+        return parse_hold_tap_behavior(
+            name,
+            HoldTapDefinition {
+                bindings: definition.bindings.as_deref(),
+                hold: definition.hold.as_deref(),
+                tap: definition.tap.as_deref(),
+                flavor: definition.flavor.as_deref(),
+                tapping_term_ms: definition.tapping_term_ms,
             },
             args,
             macros,
@@ -1260,6 +1297,78 @@ fn parse_mod_morph_bindings<'a>(
         normal.ok_or_else(|| anyhow!("mod_morph behavior {name} is missing normal binding"))?,
         morph.ok_or_else(|| anyhow!("mod_morph behavior {name} is missing morph binding"))?,
     ))
+}
+
+struct HoldTapDefinition<'a> {
+    bindings: Option<&'a [String]>,
+    hold: Option<&'a str>,
+    tap: Option<&'a str>,
+    flavor: Option<&'a str>,
+    tapping_term_ms: Option<u32>,
+}
+
+fn parse_hold_tap_behavior(
+    name: &str,
+    definition: HoldTapDefinition<'_>,
+    args: &[&str],
+    macros: &MacroRegistry,
+    behavior_registry: &BehaviorRegistry,
+) -> Result<Behavior> {
+    let (hold, tap) =
+        parse_hold_tap_bindings(name, definition.bindings, definition.hold, definition.tap)?;
+
+    Ok(Behavior::HoldTap {
+        hold: Box::new(parse_behavior_invocation(
+            &expand_behavior_template(hold, args),
+            macros,
+            behavior_registry,
+        )?),
+        tap: Box::new(parse_behavior_invocation(
+            &expand_behavior_template(tap, args),
+            macros,
+            behavior_registry,
+        )?),
+        flavor: parse_hold_tap_flavor(definition.flavor.unwrap_or("tap-preferred"))?,
+        tapping_term_ms: definition.tapping_term_ms,
+    })
+}
+
+fn parse_hold_tap_bindings<'a>(
+    name: &str,
+    bindings: Option<&'a [String]>,
+    hold: Option<&'a str>,
+    tap: Option<&'a str>,
+) -> Result<(&'a str, &'a str)> {
+    if let Some(bindings) = bindings {
+        if hold.is_some() || tap.is_some() {
+            return Err(anyhow!(
+                "hold_tap behavior {name} must use either bindings or hold/tap, not both"
+            ));
+        }
+        let [hold, tap] = bindings else {
+            return Err(anyhow!(
+                "hold_tap behavior {name} bindings must contain exactly two behavior bindings: hold then tap"
+            ));
+        };
+        return Ok((hold.as_str(), tap.as_str()));
+    }
+
+    Ok((
+        hold.ok_or_else(|| anyhow!("hold_tap behavior {name} is missing hold binding"))?,
+        tap.ok_or_else(|| anyhow!("hold_tap behavior {name} is missing tap binding"))?,
+    ))
+}
+
+fn parse_hold_tap_flavor(value: &str) -> Result<HoldTapFlavor> {
+    match normalize_name(value).as_str() {
+        "hold_preferred" | "holdpreferred" => Ok(HoldTapFlavor::HoldPreferred),
+        "balanced" => Ok(HoldTapFlavor::Balanced),
+        "tap_preferred" | "tappreferred" => Ok(HoldTapFlavor::TapPreferred),
+        "tap_unless_interrupted" | "tapunlessinterrupted" => {
+            Ok(HoldTapFlavor::TapUnlessInterrupted)
+        }
+        other => Err(anyhow!("unknown hold_tap flavor {other:?}")),
+    }
 }
 
 #[derive(Default)]
@@ -1581,7 +1690,7 @@ mod tests {
     use crate::action::ActionStep;
     use crate::gesture::SwipeDirection;
     use crate::key::*;
-    use crate::keymap::{Behavior, Binding, MacroRegistry, Trigger};
+    use crate::keymap::{Behavior, Binding, HoldTapFlavor, MacroRegistry, Trigger};
     use crate::layout::{SlotRegistry, SlotTarget};
     use crate::mode::{Layer, Mode};
 
@@ -1664,6 +1773,36 @@ mod tests {
                     translation: Some(KeyTranslationPolicy::Effective),
                     route: None,
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn toml_named_hold_tap_behavior_parses_hold_and_tap_branches() {
+        let source = r#"
+    [behaviors.niri_super]
+    type = "hold_tap"
+    bindings = ["&mo niri_bind", "&sl niri_bind"]
+    flavor = "balanced"
+    tapping-term-ms = 210
+    "#;
+        let file_config: FileConfig = toml::from_str(source).unwrap();
+        let mut registry = BehaviorRegistry::default();
+        registry.extend(file_config.behaviors.unwrap());
+        let behavior =
+            parse_behavior_invocation("&niri_super", &MacroRegistry::default(), &registry)
+                .unwrap();
+
+        assert_eq!(
+            behavior,
+            Behavior::HoldTap {
+                hold: Box::new(Behavior::LayerMomentary(Layer::new("niri_bind"))),
+                tap: Box::new(Behavior::LayerSticky {
+                    layer: Layer::new("niri_bind"),
+                    timeout_ms: None,
+                }),
+                flavor: HoldTapFlavor::Balanced,
+                tapping_term_ms: Some(210),
             }
         );
     }
@@ -1806,7 +1945,7 @@ mod tests {
             Some("layouts/phone-portrait.svg")
         );
         let maps = config.keyboard.unwrap().layers.unwrap();
-        assert_eq!(maps.len(), 1);
+        assert_eq!(maps.len(), 4);
         assert_eq!(
             maps[0]
                 .tap
