@@ -761,7 +761,7 @@ impl ImeApp {
             None => None,
         };
 
-        if !self.active {
+        if !self.active && self.fcitx_focus.is_none() {
             match route {
                 KeyRoute::ImeOnly => {
                     eprintln!(
@@ -867,6 +867,7 @@ impl ImeApp {
             "wayland-im".to_string()
         };
         status.active = match status.display_kind.as_str() {
+            "touchdeck" => !status_is_empty(&status) || self.active || self.fcitx_focus.is_some(),
             "fcitx-dbus" => self.fcitx_focus.is_some(),
             "xim" => !status_is_empty(&status),
             _ => self.active,
