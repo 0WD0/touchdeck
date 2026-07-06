@@ -885,9 +885,6 @@ impl ImeApp {
                     target.display
                 );
                 self.fcitx_focus = Some(target);
-                if let Some(rime) = self.rime.as_mut() {
-                    rime.set_ascii_mode(false);
-                }
                 self.broadcast_status("fcitx-dbus");
                 let _ = response.send(());
             }
