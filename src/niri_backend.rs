@@ -36,7 +36,7 @@ pub(crate) fn send_niri_action_socket(action: &NiriCommand) -> Result<()> {
 }
 
 pub(crate) fn send_niri_focus_at(output: Option<&str>, x: f64, y: f64) -> Result<()> {
-    niri::focus_window_at(output, x, y)
+    niri::focus_window_at(output, x, y, false)
 }
 
 pub(crate) fn send_niri_interactive_move_begin(output: &str, x: f64, y: f64) -> Result<()> {

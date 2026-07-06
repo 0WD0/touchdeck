@@ -122,12 +122,13 @@ pub fn focused_output_name() -> Result<Option<String>> {
         .map(str::to_string))
 }
 
-pub fn focus_window_at(output: Option<&str>, x: f64, y: f64) -> Result<()> {
+pub fn focus_window_at(output: Option<&str>, x: f64, y: f64, close_overview: bool) -> Result<()> {
     let request = serde_json::to_string(&niri_ipc::Request::Action(
         niri_ipc::Action::FocusWindowAt {
             output: output.map(str::to_string),
             x,
             y,
+            close_overview,
         },
     ))
     .context("serialize niri focus-window-at request")?;
