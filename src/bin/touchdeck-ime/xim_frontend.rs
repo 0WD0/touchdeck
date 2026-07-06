@@ -12,6 +12,14 @@ use super::key::KeyState;
 
 const XIM_EVENT_MASK: u32 = 3;
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct XimPreeditArea {
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) w: i32,
+    pub(super) h: i32,
+}
+
 pub(super) enum XimRequest {
     Key {
         time: u32,
@@ -23,6 +31,9 @@ pub(super) enum XimRequest {
         focus_window: Option<u32>,
         spot_x: i32,
         spot_y: i32,
+        preedit_area: Option<XimPreeditArea>,
+        preedit_area_needed: Option<XimPreeditArea>,
+        line_space: Option<u32>,
         response: Sender<XimKeyResponse>,
     },
     Reset {
@@ -185,6 +196,19 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
                 focus_window: user_ic.ic.app_focus_win().map(|window| window.get()),
                 spot_x: i32::from(user_ic.ic.preedit_spot().x),
                 spot_y: i32::from(user_ic.ic.preedit_spot().y),
+                preedit_area: user_ic.ic.preedit_area().map(|area| XimPreeditArea {
+                    x: i32::from(area.x),
+                    y: i32::from(area.y),
+                    w: i32::from(area.width),
+                    h: i32::from(area.height),
+                }),
+                preedit_area_needed: user_ic.ic.preedit_area_needed().map(|area| XimPreeditArea {
+                    x: i32::from(area.x),
+                    y: i32::from(area.y),
+                    w: i32::from(area.width),
+                    h: i32::from(area.height),
+                }),
+                line_space: user_ic.ic.preedit_line_space(),
                 response: response_tx,
             })
             .is_err()

@@ -54,7 +54,7 @@ use rime_engine::RimeEngine;
 use touchdeck_socket::{
     default_socket_path, spawn_socket_listener, TouchDeckEvent, TouchDeckRequest,
 };
-use xim_frontend::{spawn_xim_server, XimKeyResponse, XimRequest};
+use xim_frontend::{spawn_xim_server, XimKeyResponse, XimPreeditArea, XimRequest};
 
 #[derive(Default)]
 struct ImeApp {
@@ -398,6 +398,9 @@ impl ImeApp {
                 focus_window,
                 spot_x,
                 spot_y,
+                preedit_area,
+                preedit_area_needed,
+                line_space,
                 response,
             } => {
                 let result = self.handle_xim_key(
@@ -410,6 +413,9 @@ impl ImeApp {
                     focus_window,
                     spot_x,
                     spot_y,
+                    preedit_area,
+                    preedit_area_needed,
+                    line_space,
                 );
                 let _ = response.send(result);
             }
@@ -642,8 +648,20 @@ impl ImeApp {
         focus_window: Option<u32>,
         spot_x: i32,
         spot_y: i32,
+        preedit_area: Option<XimPreeditArea>,
+        preedit_area_needed: Option<XimPreeditArea>,
+        line_space: Option<u32>,
     ) -> XimKeyResponse {
-        self.update_xim_cursor_rect(client_window, app_window, focus_window, spot_x, spot_y);
+        self.update_xim_cursor_rect(
+            client_window,
+            app_window,
+            focus_window,
+            spot_x,
+            spot_y,
+            preedit_area,
+            preedit_area_needed,
+            line_space,
+        );
 
         let Some(keysym) = x_keycode_to_keysym(hardware_keycode) else {
             eprintln!(
@@ -882,6 +900,9 @@ impl ImeApp {
         focus_window: Option<u32>,
         spot_x: i32,
         spot_y: i32,
+        preedit_area: Option<XimPreeditArea>,
+        preedit_area_needed: Option<XimPreeditArea>,
+        line_space: Option<u32>,
     ) {
         let client_geometry = self.query_x11_window_geometry(client_window);
         let app_geometry = app_window.and_then(|window| self.query_x11_window_geometry(window));
@@ -923,11 +944,14 @@ impl ImeApp {
         };
 
         eprintln!(
-            "touchdeck-ime: xim geometry client=0x{client_window:x} {} app={} focus={} anchor=0x{anchor_window:x} {} spot=({spot_x},{spot_y})",
+            "touchdeck-ime: xim geometry client=0x{client_window:x} {} app={} focus={} anchor=0x{anchor_window:x} {} spot=({spot_x},{spot_y}) area={} area_needed={} line_space={:?}",
             format_x11_geometry(client_geometry),
             format_x11_window_geometry(app_window, app_geometry),
             format_x11_window_geometry(focus_window, focus_geometry),
-            format_x11_geometry(Some(anchor))
+            format_x11_geometry(Some(anchor)),
+            format_xim_preedit_area(preedit_area),
+            format_xim_preedit_area(preedit_area_needed),
+            line_space
         );
 
         let Some(top_level) = self.query_x11_active_window_geometry() else {
@@ -938,13 +962,25 @@ impl ImeApp {
             return;
         };
 
-        let x = anchor.x + spot_x;
-        let y = anchor.y + spot_y;
+        let (source, x, y, w, h) = if let Some(area) = preedit_area {
+            (
+                "area",
+                anchor.x + area.x,
+                anchor.y + area.y,
+                area.w.max(0),
+                area.h.max(0),
+            )
+        } else {
+            let h = line_space
+                .and_then(|value| i32::try_from(value).ok())
+                .unwrap_or(0);
+            ("spot", anchor.x + spot_x, anchor.y + spot_y, 0, h)
+        };
         self.xim_cursor_rect = Some(ImeCursorRect {
             x,
             y,
-            w: 2,
-            h: 24,
+            w,
+            h,
             scale: 1.0,
             space: "x11-root".to_string(),
             window_x: Some(top_level.x),
@@ -955,7 +991,8 @@ impl ImeApp {
             root_h: Some(top_level.root_h),
         });
         eprintln!(
-            "touchdeck-ime: xim cursor rect client=0x{client_window:x} app={app_window:?} focus={focus_window:?} spot=({spot_x},{spot_y}) root=({x},{y}) top=0x{:x}=({},{} {}x{}) root={}x{}",
+            "touchdeck-ime: xim cursor rect source={source} client=0x{client_window:x} app={app_window:?} focus={focus_window:?} spot=({spot_x},{spot_y}) area={} root=({x},{y} {w}x{h}) top=0x{:x}=({},{} {}x{}) root={}x{}",
+            format_xim_preedit_area(preedit_area),
             top_level.window,
             top_level.x,
             top_level.y,
@@ -1415,6 +1452,13 @@ fn format_x11_geometry(geometry: Option<X11WindowGeometry>) -> String {
 fn format_x11_window_geometry(window: Option<u32>, geometry: Option<X11WindowGeometry>) -> String {
     match window {
         Some(window) => format!("0x{window:x} {}", format_x11_geometry(geometry)),
+        None => "none".to_string(),
+    }
+}
+
+fn format_xim_preedit_area(area: Option<XimPreeditArea>) -> String {
+    match area {
+        Some(area) => format!("({}, {} {}x{})", area.x, area.y, area.w, area.h),
         None => "none".to_string(),
     }
 }
