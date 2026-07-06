@@ -1,5 +1,9 @@
 use anyhow::{anyhow, Result};
-use serde_json::{Map, Value};
+use niri_ipc::{
+    Action as IpcAction, ColumnDisplay as IpcColumnDisplay, PositionChange as IpcPositionChange,
+    Request as IpcRequest, SizeChange as IpcSizeChange,
+    WorkspaceReferenceArg as IpcWorkspaceReference,
+};
 
 use crate::key::{normalize_name, KeyChord};
 
@@ -265,153 +269,118 @@ impl NiriAction {
         }
     }
 
-    fn ipc_request_json(self) -> Value {
+    fn ipc_action(self) -> IpcAction {
         match self {
-            Self::CloseWindow => action("CloseWindow", object_with_null_id()),
-            Self::FullscreenWindow => action("FullscreenWindow", object_with_null_id()),
-            Self::ToggleWindowedFullscreen => {
-                action("ToggleWindowedFullscreen", object_with_null_id())
-            }
-            Self::FocusColumnLeft => action("FocusColumnLeft", object()),
-            Self::FocusColumnRight => action("FocusColumnRight", object()),
-            Self::FocusColumnFirst => action("FocusColumnFirst", object()),
-            Self::FocusColumnLast => action("FocusColumnLast", object()),
-            Self::FocusColumnRightOrFirst => action("FocusColumnRightOrFirst", object()),
-            Self::FocusColumnLeftOrLast => action("FocusColumnLeftOrLast", object()),
-            Self::FocusColumn(index) => {
-                action("FocusColumn", field("index", Value::from(index as u64)))
-            }
-            Self::FocusWindowDown => action("FocusWindowDown", object()),
-            Self::FocusWindowUp => action("FocusWindowUp", object()),
-            Self::FocusWindowTop => action("FocusWindowTop", object()),
-            Self::FocusWindowBottom => action("FocusWindowBottom", object()),
-            Self::FocusWindowDownOrTop => action("FocusWindowDownOrTop", object()),
-            Self::FocusWindowUpOrBottom => action("FocusWindowUpOrBottom", object()),
-            Self::FocusWindowOrWorkspaceDown => action("FocusWindowOrWorkspaceDown", object()),
-            Self::FocusWindowOrWorkspaceUp => action("FocusWindowOrWorkspaceUp", object()),
-            Self::FocusWindowOrMonitorUp => action("FocusWindowOrMonitorUp", object()),
-            Self::FocusWindowOrMonitorDown => action("FocusWindowOrMonitorDown", object()),
-            Self::FocusColumnOrMonitorLeft => action("FocusColumnOrMonitorLeft", object()),
-            Self::FocusColumnOrMonitorRight => action("FocusColumnOrMonitorRight", object()),
-            Self::MoveColumnLeft => action("MoveColumnLeft", object()),
-            Self::MoveColumnRight => action("MoveColumnRight", object()),
-            Self::MoveColumnToFirst => action("MoveColumnToFirst", object()),
-            Self::MoveColumnToLast => action("MoveColumnToLast", object()),
-            Self::MoveColumnLeftOrToMonitorLeft => {
-                action("MoveColumnLeftOrToMonitorLeft", object())
-            }
-            Self::MoveColumnRightOrToMonitorRight => {
-                action("MoveColumnRightOrToMonitorRight", object())
-            }
-            Self::MoveColumnToIndex(index) => action(
-                "MoveColumnToIndex",
-                field("index", Value::from(index as u64)),
-            ),
-            Self::MoveWindowDown => action("MoveWindowDown", object()),
-            Self::MoveWindowUp => action("MoveWindowUp", object()),
+            Self::CloseWindow => IpcAction::CloseWindow { id: None },
+            Self::FullscreenWindow => IpcAction::FullscreenWindow { id: None },
+            Self::ToggleWindowedFullscreen => IpcAction::ToggleWindowedFullscreen { id: None },
+            Self::FocusColumnLeft => IpcAction::FocusColumnLeft {},
+            Self::FocusColumnRight => IpcAction::FocusColumnRight {},
+            Self::FocusColumnFirst => IpcAction::FocusColumnFirst {},
+            Self::FocusColumnLast => IpcAction::FocusColumnLast {},
+            Self::FocusColumnRightOrFirst => IpcAction::FocusColumnRightOrFirst {},
+            Self::FocusColumnLeftOrLast => IpcAction::FocusColumnLeftOrLast {},
+            Self::FocusColumn(index) => IpcAction::FocusColumn { index },
+            Self::FocusWindowDown => IpcAction::FocusWindowDown {},
+            Self::FocusWindowUp => IpcAction::FocusWindowUp {},
+            Self::FocusWindowTop => IpcAction::FocusWindowTop {},
+            Self::FocusWindowBottom => IpcAction::FocusWindowBottom {},
+            Self::FocusWindowDownOrTop => IpcAction::FocusWindowDownOrTop {},
+            Self::FocusWindowUpOrBottom => IpcAction::FocusWindowUpOrBottom {},
+            Self::FocusWindowOrWorkspaceDown => IpcAction::FocusWindowOrWorkspaceDown {},
+            Self::FocusWindowOrWorkspaceUp => IpcAction::FocusWindowOrWorkspaceUp {},
+            Self::FocusWindowOrMonitorUp => IpcAction::FocusWindowOrMonitorUp {},
+            Self::FocusWindowOrMonitorDown => IpcAction::FocusWindowOrMonitorDown {},
+            Self::FocusColumnOrMonitorLeft => IpcAction::FocusColumnOrMonitorLeft {},
+            Self::FocusColumnOrMonitorRight => IpcAction::FocusColumnOrMonitorRight {},
+            Self::MoveColumnLeft => IpcAction::MoveColumnLeft {},
+            Self::MoveColumnRight => IpcAction::MoveColumnRight {},
+            Self::MoveColumnToFirst => IpcAction::MoveColumnToFirst {},
+            Self::MoveColumnToLast => IpcAction::MoveColumnToLast {},
+            Self::MoveColumnLeftOrToMonitorLeft => IpcAction::MoveColumnLeftOrToMonitorLeft {},
+            Self::MoveColumnRightOrToMonitorRight => IpcAction::MoveColumnRightOrToMonitorRight {},
+            Self::MoveColumnToIndex(index) => IpcAction::MoveColumnToIndex { index },
+            Self::MoveWindowDown => IpcAction::MoveWindowDown {},
+            Self::MoveWindowUp => IpcAction::MoveWindowUp {},
             Self::MoveWindowDownOrToWorkspaceDown => {
-                action("MoveWindowDownOrToWorkspaceDown", object())
+                IpcAction::MoveWindowDownOrToWorkspaceDown {}
             }
-            Self::MoveWindowUpOrToWorkspaceUp => action("MoveWindowUpOrToWorkspaceUp", object()),
-            Self::MoveWindowToWorkspaceDown { focus } => action(
-                "MoveWindowToWorkspaceDown",
-                field("focus", Value::from(focus)),
-            ),
-            Self::MoveWindowToWorkspaceUp { focus } => action(
-                "MoveWindowToWorkspaceUp",
-                field("focus", Value::from(focus)),
-            ),
-            Self::MoveColumnToWorkspaceDown { focus } => action(
-                "MoveColumnToWorkspaceDown",
-                field("focus", Value::from(focus)),
-            ),
-            Self::MoveColumnToWorkspaceUp { focus } => action(
-                "MoveColumnToWorkspaceUp",
-                field("focus", Value::from(focus)),
-            ),
-            Self::MoveColumnToWorkspace { reference, focus } => action(
-                "MoveColumnToWorkspace",
-                fields([
-                    ("reference", workspace_reference(reference)),
-                    ("focus", Value::from(focus)),
-                ]),
-            ),
-            Self::ConsumeOrExpelWindowLeft => {
-                action("ConsumeOrExpelWindowLeft", object_with_null_id())
+            Self::MoveWindowUpOrToWorkspaceUp => IpcAction::MoveWindowUpOrToWorkspaceUp {},
+            Self::MoveWindowToWorkspaceDown { focus } => {
+                IpcAction::MoveWindowToWorkspaceDown { focus }
             }
-            Self::ConsumeOrExpelWindowRight => {
-                action("ConsumeOrExpelWindowRight", object_with_null_id())
+            Self::MoveWindowToWorkspaceUp { focus } => IpcAction::MoveWindowToWorkspaceUp { focus },
+            Self::MoveColumnToWorkspaceDown { focus } => {
+                IpcAction::MoveColumnToWorkspaceDown { focus }
             }
-            Self::ConsumeWindowIntoColumn => action("ConsumeWindowIntoColumn", object()),
-            Self::ExpelWindowFromColumn => action("ExpelWindowFromColumn", object()),
-            Self::SwapWindowLeft => action("SwapWindowLeft", object()),
-            Self::SwapWindowRight => action("SwapWindowRight", object()),
-            Self::ToggleColumnTabbedDisplay => action("ToggleColumnTabbedDisplay", object()),
-            Self::SetColumnDisplay(display) => action(
-                "SetColumnDisplay",
-                field("display", column_display(display)),
-            ),
-            Self::CenterColumn => action("CenterColumn", object()),
-            Self::CenterWindow => action("CenterWindow", object_with_null_id()),
-            Self::CenterVisibleColumns => action("CenterVisibleColumns", object()),
-            Self::FocusWorkspaceDown => action("FocusWorkspaceDown", object()),
-            Self::FocusWorkspaceUp => action("FocusWorkspaceUp", object()),
-            Self::FocusWorkspace(reference) => action(
-                "FocusWorkspace",
-                field("reference", workspace_reference(reference)),
-            ),
-            Self::FocusWorkspacePrevious => action("FocusWorkspacePrevious", object()),
-            Self::MoveWorkspaceDown => action("MoveWorkspaceDown", object()),
-            Self::MoveWorkspaceUp => action("MoveWorkspaceUp", object()),
-            Self::SwitchPresetColumnWidth => action("SwitchPresetColumnWidth", object()),
-            Self::SwitchPresetColumnWidthBack => action("SwitchPresetColumnWidthBack", object()),
-            Self::SwitchPresetWindowWidth => {
-                action("SwitchPresetWindowWidth", object_with_null_id())
-            }
+            Self::MoveColumnToWorkspaceUp { focus } => IpcAction::MoveColumnToWorkspaceUp { focus },
+            Self::MoveColumnToWorkspace { reference, focus } => IpcAction::MoveColumnToWorkspace {
+                reference: ipc_workspace_reference(reference),
+                focus,
+            },
+            Self::ConsumeOrExpelWindowLeft => IpcAction::ConsumeOrExpelWindowLeft { id: None },
+            Self::ConsumeOrExpelWindowRight => IpcAction::ConsumeOrExpelWindowRight { id: None },
+            Self::ConsumeWindowIntoColumn => IpcAction::ConsumeWindowIntoColumn {},
+            Self::ExpelWindowFromColumn => IpcAction::ExpelWindowFromColumn {},
+            Self::SwapWindowLeft => IpcAction::SwapWindowLeft {},
+            Self::SwapWindowRight => IpcAction::SwapWindowRight {},
+            Self::ToggleColumnTabbedDisplay => IpcAction::ToggleColumnTabbedDisplay {},
+            Self::SetColumnDisplay(display) => IpcAction::SetColumnDisplay {
+                display: ipc_column_display(display),
+            },
+            Self::CenterColumn => IpcAction::CenterColumn {},
+            Self::CenterWindow => IpcAction::CenterWindow { id: None },
+            Self::CenterVisibleColumns => IpcAction::CenterVisibleColumns {},
+            Self::FocusWorkspaceDown => IpcAction::FocusWorkspaceDown {},
+            Self::FocusWorkspaceUp => IpcAction::FocusWorkspaceUp {},
+            Self::FocusWorkspace(reference) => IpcAction::FocusWorkspace {
+                reference: ipc_workspace_reference(reference),
+            },
+            Self::FocusWorkspacePrevious => IpcAction::FocusWorkspacePrevious {},
+            Self::MoveWorkspaceDown => IpcAction::MoveWorkspaceDown {},
+            Self::MoveWorkspaceUp => IpcAction::MoveWorkspaceUp {},
+            Self::SwitchPresetColumnWidth => IpcAction::SwitchPresetColumnWidth {},
+            Self::SwitchPresetColumnWidthBack => IpcAction::SwitchPresetColumnWidthBack {},
+            Self::SwitchPresetWindowWidth => IpcAction::SwitchPresetWindowWidth { id: None },
             Self::SwitchPresetWindowWidthBack => {
-                action("SwitchPresetWindowWidthBack", object_with_null_id())
+                IpcAction::SwitchPresetWindowWidthBack { id: None }
             }
-            Self::SwitchPresetWindowHeight => {
-                action("SwitchPresetWindowHeight", object_with_null_id())
-            }
+            Self::SwitchPresetWindowHeight => IpcAction::SwitchPresetWindowHeight { id: None },
             Self::SwitchPresetWindowHeightBack => {
-                action("SwitchPresetWindowHeightBack", object_with_null_id())
+                IpcAction::SwitchPresetWindowHeightBack { id: None }
             }
-            Self::MaximizeColumn => action("MaximizeColumn", object()),
-            Self::MaximizeWindowToEdges => action("MaximizeWindowToEdges", object_with_null_id()),
-            Self::SetColumnWidth(change) => {
-                action("SetColumnWidth", field("change", size_change(change)))
-            }
-            Self::SetWindowWidth(change) => action(
-                "SetWindowWidth",
-                fields([("id", Value::Null), ("change", size_change(change))]),
-            ),
-            Self::SetWindowHeight(change) => action(
-                "SetWindowHeight",
-                fields([("id", Value::Null), ("change", size_change(change))]),
-            ),
-            Self::ResetWindowHeight => action("ResetWindowHeight", object_with_null_id()),
-            Self::ExpandColumnToAvailableWidth => action("ExpandColumnToAvailableWidth", object()),
-            Self::ToggleWindowFloating => action("ToggleWindowFloating", object_with_null_id()),
-            Self::MoveWindowToFloating => action("MoveWindowToFloating", object_with_null_id()),
-            Self::MoveWindowToTiling => action("MoveWindowToTiling", object_with_null_id()),
-            Self::FocusFloating => action("FocusFloating", object()),
-            Self::FocusTiling => action("FocusTiling", object()),
+            Self::MaximizeColumn => IpcAction::MaximizeColumn {},
+            Self::MaximizeWindowToEdges => IpcAction::MaximizeWindowToEdges { id: None },
+            Self::SetColumnWidth(change) => IpcAction::SetColumnWidth {
+                change: ipc_size_change(change),
+            },
+            Self::SetWindowWidth(change) => IpcAction::SetWindowWidth {
+                id: None,
+                change: ipc_size_change(change),
+            },
+            Self::SetWindowHeight(change) => IpcAction::SetWindowHeight {
+                id: None,
+                change: ipc_size_change(change),
+            },
+            Self::ResetWindowHeight => IpcAction::ResetWindowHeight { id: None },
+            Self::ExpandColumnToAvailableWidth => IpcAction::ExpandColumnToAvailableWidth {},
+            Self::ToggleWindowFloating => IpcAction::ToggleWindowFloating { id: None },
+            Self::MoveWindowToFloating => IpcAction::MoveWindowToFloating { id: None },
+            Self::MoveWindowToTiling => IpcAction::MoveWindowToTiling { id: None },
+            Self::FocusFloating => IpcAction::FocusFloating {},
+            Self::FocusTiling => IpcAction::FocusTiling {},
             Self::SwitchFocusBetweenFloatingAndTiling => {
-                action("SwitchFocusBetweenFloatingAndTiling", object())
+                IpcAction::SwitchFocusBetweenFloatingAndTiling {}
             }
-            Self::MoveFloatingWindow { x, y } => action(
-                "MoveFloatingWindow",
-                fields([
-                    ("id", Value::Null),
-                    ("x", position_change(x)),
-                    ("y", position_change(y)),
-                ]),
-            ),
-            Self::ShowHotkeyOverlay => action("ShowHotkeyOverlay", object()),
-            Self::ToggleOverview => action("ToggleOverview", object()),
-            Self::OpenOverview => action("OpenOverview", object()),
-            Self::CloseOverview => action("CloseOverview", object()),
+            Self::MoveFloatingWindow { x, y } => IpcAction::MoveFloatingWindow {
+                id: None,
+                x: ipc_position_change(x),
+                y: ipc_position_change(y),
+            },
+            Self::ShowHotkeyOverlay => IpcAction::ShowHotkeyOverlay {},
+            Self::ToggleOverview => IpcAction::ToggleOverview {},
+            Self::OpenOverview => IpcAction::OpenOverview {},
+            Self::CloseOverview => IpcAction::CloseOverview {},
         }
     }
 }
@@ -423,35 +392,28 @@ impl std::fmt::Display for NiriAction {
 }
 
 pub(crate) fn niri_action_request_json(action: NiriAction) -> String {
-    action.ipc_request_json().to_string()
+    ipc_request_json(action.ipc_action())
 }
 
 pub(crate) fn niri_spawn_request_json(command: &[String]) -> String {
-    action(
-        "Spawn",
-        field(
-            "command",
-            Value::Array(command.iter().cloned().map(Value::String).collect()),
-        ),
-    )
-    .to_string()
+    ipc_request_json(IpcAction::Spawn {
+        command: command.to_vec(),
+    })
 }
 
 pub(crate) fn niri_spawn_sh_request_json(command: &str) -> String {
-    action("SpawnSh", field("command", Value::String(command.to_string()))).to_string()
+    ipc_request_json(IpcAction::SpawnSh {
+        command: command.to_string(),
+    })
 }
 
 pub(crate) fn niri_interactive_move_begin_request_json(output: &str, x: f64, y: f64) -> String {
-    action(
-        "InteractiveMoveBegin",
-        fields([
-            ("id", Value::Null),
-            ("output", Value::String(output.to_string())),
-            ("x", Value::from(x)),
-            ("y", Value::from(y)),
-        ]),
-    )
-    .to_string()
+    ipc_request_json(IpcAction::InteractiveMoveBegin {
+        id: None,
+        output: output.to_string(),
+        x,
+        y,
+    })
 }
 
 pub(crate) fn niri_interactive_move_update_request_json(
@@ -461,44 +423,32 @@ pub(crate) fn niri_interactive_move_update_request_json(
     dx: f64,
     dy: f64,
 ) -> String {
-    action(
-        "InteractiveMoveUpdate",
-        fields([
-            ("output", Value::String(output.to_string())),
-            ("x", Value::from(x)),
-            ("y", Value::from(y)),
-            ("dx", Value::from(dx)),
-            ("dy", Value::from(dy)),
-        ]),
-    )
-    .to_string()
+    ipc_request_json(IpcAction::InteractiveMoveUpdate {
+        output: output.to_string(),
+        x,
+        y,
+        dx,
+        dy,
+    })
 }
 
 pub(crate) fn niri_interactive_move_end_request_json() -> String {
-    action("InteractiveMoveEnd", object()).to_string()
+    ipc_request_json(IpcAction::InteractiveMoveEnd {})
 }
 
 pub(crate) fn niri_interactive_resize_begin_request_json(edge: NiriResizeEdge) -> String {
-    action(
-        "InteractiveResizeBegin",
-        fields([
-            ("id", Value::Null),
-            ("edges", Value::String(edge.as_str().to_string())),
-        ]),
-    )
-    .to_string()
+    ipc_request_json(IpcAction::InteractiveResizeBegin {
+        id: None,
+        edges: edge.as_str().to_string(),
+    })
 }
 
 pub(crate) fn niri_interactive_resize_update_request_json(dx: f64, dy: f64) -> String {
-    action(
-        "InteractiveResizeUpdate",
-        fields([("dx", Value::from(dx)), ("dy", Value::from(dy))]),
-    )
-    .to_string()
+    ipc_request_json(IpcAction::InteractiveResizeUpdate { dx, dy })
 }
 
 pub(crate) fn niri_interactive_resize_end_request_json() -> String {
-    action("InteractiveResizeEnd", object()).to_string()
+    ipc_request_json(IpcAction::InteractiveResizeEnd {})
 }
 
 pub(crate) fn parse_niri_action(value: &str) -> Result<NiriAction> {
@@ -732,83 +682,59 @@ fn has_sign(value: &str) -> bool {
     matches!(value.as_bytes().first(), Some(b'+' | b'-'))
 }
 
-fn action(name: &str, payload: Value) -> Value {
-    let mut action = Map::new();
-    action.insert(name.to_string(), payload);
-
-    let mut root = Map::new();
-    root.insert("Action".to_string(), Value::Object(action));
-    Value::Object(root)
+fn ipc_request_json(action: IpcAction) -> String {
+    serde_json::to_string(&IpcRequest::Action(action)).expect("serialize niri IPC request")
 }
 
-fn object() -> Value {
-    Value::Object(Map::new())
-}
-
-fn object_with_null_id() -> Value {
-    field("id", Value::Null)
-}
-
-fn field(name: &str, value: impl Into<Value>) -> Value {
-    fields([(name, value.into())])
-}
-
-fn fields<const N: usize>(fields: [(&str, Value); N]) -> Value {
-    let mut object = Map::new();
-    for (name, value) in fields {
-        object.insert(name.to_string(), value);
-    }
-    Value::Object(object)
-}
-
-fn size_change(change: SizeChange) -> Value {
+fn ipc_size_change(change: SizeChange) -> IpcSizeChange {
     match change {
-        SizeChange::SetFixed(value) => tagged("SetFixed", value),
-        SizeChange::SetProportion(value) => tagged("SetProportion", value),
-        SizeChange::AdjustFixed(value) => tagged("AdjustFixed", value),
-        SizeChange::AdjustProportion(value) => tagged("AdjustProportion", value),
+        SizeChange::SetFixed(value) => IpcSizeChange::SetFixed(value),
+        SizeChange::SetProportion(value) => IpcSizeChange::SetProportion(value),
+        SizeChange::AdjustFixed(value) => IpcSizeChange::AdjustFixed(value),
+        SizeChange::AdjustProportion(value) => IpcSizeChange::AdjustProportion(value),
     }
 }
 
-fn position_change(change: PositionChange) -> Value {
+fn ipc_position_change(change: PositionChange) -> IpcPositionChange {
     match change {
-        PositionChange::SetFixed(value) => tagged("SetFixed", value),
-        PositionChange::SetProportion(value) => tagged("SetProportion", value),
-        PositionChange::AdjustFixed(value) => tagged("AdjustFixed", value),
-        PositionChange::AdjustProportion(value) => tagged("AdjustProportion", value),
+        PositionChange::SetFixed(value) => IpcPositionChange::SetFixed(value),
+        PositionChange::SetProportion(value) => IpcPositionChange::SetProportion(value),
+        PositionChange::AdjustFixed(value) => IpcPositionChange::AdjustFixed(value),
+        PositionChange::AdjustProportion(value) => IpcPositionChange::AdjustProportion(value),
     }
 }
 
-fn workspace_reference(reference: WorkspaceReference) -> Value {
+fn ipc_workspace_reference(reference: WorkspaceReference) -> IpcWorkspaceReference {
     match reference {
-        WorkspaceReference::Index(value) => tagged("Index", value),
+        WorkspaceReference::Index(value) => IpcWorkspaceReference::Index(value),
     }
 }
 
-fn column_display(display: ColumnDisplay) -> Value {
+fn ipc_column_display(display: ColumnDisplay) -> IpcColumnDisplay {
     match display {
-        ColumnDisplay::Normal => Value::String("Normal".to_string()),
-        ColumnDisplay::Tabbed => Value::String("Tabbed".to_string()),
+        ColumnDisplay::Normal => IpcColumnDisplay::Normal,
+        ColumnDisplay::Tabbed => IpcColumnDisplay::Tabbed,
     }
-}
-
-fn tagged(name: &str, value: impl Into<Value>) -> Value {
-    let mut object = Map::new();
-    object.insert(name.to_string(), value.into());
-    Value::Object(object)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
+
+    fn assert_json_eq(actual: String, expected: &str) {
+        let actual: Value = serde_json::from_str(&actual).unwrap();
+        let expected: Value = serde_json::from_str(expected).unwrap();
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn maps_supported_niri_actions_to_ipc_json() {
-        assert_eq!(
+        assert_json_eq(
             niri_action_request_json(parse_niri_action("focus-column-left").unwrap()),
             r#"{"Action":{"FocusColumnLeft":{}}}"#
         );
-        assert_eq!(
+        assert_json_eq(
             niri_action_request_json(parse_niri_action("toggle-overview").unwrap()),
             r#"{"Action":{"ToggleOverview":{}}}"#
         );
@@ -816,29 +742,29 @@ mod tests {
 
     #[test]
     fn maps_parameterized_niri_actions_to_ipc_json() {
-        assert_eq!(
+        assert_json_eq(
             niri_action_request_json(parse_niri_action("set-window-width:+10%").unwrap()),
             r#"{"Action":{"SetWindowWidth":{"change":{"AdjustProportion":10.0},"id":null}}}"#
         );
-        assert_eq!(
+        assert_json_eq(
             niri_action_request_json(parse_niri_action("move-floating-window:+40,-10").unwrap()),
             r#"{"Action":{"MoveFloatingWindow":{"id":null,"x":{"AdjustFixed":40.0},"y":{"AdjustFixed":-10.0}}}}"#
         );
-        assert_eq!(
+        assert_json_eq(
             niri_action_request_json(
                 parse_niri_action("move-window-to-workspace-up:false").unwrap()
             ),
             r#"{"Action":{"MoveWindowToWorkspaceUp":{"focus":false}}}"#
         );
-        assert_eq!(
+        assert_json_eq(
             niri_action_request_json(parse_niri_action("move-column-to-workspace:5").unwrap()),
             r#"{"Action":{"MoveColumnToWorkspace":{"focus":true,"reference":{"Index":5}}}}"#
         );
-        assert_eq!(
+        assert_json_eq(
             niri_spawn_request_json(&["foot".to_string()]),
             r#"{"Action":{"Spawn":{"command":["foot"]}}}"#
         );
-        assert_eq!(
+        assert_json_eq(
             niri_spawn_sh_request_json("noctalia msg settings-toggle"),
             r#"{"Action":{"SpawnSh":{"command":"noctalia msg settings-toggle"}}}"#
         );

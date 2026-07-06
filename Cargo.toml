@@ -9,6 +9,7 @@ anyhow = "1"
 cosmic-text = "0.19"
 libc = "0.2"
 memmap2 = "0.9"
+niri-ipc = { path = "/home/disk/Projects/niri/niri-ipc" }
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

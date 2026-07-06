@@ -616,6 +616,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "niri-ipc"
+version = "26.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1053,6 +1061,7 @@ dependencies = [
  "cosmic-text",
  "libc",
  "memmap2",
+ "niri-ipc",
  "roxmltree",
  "serde",
  "serde_json",
