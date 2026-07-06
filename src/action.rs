@@ -1,9 +1,6 @@
-use std::thread;
-
 use anyhow::{anyhow, Result};
 
 use crate::key::{normalize_name, KeyChord};
-use touchdeck::niri;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ActionStep {
@@ -50,20 +47,6 @@ impl std::fmt::Display for NiriAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-pub(crate) fn spawn_niri_action(action: NiriAction) {
-    thread::spawn(move || {
-        if let Err(err) = send_niri_action_socket(action) {
-            eprintln!("touchdeck: failed to send niri action {action}: {err:?}");
-        }
-    });
-}
-
-pub(crate) fn send_niri_action_socket(action: NiriAction) -> Result<()> {
-    let request = niri_action_request_json(action);
-    let _ = niri::send_ipc_request_json(request)?;
-    Ok(())
 }
 
 pub(crate) fn niri_action_request_json(action: NiriAction) -> &'static str {

@@ -34,6 +34,7 @@ mod key;
 mod keymap;
 mod layout;
 mod mode;
+mod niri_backend;
 
 
 use action::*;
@@ -44,6 +45,7 @@ use key::*;
 use keymap::*;
 use layout::*;
 use mode::*;
+use niri_backend::*;
 
 const NAMESPACE: &str = "touchdeck";
 
