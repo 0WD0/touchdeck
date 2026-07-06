@@ -1294,8 +1294,18 @@ impl Engine {
         if previous_non_hold_count > 0 {
             self.armed_drag = None;
         }
+        self.rebase_active_contacts();
         self.last_tap = None;
         self.finished.clear();
+    }
+
+    fn rebase_active_contacts(&mut self) {
+        for contact in self.active.values_mut() {
+            contact.start_x = contact.last_x;
+            contact.start_y = contact.last_y;
+            contact.start_time = contact.last_time;
+        }
+        self.max_active = self.active_non_hold_count().max(1);
     }
 
     fn armed_drag_matches(&self, gesture: &Gesture, armed: &ArmedDragState) -> bool {
