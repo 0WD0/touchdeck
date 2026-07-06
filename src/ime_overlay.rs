@@ -8,11 +8,31 @@ use crate::renderer::{draw_rect_frame, fill_rect, CanvasSize, TextRenderer, Text
 pub(crate) fn should_render_ime_status(status: &ImeStatus, mode: Mode) -> bool {
     if status.preedit.is_empty() && status.commit_preview.is_empty() && status.candidates.is_empty()
     {
+        log_ime_ownership(|| {
+            eprintln!(
+                "touchdeck: ownership should_render=false reason=empty mode={mode:?} source={} display={} ui_owner={} active={}",
+                status.source, status.display_kind, status.ui_owner, status.active
+            );
+        });
         return false;
     }
 
-    (mode == Mode::Text && status.ui_owner == "touchdeck-overlay")
-        || should_render_fcitx_server_popup(status)
+    let render = (mode == Mode::Text && status.ui_owner == "touchdeck-overlay")
+        || should_render_fcitx_server_popup(status);
+    log_ime_ownership(|| {
+        eprintln!(
+            "touchdeck: ownership should_render={} mode={mode:?} source={} display={} ui_owner={} active={} preedit={:?} candidates={} cursor_rect={}",
+            render,
+            status.source,
+            status.display_kind,
+            status.ui_owner,
+            status.active,
+            status.preedit,
+            status.candidates.len(),
+            status.cursor_rect.is_some()
+        );
+    });
+    render
 }
 
 pub(crate) fn render_ime_status(
@@ -29,15 +49,45 @@ pub(crate) fn render_ime_status(
 
     if should_render_fcitx_server_popup(status) {
         if let Some(cursor_rect) = status.cursor_rect.clone() {
+            log_ime_ownership(|| {
+                eprintln!(
+                    "touchdeck: ownership render=server-popup source={} display={} ui_owner={} preedit={:?} candidates={}",
+                    status.source,
+                    status.display_kind,
+                    status.ui_owner,
+                    status.preedit,
+                    status.candidates.len()
+                );
+            });
             render_physical_ime_status(renderer, mmap, width, height, status, cursor_rect);
             return;
         }
     }
 
     if status.ui_owner != "touchdeck-overlay" {
+        log_ime_ownership(|| {
+            eprintln!(
+                "touchdeck: ownership render=skip reason=ui_owner source={} display={} ui_owner={} preedit={:?} candidates={}",
+                status.source,
+                status.display_kind,
+                status.ui_owner,
+                status.preedit,
+                status.candidates.len()
+            );
+        });
         return;
     }
 
+    log_ime_ownership(|| {
+        eprintln!(
+            "touchdeck: ownership render=touch-overlay source={} display={} ui_owner={} preedit={:?} candidates={}",
+            status.source,
+            status.display_kind,
+            status.ui_owner,
+            status.preedit,
+            status.candidates.len()
+        );
+    });
     render_touch_ime_status(renderer, mmap, width, height, status);
 }
 
@@ -512,4 +562,10 @@ fn ime_candidate_label(index: usize, candidate: &ImeCandidate) -> String {
 
 fn log_geometry() -> bool {
     std::env::var_os("TOUCHDECK_LOG_IME_GEOMETRY").is_some()
+}
+
+fn log_ime_ownership(log: impl FnOnce()) {
+    if std::env::var_os("TOUCHDECK_LOG_IME_OWNERSHIP").is_some() {
+        log();
+    }
 }

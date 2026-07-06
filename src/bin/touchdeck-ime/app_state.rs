@@ -71,6 +71,18 @@ impl ImeApp {
         self.status = effects.status;
         self.status.active = self.active;
 
+        log_ime_ownership(|| {
+            eprintln!(
+                "touchdeck-ime: ownership apply_local source={} active={} fcitx_focus={} preedit={:?} candidates={} commit={}",
+                source.as_str(),
+                self.active,
+                self.fcitx_focus.is_some(),
+                preedit,
+                status.candidates.len(),
+                commit.is_some()
+            );
+        });
+
         if self.fcitx_focus.is_some() {
             self.emit_fcitx_output(preedit, commit, status);
             return;
@@ -94,6 +106,17 @@ impl ImeApp {
         effects.status.source = source.as_str().to_string();
         self.status = effects.status.clone();
         self.preedit = effects.preedit.clone();
+        log_ime_ownership(|| {
+            eprintln!(
+                "touchdeck-ime: ownership apply_response source={} active={} fcitx_focus={} preedit={:?} candidates={} commit={}",
+                source.as_str(),
+                effects.status.active,
+                self.fcitx_focus.is_some(),
+                effects.preedit,
+                effects.status.candidates.len(),
+                effects.commit.is_some()
+            );
+        });
         self.broadcast_status(source.as_str());
         effects
     }
@@ -113,6 +136,17 @@ impl ImeApp {
             Some(target) => target,
             None => return,
         };
+
+        log_ime_ownership(|| {
+            eprintln!(
+                "touchdeck-ime: ownership emit_fcitx_output target={} display={} preedit={:?} candidates={} commit={}",
+                target.path.as_str(),
+                target.display,
+                preedit,
+                status.candidates.len(),
+                commit.is_some()
+            );
+        });
 
         let preedit_changed = preedit != self.preedit;
         self.preedit = preedit.clone();
@@ -179,5 +213,11 @@ impl ImeApp {
         eprintln!("touchdeck-ime: commit {text:?}");
         input_method.commit_string(text);
         input_method.commit(self.serial);
+    }
+}
+
+fn log_ime_ownership(log: impl FnOnce()) {
+    if std::env::var_os("TOUCHDECK_LOG_IME_OWNERSHIP").is_some() {
+        log();
     }
 }

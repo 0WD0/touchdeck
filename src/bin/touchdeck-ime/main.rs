@@ -1118,8 +1118,29 @@ impl ImeApp {
 
     fn broadcast_status(&mut self, source: &str) {
         let status = self.current_status_with_source(source);
+        log_ime_ownership(|| {
+            eprintln!(
+                "touchdeck-ime: ownership broadcast requested_source={} status_source={} display={} ui_owner={} active={} client_side_panel={} preedit={:?} candidates={} cursor_rect={} subscribers={}",
+                source,
+                status.source,
+                status.display_kind,
+                status.ui_owner,
+                status.active,
+                status.client_side_input_panel,
+                status.preedit,
+                status.candidates.len(),
+                status.cursor_rect.is_some(),
+                self.status_subscribers.len()
+            );
+        });
         self.status_subscribers
             .retain(|subscriber| subscriber.send(status.clone()).is_ok());
+    }
+}
+
+fn log_ime_ownership(log: impl FnOnce()) {
+    if std::env::var_os("TOUCHDECK_LOG_IME_OWNERSHIP").is_some() {
+        log();
     }
 }
 
