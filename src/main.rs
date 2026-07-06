@@ -53,6 +53,7 @@ use wayland_overlay::Overlay;
 
 const NAMESPACE: &str = "touchdeck";
 const RAW_TOUCH_RETRY_MS: u64 = 500;
+const RAW_TOUCH_SOURCE_SWITCH_GUARD_MS: u64 = 160;
 
 struct App {
     compositor: Option<wl_compositor::WlCompositor>,
@@ -94,6 +95,8 @@ struct TouchSession {
     raw_touch: Option<EvdevTouchBackend>,
     raw_touch_retry_at_ms: Option<u64>,
     raw_touch_last_error: Option<String>,
+    raw_discard_active: HashSet<i32>,
+    raw_discard_until_ms: Option<u64>,
     overlay: Overlay,
     engine: Engine,
     capture_policy: CapturePolicy,
@@ -116,6 +119,8 @@ impl TouchSession {
             raw_touch: None,
             raw_touch_retry_at_ms: None,
             raw_touch_last_error: None,
+            raw_discard_active: HashSet::new(),
+            raw_discard_until_ms: None,
             overlay: Overlay::default(),
             engine,
             capture_policy,
@@ -144,6 +149,8 @@ impl TouchSession {
             raw_touch: Some(raw_touch),
             raw_touch_retry_at_ms: None,
             raw_touch_last_error: None,
+            raw_discard_active: HashSet::new(),
+            raw_discard_until_ms: None,
             overlay: Overlay::default(),
             engine,
             capture_policy,
@@ -509,6 +516,11 @@ impl App {
             if let Some(retry_at) = session.raw_touch_retry_at_ms {
                 deadline = Some(deadline.map_or(retry_at, |deadline: u64| deadline.min(retry_at)));
             }
+            if let Some(discard_until) = session.raw_discard_until_ms {
+                deadline = Some(deadline.map_or(discard_until, |deadline: u64| {
+                    deadline.min(discard_until)
+                }));
+            }
         }
         if self.ime_status_rx.is_some() {
             let refresh_deadline = self.now_ms().saturating_add(33);
@@ -636,6 +648,7 @@ impl App {
             && matches!(old_policy, CapturePolicy::Zones(_))
             && !matches!(policy, CapturePolicy::Zones(_))
         {
+            self.start_raw_source_switch_guard(index);
             self.discard_pending_raw_touch(index)?;
         }
 
@@ -666,6 +679,7 @@ impl App {
             return Ok(());
         };
         let discarded = raw_touch.drain_events(size)?;
+        self.discard_raw_events(index, &discarded);
         if self.config.log_touch && !discarded.is_empty() {
             eprintln!(
                 "touchdeck: session={} discarded {} stale raw touch events after passthrough",
@@ -674,6 +688,48 @@ impl App {
             );
         }
         Ok(())
+    }
+
+    fn start_raw_source_switch_guard(&mut self, index: usize) {
+        self.sessions[index].raw_discard_until_ms =
+            Some(self.now_ms() + RAW_TOUCH_SOURCE_SWITCH_GUARD_MS);
+    }
+
+    fn should_discard_raw_touch(&mut self, index: usize) -> bool {
+        let now_ms = self.now_ms();
+        let session = &mut self.sessions[index];
+        if session.raw_discard_active.is_empty()
+            && session
+                .raw_discard_until_ms
+                .is_some_and(|until_ms| now_ms >= until_ms)
+        {
+            session.raw_discard_until_ms = None;
+        }
+
+        session.raw_discard_until_ms.is_some() || !session.raw_discard_active.is_empty()
+    }
+
+    fn discard_raw_events(&mut self, index: usize, events: &[RawTouchEvent]) {
+        for event in events {
+            match event {
+                RawTouchEvent::Down { id, .. } => {
+                    self.sessions[index].raw_discard_active.insert(*id);
+                }
+                RawTouchEvent::Up { id, .. } => {
+                    self.sessions[index].raw_discard_active.remove(id);
+                }
+                RawTouchEvent::Motion { .. } => {}
+            }
+        }
+
+        if self.sessions[index].raw_discard_active.is_empty()
+            && self
+                .sessions[index]
+                .raw_discard_until_ms
+                .is_some_and(|until_ms| self.now_ms() >= until_ms)
+        {
+            self.sessions[index].raw_discard_until_ms = None;
+        }
     }
 
     fn sync_raw_touch_grab(&mut self, index: usize, policy: &CapturePolicy) -> Result<()> {
@@ -907,6 +963,7 @@ impl App {
     fn drain_raw_touch(&mut self, qh: &QueueHandle<Self>, index: usize) -> Result<()> {
         let size = self.sessions[index].overlay.surface_size();
         let passthrough = self.raw_touch_passthrough(index);
+        let discard_raw = passthrough || self.should_discard_raw_touch(index);
         let events = {
             let Some(raw_touch) = self.sessions[index].raw_touch.as_mut() else {
                 return Ok(());
@@ -920,7 +977,19 @@ impl App {
             }
         };
 
-        if passthrough {
+        if discard_raw {
+            self.discard_raw_events(index, &events);
+            if self.config.log_touch && !events.is_empty() {
+                let session_id = self.sessions[index].id;
+                let guard = self.should_discard_raw_touch(index);
+                eprintln!(
+                    "touchdeck: session={} discarded {} raw touch events passthrough={} guard={}",
+                    session_id,
+                    events.len(),
+                    passthrough,
+                    guard
+                );
+            }
             return Ok(());
         }
 
