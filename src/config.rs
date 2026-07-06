@@ -1501,7 +1501,10 @@ fn parse_behavior_invocation_kind(
             Ok(Behavior::Sequence(macros.get(&name)?))
         }
         "spawn" => {
-            let command = args.iter().map(|value| (*value).to_string()).collect::<Vec<_>>();
+            let command = args
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>();
             if command.is_empty() {
                 return Err(anyhow!("&spawn is missing command"));
             }
@@ -1511,7 +1514,9 @@ fn parse_behavior_invocation_kind(
             if args.is_empty() {
                 return Err(anyhow!("&spawn-sh is missing shell command"));
             }
-            Ok(Behavior::Sequence(vec![ActionStep::SpawnSh(args.join(" "))]))
+            Ok(Behavior::Sequence(vec![ActionStep::SpawnSh(
+                args.join(" "),
+            )]))
         }
         "sequence" => {
             let steps = fields
@@ -1697,12 +1702,11 @@ fn parse_action_step(value: ActionStepFileConfig) -> Result<ActionStep> {
                 .map(str::to_string)
                 .collect(),
         )),
-        "spawn_sh" | "spawn-sh" => Ok(ActionStep::SpawnSh(
-            value
-                .keys
-                .or(value.key)
-                .ok_or_else(|| anyhow!("spawn_sh step is missing key/keys command"))?,
-        )),
+        "spawn_sh" | "spawn-sh" => {
+            Ok(ActionStep::SpawnSh(value.keys.or(value.key).ok_or_else(
+                || anyhow!("spawn_sh step is missing key/keys command"),
+            )?))
+        }
         "delay" | "delay_ms" => Ok(ActionStep::DelayMs(
             value
                 .ms

@@ -2013,9 +2013,7 @@ mod tests {
                 },
                 behavior: Behavior::HoldTap {
                     hold: Box::new(Behavior::LayerMomentary(Layer::new("niri_bind"))),
-                    tap: Box::new(Behavior::KeySequence(vec![KeyChord {
-                        keys: vec![KEY_A],
-                    }])),
+                    tap: Box::new(Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_A] }])),
                     flavor: HoldTapFlavor::HoldPreferred,
                     tapping_term_ms: Some(220),
                 },
@@ -2038,7 +2036,12 @@ mod tests {
         let (thumb_x, thumb_y) = test_slot_center("thumb_super");
         let (q_x, q_y) = test_slot_center("key_q");
 
-        handle_down(&mut engine, sample(0, 0, 1, thumb_x, thumb_y), &config, size);
+        handle_down(
+            &mut engine,
+            sample(0, 0, 1, thumb_x, thumb_y),
+            &config,
+            size,
+        );
         handle_down(&mut engine, sample(80, 80, 2, q_x, q_y), &config, size);
         assert!(engine.layer_stack.contains(&Layer::new("niri_bind")));
 
@@ -2065,9 +2068,7 @@ mod tests {
             },
             behavior: Behavior::HoldTap {
                 hold: Box::new(Behavior::LayerMomentary(Layer::new("niri_bind"))),
-                tap: Box::new(Behavior::KeySequence(vec![KeyChord {
-                    keys: vec![KEY_A],
-                }])),
+                tap: Box::new(Behavior::KeySequence(vec![KeyChord { keys: vec![KEY_A] }])),
                 flavor: HoldTapFlavor::TapUnlessInterrupted,
                 tapping_term_ms: Some(120),
             },
@@ -2076,7 +2077,12 @@ mod tests {
         }];
         let (thumb_x, thumb_y) = test_slot_center("thumb_super");
 
-        handle_down(&mut engine, sample(0, 0, 1, thumb_x, thumb_y), &config, size);
+        handle_down(
+            &mut engine,
+            sample(0, 0, 1, thumb_x, thumb_y),
+            &config,
+            size,
+        );
         engine.process_timers(160, &config, size);
         let effects = engine.handle_up(220, 220, 1, &config, size);
 

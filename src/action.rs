@@ -302,9 +302,7 @@ impl NiriAction {
             Self::MoveColumnToIndex(index) => IpcAction::MoveColumnToIndex { index },
             Self::MoveWindowDown => IpcAction::MoveWindowDown {},
             Self::MoveWindowUp => IpcAction::MoveWindowUp {},
-            Self::MoveWindowDownOrToWorkspaceDown => {
-                IpcAction::MoveWindowDownOrToWorkspaceDown {}
-            }
+            Self::MoveWindowDownOrToWorkspaceDown => IpcAction::MoveWindowDownOrToWorkspaceDown {},
             Self::MoveWindowUpOrToWorkspaceUp => IpcAction::MoveWindowUpOrToWorkspaceUp {},
             Self::MoveWindowToWorkspaceDown { focus } => {
                 IpcAction::MoveWindowToWorkspaceDown { focus }
@@ -732,11 +730,11 @@ mod tests {
     fn maps_supported_niri_actions_to_ipc_json() {
         assert_json_eq(
             niri_action_request_json(parse_niri_action("focus-column-left").unwrap()),
-            r#"{"Action":{"FocusColumnLeft":{}}}"#
+            r#"{"Action":{"FocusColumnLeft":{}}}"#,
         );
         assert_json_eq(
             niri_action_request_json(parse_niri_action("toggle-overview").unwrap()),
-            r#"{"Action":{"ToggleOverview":{}}}"#
+            r#"{"Action":{"ToggleOverview":{}}}"#,
         );
     }
 
@@ -744,29 +742,29 @@ mod tests {
     fn maps_parameterized_niri_actions_to_ipc_json() {
         assert_json_eq(
             niri_action_request_json(parse_niri_action("set-window-width:+10%").unwrap()),
-            r#"{"Action":{"SetWindowWidth":{"change":{"AdjustProportion":10.0},"id":null}}}"#
+            r#"{"Action":{"SetWindowWidth":{"change":{"AdjustProportion":10.0},"id":null}}}"#,
         );
         assert_json_eq(
             niri_action_request_json(parse_niri_action("move-floating-window:+40,-10").unwrap()),
-            r#"{"Action":{"MoveFloatingWindow":{"id":null,"x":{"AdjustFixed":40.0},"y":{"AdjustFixed":-10.0}}}}"#
+            r#"{"Action":{"MoveFloatingWindow":{"id":null,"x":{"AdjustFixed":40.0},"y":{"AdjustFixed":-10.0}}}}"#,
         );
         assert_json_eq(
             niri_action_request_json(
-                parse_niri_action("move-window-to-workspace-up:false").unwrap()
+                parse_niri_action("move-window-to-workspace-up:false").unwrap(),
             ),
-            r#"{"Action":{"MoveWindowToWorkspaceUp":{"focus":false}}}"#
+            r#"{"Action":{"MoveWindowToWorkspaceUp":{"focus":false}}}"#,
         );
         assert_json_eq(
             niri_action_request_json(parse_niri_action("move-column-to-workspace:5").unwrap()),
-            r#"{"Action":{"MoveColumnToWorkspace":{"focus":true,"reference":{"Index":5}}}}"#
+            r#"{"Action":{"MoveColumnToWorkspace":{"focus":true,"reference":{"Index":5}}}}"#,
         );
         assert_json_eq(
             niri_spawn_request_json(&["foot".to_string()]),
-            r#"{"Action":{"Spawn":{"command":["foot"]}}}"#
+            r#"{"Action":{"Spawn":{"command":["foot"]}}}"#,
         );
         assert_json_eq(
             niri_spawn_sh_request_json("noctalia msg settings-toggle"),
-            r#"{"Action":{"SpawnSh":{"command":"noctalia msg settings-toggle"}}}"#
+            r#"{"Action":{"SpawnSh":{"command":"noctalia msg settings-toggle"}}}"#,
         );
     }
 }

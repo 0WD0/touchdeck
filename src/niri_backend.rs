@@ -28,7 +28,10 @@ pub(crate) fn send_niri_action_socket(action: NiriAction) -> Result<()> {
 pub(crate) fn spawn_niri_command(command: Vec<String>) {
     thread::spawn(move || {
         if let Err(err) = send_niri_spawn_socket(&command) {
-            eprintln!("touchdeck: failed to send niri spawn {:?}: {err:?}", command);
+            eprintln!(
+                "touchdeck: failed to send niri spawn {:?}: {err:?}",
+                command
+            );
         }
     });
 }
@@ -36,7 +39,10 @@ pub(crate) fn spawn_niri_command(command: Vec<String>) {
 pub(crate) fn spawn_niri_shell(command: String) {
     thread::spawn(move || {
         if let Err(err) = send_niri_spawn_sh_socket(&command) {
-            eprintln!("touchdeck: failed to send niri spawn-sh {:?}: {err:?}", command);
+            eprintln!(
+                "touchdeck: failed to send niri spawn-sh {:?}: {err:?}",
+                command
+            );
         }
     });
 }
