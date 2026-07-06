@@ -60,6 +60,10 @@ struct App {
     seat: Option<wl_seat::WlSeat>,
     touch: Option<wl_touch::WlTouch>,
     outputs: Vec<OutputInfo>,
+    inferred_sunshine_output: Option<String>,
+    overlay_output_global: Option<u32>,
+    overlay_output_name: Option<String>,
+    overlay_wait_reason: Option<String>,
     raw_touch: Option<EvdevTouchBackend>,
     raw_touch_retry_at_ms: Option<u64>,
     raw_touch_last_error: Option<String>,
@@ -99,6 +103,10 @@ impl Default for App {
             seat: None,
             touch: None,
             outputs: Vec::new(),
+            inferred_sunshine_output: None,
+            overlay_output_global: None,
+            overlay_output_name: None,
+            overlay_wait_reason: None,
             raw_touch: None,
             raw_touch_retry_at_ms: None,
             raw_touch_last_error: None,
@@ -188,7 +196,7 @@ fn main() -> Result<()> {
         app.apply_effects_or_stop(&qh, effects);
         app.expire_mode_hint(&qh)
             .context("expire mode hint overlay")?;
-        app.maybe_connect_raw_touch();
+        app.maybe_connect_raw_touch(&qh);
 
         if !app.running {
             break;
@@ -229,30 +237,109 @@ impl App {
             }
             TouchInputBackend::Evdev => {
                 self.raw_touch_retry_at_ms = Some(self.now_ms());
-                self.maybe_connect_raw_touch();
+                self.maybe_connect_raw_touch(qh);
             }
         }
 
-        let compositor = self
-            .compositor
-            .as_ref()
-            .ok_or_else(|| anyhow!("Wayland compositor global is unavailable"))?;
-        let layer_shell = self
-            .layer_shell
-            .as_ref()
-            .ok_or_else(|| anyhow!("zwlr_layer_shell_v1 global is unavailable"))?;
-
-        let output = self.target_output()?;
-        self.overlay
-            .init(compositor, layer_shell, output.as_ref(), qh, NAMESPACE);
-
         self.init_virtual_keyboard(qh)?;
+        self.try_init_overlay(qh)?;
 
         Ok(())
     }
 
-    fn target_output(&self) -> Result<Option<wl_output::WlOutput>> {
-        let Some(name) = self.config.input.sunshine_output.as_deref() else {
+    fn try_init_overlay(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
+        if self.overlay.is_initialized() {
+            return Ok(());
+        }
+
+        let compositor = self
+            .compositor
+            .clone()
+            .ok_or_else(|| anyhow!("Wayland compositor global is unavailable"))?;
+        let layer_shell = self
+            .layer_shell
+            .clone()
+            .ok_or_else(|| anyhow!("zwlr_layer_shell_v1 global is unavailable"))?;
+
+        let output = match self.target_output() {
+            Ok(output) => output,
+            Err(err) => {
+                self.set_overlay_wait_reason(err.to_string());
+                return Ok(());
+            }
+        };
+        let output_ref = output.as_ref().map(|output| &output.output);
+
+        self.overlay
+            .init(&compositor, &layer_shell, output_ref, qh, NAMESPACE);
+        self.overlay_output_global = output.as_ref().map(|output| output.global_name);
+        self.overlay_output_name = output.as_ref().and_then(|output| output.name.clone());
+        self.overlay_wait_reason = None;
+        if let Some(name) = self.overlay_output_name.as_deref() {
+            eprintln!("touchdeck: binding overlay to sunshine_output={name}");
+        } else {
+            eprintln!("touchdeck: binding overlay without explicit output");
+        }
+
+        let capture_policy = self.capture_policy.clone();
+        self.apply_input_region(qh, &capture_policy)?;
+        self.sync_raw_touch_grab(&capture_policy)?;
+
+        Ok(())
+    }
+
+    fn set_overlay_wait_reason(&mut self, reason: String) {
+        if self.overlay_wait_reason.as_deref() != Some(reason.as_str()) {
+            eprintln!("touchdeck: waiting to initialize overlay: {reason}");
+            self.overlay_wait_reason = Some(reason);
+        }
+    }
+
+    fn reset_overlay_binding(&mut self, qh: &QueueHandle<Self>, reason: &str) {
+        if self.overlay.is_initialized() {
+            eprintln!("touchdeck: resetting overlay binding: {reason}");
+            self.overlay.reset();
+            self.overlay_output_global = None;
+            self.overlay_output_name = None;
+            let capture_policy = self.capture_policy.clone();
+            if let Err(err) = self.sync_raw_touch_grab(&capture_policy) {
+                eprintln!("touchdeck: failed to sync raw touch grab after overlay reset: {err:?}");
+                self.running = false;
+                return;
+            }
+        }
+        if let Err(err) = self.try_init_overlay(qh) {
+            eprintln!("touchdeck: failed to initialize overlay after reset: {err:?}");
+            self.running = false;
+        }
+    }
+
+    fn target_output_name(&self) -> Option<&str> {
+        self.config
+            .input
+            .sunshine_output
+            .as_deref()
+            .or(self.inferred_sunshine_output.as_deref())
+    }
+
+    fn known_output_names(&self) -> String {
+        self.outputs
+            .iter()
+            .filter_map(|output| output.name.as_deref())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn target_output(&self) -> Result<Option<OutputInfo>> {
+        let Some(name) = self.target_output_name() else {
+            if self.config.input.touch_backend == TouchInputBackend::Evdev
+                && self.config.input.sunshine_output.is_none()
+                && self.raw_touch.is_none()
+            {
+                return Err(anyhow!(
+                    "waiting for Sunshine evdev touch device to infer sunshine-output"
+                ));
+            }
             return Ok(None);
         };
 
@@ -261,19 +348,13 @@ impl App {
             .iter()
             .find(|output| output.name.as_deref() == Some(name))
         else {
-            let known_outputs = self
-                .outputs
-                .iter()
-                .filter_map(|output| output.name.as_deref())
-                .collect::<Vec<_>>()
-                .join(", ");
             return Err(anyhow!(
-                "no Wayland output named {name:?} for [input].sunshine_output; known outputs: {known_outputs}"
+                "no Wayland output named {name:?} for sunshine-output; known outputs: {}",
+                self.known_output_names()
             ));
         };
 
-        eprintln!("touchdeck: binding overlay to sunshine_output={name}");
-        Ok(Some(output.output.clone()))
+        Ok(Some(output.clone()))
     }
 
     fn init_virtual_keyboard(&mut self, qh: &QueueHandle<Self>) -> Result<()> {
@@ -299,6 +380,26 @@ impl App {
         eprintln!("touchdeck: virtual keyboard initialized");
 
         Ok(())
+    }
+
+    fn removed_output(&mut self, qh: &QueueHandle<Self>, name: u32) {
+        let Some(index) = self
+            .outputs
+            .iter()
+            .position(|output| output.global_name == name)
+        else {
+            return;
+        };
+        let removed = self.outputs.remove(index);
+        if self.overlay_output_global == Some(name) {
+            self.reset_overlay_binding(
+                qh,
+                &format!(
+                    "bound output {} was removed",
+                    removed.name.as_deref().unwrap_or("<unknown>")
+                ),
+            );
+        }
     }
 
     fn surface_size(&self) -> SurfaceSize {
@@ -684,6 +785,9 @@ impl App {
 
 impl App {
     fn apply_input_region(&self, qh: &QueueHandle<Self>, policy: &CapturePolicy) -> Result<()> {
+        if !self.overlay.is_initialized() {
+            return Ok(());
+        }
         let compositor = self
             .compositor
             .as_ref()
@@ -712,6 +816,7 @@ impl App {
     fn raw_touch_should_grab(&self, policy: &CapturePolicy) -> bool {
         self.config.input.touch_backend == TouchInputBackend::Evdev
             && self.config.input.evdev_grab
+            && self.overlay.is_initialized()
             && matches!(policy, CapturePolicy::Fullscreen)
     }
 
@@ -943,7 +1048,7 @@ impl App {
         Ok(())
     }
 
-    fn maybe_connect_raw_touch(&mut self) {
+    fn maybe_connect_raw_touch(&mut self, qh: &QueueHandle<Self>) {
         if self.config.input.touch_backend != TouchInputBackend::Evdev || self.raw_touch.is_some() {
             return;
         }
@@ -957,6 +1062,24 @@ impl App {
 
         match EvdevTouchBackend::open(&self.config.input) {
             Ok(mut raw_touch) => {
+                if self.config.input.sunshine_output.is_none() {
+                    if let Some(output) = raw_touch.sunshine_output() {
+                        if self.inferred_sunshine_output.as_deref() != Some(output) {
+                            eprintln!(
+                                "touchdeck: inferred sunshine_output={output} from evdev touch device"
+                            );
+                            self.inferred_sunshine_output = Some(output.to_string());
+                            if self.overlay.is_initialized()
+                                && self.overlay_output_name.as_deref() != Some(output)
+                            {
+                                self.reset_overlay_binding(
+                                    qh,
+                                    "inferred Sunshine output changed",
+                                );
+                            }
+                        }
+                    }
+                }
                 if let Err(err) = raw_touch.set_grab(self.raw_touch_should_grab(&self.capture_policy))
                 {
                     let message = format!("{err:#}");
@@ -968,6 +1091,10 @@ impl App {
                 self.raw_touch = Some(raw_touch);
                 self.raw_touch_retry_at_ms = None;
                 self.raw_touch_last_error = None;
+                if let Err(err) = self.try_init_overlay(qh) {
+                    eprintln!("touchdeck: failed to initialize overlay after evdev touch connect: {err:?}");
+                    self.running = false;
+                }
             }
             Err(err) => {
                 let message = format!("{err:#}");
@@ -1124,13 +1251,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
         _conn: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global {
-            name,
-            interface,
-            version,
-        } = event
-        {
-            match interface.as_str() {
+        match event {
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } => match interface.as_str() {
                 "wl_compositor" => {
                     state.compositor = Some(registry.bind::<wl_compositor::WlCompositor, _, _>(
                         name,
@@ -1181,7 +1307,11 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     ));
                 }
                 _ => {}
+            },
+            wl_registry::Event::GlobalRemove { name } => {
+                state.removed_output(qh, name);
             }
+            _ => {}
         }
     }
 }
@@ -1217,7 +1347,7 @@ impl Dispatch<wl_output::WlOutput, u32> for App {
         event: wl_output::Event,
         global_name: &u32,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
     ) {
         if let wl_output::Event::Name { name } = event {
             if let Some(output) = state
@@ -1226,6 +1356,10 @@ impl Dispatch<wl_output::WlOutput, u32> for App {
                 .find(|output| output.global_name == *global_name)
             {
                 output.name = Some(name);
+            }
+            if let Err(err) = state.try_init_overlay(qh) {
+                eprintln!("touchdeck: failed to initialize overlay after output metadata: {err:?}");
+                state.running = false;
             }
         }
     }

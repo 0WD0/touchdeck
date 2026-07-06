@@ -52,6 +52,8 @@ pub(crate) enum RawTouchEvent {
 pub(crate) struct EvdevTouchBackend {
     file: File,
     path: PathBuf,
+    name: Option<String>,
+    sunshine_output: Option<String>,
     x_axis: AbsAxis,
     y_axis: AbsAxis,
     slots: Vec<MtSlot>,
@@ -97,7 +99,8 @@ struct MtSlot {
 
 impl EvdevTouchBackend {
     pub(crate) fn open(config: &InputConfig) -> Result<Self> {
-        let path = resolve_touch_device(config)?;
+        let device = resolve_touch_device(config)?;
+        let path = device.path;
         let file = OpenOptions::new()
             .read(true)
             .open(&path)
@@ -120,6 +123,8 @@ impl EvdevTouchBackend {
         let mut backend = Self {
             file,
             path,
+            name: device.name,
+            sunshine_output: device.sunshine_output,
             x_axis,
             y_axis,
             slots: vec![MtSlot::default(); slot_count],
@@ -131,8 +136,10 @@ impl EvdevTouchBackend {
         }
 
         eprintln!(
-            "touchdeck: evdev touch initialized path={} slots={} x={}..{} y={}..{} grab={}",
+            "touchdeck: evdev touch initialized path={} name={} sunshine_output={} slots={} x={}..{} y={}..{} grab={}",
             backend.path.display(),
+            backend.name.as_deref().unwrap_or("<unknown>"),
+            backend.sunshine_output.as_deref().unwrap_or("<none>"),
             slot_count,
             x_axis.min,
             x_axis.max,
@@ -146,6 +153,10 @@ impl EvdevTouchBackend {
 
     pub(crate) fn fd(&self) -> RawFd {
         self.file.as_raw_fd()
+    }
+
+    pub(crate) fn sunshine_output(&self) -> Option<&str> {
+        self.sunshine_output.as_deref()
     }
 
     pub(crate) fn set_grab(&mut self, grab: bool) -> Result<()> {
@@ -289,9 +300,10 @@ impl EvdevTouchBackend {
     }
 }
 
-fn resolve_touch_device(config: &InputConfig) -> Result<PathBuf> {
+fn resolve_touch_device(config: &InputConfig) -> Result<ResolvedTouchDevice> {
     if let Some(path) = &config.evdev_touch_device {
-        return Ok(path.clone());
+        let name = input_device_name_from_event_path(path);
+        return Ok(ResolvedTouchDevice::new(path.clone(), name));
     }
 
     let matches = discover_touch_devices(config)?;
@@ -299,7 +311,10 @@ fn resolve_touch_device(config: &InputConfig) -> Result<PathBuf> {
         [] => Err(anyhow!(
             "no matching evdev touchscreen found; set [input].touch_device or use Sunshine's native_pen_touch device named {DEFAULT_SUNSHINE_TOUCH_NAME:?}"
         )),
-        [device] => Ok(device.path.clone()),
+        [device] => Ok(ResolvedTouchDevice::new(
+            device.path.clone(),
+            Some(device.name.clone()),
+        )),
         _ => {
             let candidates = matches
                 .iter()
@@ -314,9 +329,35 @@ fn resolve_touch_device(config: &InputConfig) -> Result<PathBuf> {
 }
 
 #[derive(Debug)]
+struct ResolvedTouchDevice {
+    path: PathBuf,
+    name: Option<String>,
+    sunshine_output: Option<String>,
+}
+
+impl ResolvedTouchDevice {
+    fn new(path: PathBuf, name: Option<String>) -> Self {
+        let sunshine_output = name.as_deref().and_then(parse_sunshine_output);
+        Self {
+            path,
+            name,
+            sunshine_output,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct CandidateDevice {
     path: PathBuf,
     name: String,
+}
+
+fn parse_sunshine_output(name: &str) -> Option<String> {
+    let start = name.find("[sunshine-output=")? + "[sunshine-output=".len();
+    let rest = &name[start..];
+    let end = rest.find(']')?;
+    let output = rest[..end].trim();
+    (!output.is_empty()).then(|| output.to_string())
 }
 
 fn discover_touch_devices(config: &InputConfig) -> Result<Vec<CandidateDevice>> {

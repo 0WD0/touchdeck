@@ -33,6 +33,22 @@ struct BufferBacking {
 }
 
 impl Overlay {
+    pub(crate) fn reset(&mut self) {
+        if let Some(layer_surface) = self.layer_surface.take() {
+            layer_surface.destroy();
+        }
+        if let Some(surface) = self.surface.take() {
+            surface.destroy();
+        }
+        self.buffers.clear();
+        self.width = 0;
+        self.height = 0;
+    }
+
+    pub(crate) fn is_initialized(&self) -> bool {
+        self.surface.is_some() && self.layer_surface.is_some()
+    }
+
     pub(crate) fn init(
         &mut self,
         compositor: &wl_compositor::WlCompositor,
