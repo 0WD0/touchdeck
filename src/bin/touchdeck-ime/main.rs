@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use touchdeck::niri;
 use touchdeck::protocol::{ImeCursorRect, ImeStatus};
 use touchdeck::x11_geometry::{X11GeometryProbe, X11WindowGeometry};
 use wayland_client::protocol::{
@@ -976,22 +977,36 @@ impl ImeApp {
                 .unwrap_or(0);
             ("spot", anchor.x + spot_x, anchor.y + spot_y, 0, h)
         };
+        let Some((surface_x, surface_y, surface_h)) = map_x11_cursor_to_surface(x, y, h, top_level)
+        else {
+            eprintln!(
+                "touchdeck-ime: xim cursor rect could not map x11 root to touchdeck surface root=({x},{y} {w}x{h}) top=0x{:x}=({},{} {}x{})",
+                top_level.window,
+                top_level.x,
+                top_level.y,
+                top_level.w,
+                top_level.h
+            );
+            self.xim_cursor_rect = None;
+            return;
+        };
+
         self.xim_cursor_rect = Some(ImeCursorRect {
-            x,
-            y,
+            x: surface_x,
+            y: surface_y,
             w,
-            h,
+            h: surface_h,
             scale: 1.0,
-            space: "x11-root".to_string(),
-            window_x: Some(top_level.x),
-            window_y: Some(top_level.y),
-            window_w: Some(top_level.w),
-            window_h: Some(top_level.h),
-            root_w: Some(top_level.root_w),
-            root_h: Some(top_level.root_h),
+            space: "surface".to_string(),
+            window_x: None,
+            window_y: None,
+            window_w: None,
+            window_h: None,
+            root_w: None,
+            root_h: None,
         });
         eprintln!(
-            "touchdeck-ime: xim cursor rect source={source} client=0x{client_window:x} app={app_window:?} focus={focus_window:?} spot=({spot_x},{spot_y}) area={} root=({x},{y} {w}x{h}) top=0x{:x}=({},{} {}x{}) root={}x{}",
+            "touchdeck-ime: xim cursor rect source={source} client=0x{client_window:x} app={app_window:?} focus={focus_window:?} spot=({spot_x},{spot_y}) area={} root=({x},{y} {w}x{h}) surface=({surface_x},{surface_y} h={surface_h}) top=0x{:x}=({},{} {}x{}) root={}x{}",
             format_xim_preedit_area(preedit_area),
             top_level.window,
             top_level.x,
@@ -1019,26 +1034,41 @@ impl ImeApp {
         let active = match probe.active_window_geometry() {
             Ok(geometry) => geometry,
             Err(err) => {
-                eprintln!("touchdeck-ime: failed to query x11 active window geometry: {err:?}");
-                self.x11_geometry = None;
-                return None;
+                eprintln!("touchdeck-ime: failed to query X11 active window geometry: {err:?}");
+                None
             }
         };
         let focus = match probe.input_focus_geometry() {
             Ok(geometry) => geometry,
             Err(err) => {
-                eprintln!("touchdeck-ime: failed to query x11 input focus geometry: {err:?}");
+                eprintln!("touchdeck-ime: failed to query X11 input focus geometry: {err:?}");
                 None
             }
         };
 
-        eprintln!(
-            "touchdeck-ime: x11 geometry active={} focus={}",
-            format_x11_geometry(active),
-            format_x11_geometry(focus)
-        );
-
-        active
+        if let Some(active) = active {
+            eprintln!(
+                "touchdeck-ime: x11 geometry active=0x{:x}=({}, {} {}x{}) root={}x{} focus={}",
+                active.window,
+                active.x,
+                active.y,
+                active.w,
+                active.h,
+                active.root_w,
+                active.root_h,
+                format_x11_geometry(focus)
+            );
+            Some(active)
+        } else if let Some(focus) = focus {
+            eprintln!(
+                "touchdeck-ime: x11 geometry active=none focus=0x{:x}=({}, {} {}x{}) root={}x{}",
+                focus.window, focus.x, focus.y, focus.w, focus.h, focus.root_w, focus.root_h
+            );
+            Some(focus)
+        } else {
+            eprintln!("touchdeck-ime: x11 geometry active=none focus=none");
+            None
+        }
     }
 
     fn query_x11_window_geometry(&mut self, window: u32) -> Option<X11WindowGeometry> {
@@ -1053,10 +1083,13 @@ impl ImeApp {
         }
 
         let probe = self.x11_geometry.as_ref()?;
+
         match probe.window_geometry(window) {
             Ok(geometry) => Some(geometry),
             Err(err) => {
-                eprintln!("touchdeck-ime: failed to query x11 window 0x{window:x}: {err:?}");
+                eprintln!(
+                    "touchdeck-ime: failed to query X11 window 0x{window:x} geometry: {err:?}"
+                );
                 None
             }
         }
@@ -1078,6 +1111,146 @@ impl ImeApp {
     }
 }
 
+fn map_x11_cursor_to_surface(
+    x11_x: i32,
+    x11_y: i32,
+    x11_h: i32,
+    top_level: X11WindowGeometry,
+) -> Option<(i32, i32, i32)> {
+    let layout = match niri::focused_window_layout() {
+        Ok(Some(layout)) => layout,
+        Ok(None) => {
+            eprintln!("touchdeck-ime: xim cursor rect has no focused niri window");
+            return None;
+        }
+        Err(err) => {
+            eprintln!("touchdeck-ime: failed to query niri focused window for xim cursor: {err:?}");
+            return None;
+        }
+    };
+    let output = match niri::focused_output_layout() {
+        Ok(Some(output)) => output,
+        Ok(None) => {
+            eprintln!("touchdeck-ime: xim cursor rect has no focused niri output");
+            return None;
+        }
+        Err(err) => {
+            eprintln!("touchdeck-ime: failed to query niri focused output for xim cursor: {err:?}");
+            return None;
+        }
+    };
+
+    let (window_output_x, window_output_y, window_output_w, window_output_h) =
+        layout.window_rect_in_output;
+    if window_output_w <= 0 || window_output_h <= 0 || top_level.w <= 0 || top_level.h <= 0 {
+        return None;
+    }
+
+    let (workarea_x, workarea_y, workarea_w, workarea_h) = layout.working_area_in_output;
+    let (mut source_w, mut source_h) = transformed_source_size(output);
+    source_w = source_w.max(workarea_x + workarea_w);
+    source_h = source_h.max(workarea_y + workarea_h);
+    let (overlay_workarea_x, overlay_workarea_y, _, _) = transform_rect_to_overlay(
+        output.transform,
+        workarea_x,
+        workarea_y,
+        workarea_w,
+        workarea_h,
+        source_w,
+        source_h,
+    );
+    let origin_x = window_output_x - overlay_workarea_x;
+    let origin_y = window_output_y - overlay_workarea_y;
+    let scale_x = f64::from(top_level.w) / f64::from(window_output_w);
+    let scale_y = f64::from(top_level.h) / f64::from(window_output_h);
+    if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
+        return None;
+    }
+
+    let local_x = f64::from(x11_x - top_level.x);
+    let local_y = f64::from(x11_y - top_level.y);
+    let surface_x = (origin_x + local_x / scale_x).round() as i32;
+    let surface_y = (origin_y + local_y / scale_y).round() as i32;
+    let surface_h = (f64::from(x11_h.max(0)) / scale_y).round() as i32;
+
+    eprintln!(
+        "touchdeck-ime: xim surface geometry x11-root=({x11_x},{x11_y} h={x11_h}) top=0x{:x}=({},{} {}x{}) niri_window=({window_output_x:.2},{window_output_y:.2} {window_output_w}x{window_output_h}) workarea=({workarea_x:.2},{workarea_y:.2} {workarea_w:.2}x{workarea_h:.2}) overlay_workarea=({overlay_workarea_x:.2},{overlay_workarea_y:.2}) scale=({scale_x:.4},{scale_y:.4}) surface=({surface_x},{surface_y} h={surface_h})",
+        top_level.window,
+        top_level.x,
+        top_level.y,
+        top_level.w,
+        top_level.h
+    );
+
+    Some((surface_x, surface_y, surface_h))
+}
+
+fn transformed_source_size(output: niri::FocusedOutputLayout) -> (f64, f64) {
+    match output.transform {
+        niri::OutputTransform::_90
+        | niri::OutputTransform::_270
+        | niri::OutputTransform::Flipped90
+        | niri::OutputTransform::Flipped270 => (f64::from(output.height), f64::from(output.width)),
+        niri::OutputTransform::Normal
+        | niri::OutputTransform::_180
+        | niri::OutputTransform::Flipped
+        | niri::OutputTransform::Flipped180 => (f64::from(output.width), f64::from(output.height)),
+    }
+}
+
+fn transform_rect_to_overlay(
+    transform: niri::OutputTransform,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    source_w: f64,
+    source_h: f64,
+) -> (f64, f64, f64, f64) {
+    let points = [
+        transform_point_to_overlay(transform, x, y, source_w, source_h),
+        transform_point_to_overlay(transform, x + w, y, source_w, source_h),
+        transform_point_to_overlay(transform, x, y + h, source_w, source_h),
+        transform_point_to_overlay(transform, x + w, y + h, source_w, source_h),
+    ];
+    let min_x = points
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::INFINITY, f64::min);
+    let min_y = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = points
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let max_y = points
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+fn transform_point_to_overlay(
+    transform: niri::OutputTransform,
+    x: f64,
+    y: f64,
+    source_w: f64,
+    source_h: f64,
+) -> (f64, f64) {
+    match transform {
+        niri::OutputTransform::Normal => (x, y),
+        niri::OutputTransform::_90 => (y, source_w - x),
+        niri::OutputTransform::_180 => (source_w - x, source_h - y),
+        niri::OutputTransform::_270 => (source_h - y, x),
+        niri::OutputTransform::Flipped => (source_w - x, y),
+        niri::OutputTransform::Flipped90 => (y, x),
+        niri::OutputTransform::Flipped180 => (x, source_h - y),
+        niri::OutputTransform::Flipped270 => (source_h - y, source_w - x),
+    }
+}
 impl Dispatch<wl_registry::WlRegistry, ()> for ImeApp {
     fn event(
         state: &mut Self,
