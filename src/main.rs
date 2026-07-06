@@ -127,6 +127,35 @@ struct TextRenderer {
     swash_cache: SwashCache,
 }
 
+#[derive(Clone, Copy)]
+struct CanvasSize {
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Copy)]
+struct TextStyle {
+    font_size: f32,
+    color: [u8; 4],
+}
+
+#[derive(Clone, Copy, Default)]
+struct KeycapLabels<'a> {
+    tap: Option<&'a str>,
+    hold: Option<&'a str>,
+    up: Option<&'a str>,
+    down: Option<&'a str>,
+    left: Option<&'a str>,
+    right: Option<&'a str>,
+}
+
+#[derive(Clone, Copy)]
+struct GlyphPlacement {
+    x: i32,
+    y: i32,
+    scale: i32,
+}
+
 impl TextRenderer {
     fn new() -> Self {
         Self {
@@ -138,23 +167,23 @@ impl TextRenderer {
     fn draw_text(
         &mut self,
         buf: &mut [u8],
-        width: u32,
-        height: u32,
+        size: CanvasSize,
         rect: RectPx,
         text: &str,
-        font_size: f32,
-        color: [u8; 4],
+        style: TextStyle,
     ) {
         if text.trim().is_empty() || rect.w <= 0 || rect.h <= 0 {
             return;
         }
 
+        let font_size = style.font_size;
         let metrics = Metrics::new(font_size.max(1.0), (font_size * 1.25).max(1.0));
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(Some(rect.w.max(1) as f32), Some(rect.h.max(1) as f32));
         let attrs = Attrs::new().family(Family::Name("Noto Sans CJK SC"));
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
 
+        let color = style.color;
         let text_color = Color::rgba(color[0], color[1], color[2], color[3]);
         buffer.draw(
             &mut self.font_system,
@@ -163,8 +192,8 @@ impl TextRenderer {
             |x, y, w, h, color| {
                 blend_text_rect(
                     buf,
-                    width,
-                    height,
+                    size.width,
+                    size.height,
                     RectPx {
                         x: rect.x + x,
                         y: rect.y + y,
@@ -809,12 +838,14 @@ impl App {
                 width,
                 height,
                 rect,
-                tap_label.as_deref(),
-                hold_label.as_deref(),
-                up_label.as_deref(),
-                down_label.as_deref(),
-                left_label.as_deref(),
-                right_label.as_deref(),
+                KeycapLabels {
+                    tap: tap_label.as_deref(),
+                    hold: hold_label.as_deref(),
+                    up: up_label.as_deref(),
+                    down: down_label.as_deref(),
+                    left: left_label.as_deref(),
+                    right: right_label.as_deref(),
+                },
             );
         }
     }
@@ -870,8 +901,7 @@ impl App {
         }
         self.text_renderer.draw_text(
             mmap,
-            width,
-            height,
+            CanvasSize { width, height },
             RectPx {
                 x: panel.x + 8,
                 y: panel.y + 4,
@@ -879,8 +909,10 @@ impl App {
                 h: header_h - 6,
             },
             &header,
-            (header_h as f32 * 0.55).clamp(14.0, 34.0),
-            [0xff, 0xff, 0xff, 0xe8],
+            TextStyle {
+                font_size: (header_h as f32 * 0.55).clamp(14.0, 34.0),
+                color: [0xff, 0xff, 0xff, 0xe8],
+            },
         );
 
         let row_y = panel.y + header_h;
@@ -924,12 +956,13 @@ impl App {
             }
             self.text_renderer.draw_text(
                 mmap,
-                width,
-                height,
+                CanvasSize { width, height },
                 rect,
                 &label,
-                (rect.h as f32 * 0.45).clamp(13.0, 28.0),
-                [0xff, 0xff, 0xff, 0xf0],
+                TextStyle {
+                    font_size: (rect.h as f32 * 0.45).clamp(13.0, 28.0),
+                    color: [0xff, 0xff, 0xff, 0xf0],
+                },
             );
         }
     }
@@ -1039,8 +1072,7 @@ impl App {
         let header = self.ime_header_text();
         self.text_renderer.draw_text(
             mmap,
-            width,
-            height,
+            CanvasSize { width, height },
             RectPx {
                 x: panel.x + 12,
                 y: panel.y + 4,
@@ -1048,8 +1080,10 @@ impl App {
                 h: header_h - 6,
             },
             &header,
-            (header_h as f32 * 0.52).clamp(15.0, 30.0),
-            [0xd8, 0xde, 0xe8, 0xee],
+            TextStyle {
+                font_size: (header_h as f32 * 0.52).clamp(15.0, 30.0),
+                color: [0xd8, 0xde, 0xe8, 0xee],
+            },
         );
 
         let visible = self
@@ -1108,8 +1142,7 @@ impl App {
             fill_rect(mmap, width, height, rect, fill);
             self.text_renderer.draw_text(
                 mmap,
-                width,
-                height,
+                CanvasSize { width, height },
                 RectPx {
                     x: rect.x + 8,
                     y: rect.y + 3,
@@ -1117,8 +1150,10 @@ impl App {
                     h: rect.h - 6,
                 },
                 &label,
-                (rect.h as f32 * 0.48).clamp(14.0, 24.0),
-                [0xff, 0xff, 0xff, 0xf0],
+                TextStyle {
+                    font_size: (rect.h as f32 * 0.48).clamp(14.0, 24.0),
+                    color: [0xff, 0xff, 0xff, 0xf0],
+                },
             );
 
             x += rect.w + gap;
@@ -1723,12 +1758,7 @@ fn draw_keycap_labels(
     width: u32,
     height: u32,
     rect: RectPx,
-    tap: Option<&str>,
-    hold: Option<&str>,
-    up: Option<&str>,
-    down: Option<&str>,
-    left: Option<&str>,
-    right: Option<&str>,
+    labels: KeycapLabels<'_>,
 ) {
     let hint_color = [0xa8, 0xff, 0xd8, 0xc8];
     let hold_color = [0xff, 0xe0, 0x90, 0xc8];
@@ -1737,7 +1767,7 @@ fn draw_keycap_labels(
     let hint_h = (rect.h / 4).max(10);
     let side_w = (rect.w / 3).max(12);
 
-    if let Some(label) = up {
+    if let Some(label) = labels.up {
         draw_label_in_rect_limited(
             buf,
             width,
@@ -1754,7 +1784,7 @@ fn draw_keycap_labels(
         );
     }
 
-    if let Some(label) = down {
+    if let Some(label) = labels.down {
         draw_label_in_rect_limited(
             buf,
             width,
@@ -1771,7 +1801,7 @@ fn draw_keycap_labels(
         );
     }
 
-    if let Some(label) = left {
+    if let Some(label) = labels.left {
         draw_label_in_rect_limited(
             buf,
             width,
@@ -1788,7 +1818,7 @@ fn draw_keycap_labels(
         );
     }
 
-    if let Some(label) = right {
+    if let Some(label) = labels.right {
         draw_label_in_rect_limited(
             buf,
             width,
@@ -1805,8 +1835,8 @@ fn draw_keycap_labels(
         );
     }
 
-    if tap.is_some() {
-        if let Some(label) = hold {
+    if labels.tap.is_some() {
+        if let Some(label) = labels.hold {
             draw_label_in_rect_limited(
                 buf,
                 width,
@@ -1824,8 +1854,8 @@ fn draw_keycap_labels(
         }
     }
 
-    let center_label = tap.or(hold);
-    let center_color = if tap.is_some() {
+    let center_label = labels.tap.or(labels.hold);
+    let center_color = if labels.tap.is_some() {
         center_color
     } else {
         hold_color
@@ -1892,7 +1922,7 @@ fn draw_label_in_rect_limited(
     let y = rect.y + (rect.h - total_h) / 2;
 
     for ch in text {
-        draw_glyph(buf, width, height, x, y, scale, ch, color);
+        draw_glyph(buf, width, height, GlyphPlacement { x, y, scale }, ch, color);
         x += (glyph_w + spacing) * scale;
     }
 }
@@ -1939,9 +1969,7 @@ fn draw_glyph(
     buf: &mut [u8],
     width: u32,
     height: u32,
-    x: i32,
-    y: i32,
-    scale: i32,
+    placement: GlyphPlacement,
     ch: char,
     color: [u8; 4],
 ) {
@@ -1957,10 +1985,10 @@ fn draw_glyph(
                 width,
                 height,
                 RectPx {
-                    x: x + col as i32 * scale,
-                    y: y + row as i32 * scale,
-                    w: scale,
-                    h: scale,
+                    x: placement.x + col as i32 * placement.scale,
+                    y: placement.y + row as i32 * placement.scale,
+                    w: placement.scale,
+                    h: placement.scale,
                 },
                 color,
             );
