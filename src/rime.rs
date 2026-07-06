@@ -1,5 +1,5 @@
-use std::ptr;
 use std::os::raw::{c_char, c_int, c_void};
+use std::ptr;
 
 use anyhow::{anyhow, Result};
 

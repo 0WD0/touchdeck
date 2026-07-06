@@ -27,7 +27,6 @@ pub(crate) enum SlotGestureKind {
     SwipeRight,
 }
 
-
 impl Default for Mode {
     fn default() -> Self {
         Self::Base
@@ -84,7 +83,6 @@ pub(crate) fn layer_name(layer: Layer) -> &'static str {
     }
 }
 
-
 pub(crate) fn parse_mode(value: &str) -> Result<Mode> {
     match normalize_name(value).as_str() {
         "base" => Ok(Mode::Base),
@@ -103,4 +101,3 @@ pub(crate) fn parse_layer(value: &str) -> Result<Layer> {
         _ => Err(anyhow!("unknown layer {value}")),
     }
 }
-

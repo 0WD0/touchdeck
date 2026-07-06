@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    self, AtomEnum, ConnectionExt as XprotoConnectionExt, Window,
-};
+use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt as XprotoConnectionExt, Window};
 use x11rb::rust_connection::RustConnection;
 
 #[derive(Clone, Copy, Debug)]

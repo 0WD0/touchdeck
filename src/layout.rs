@@ -155,7 +155,6 @@ impl SlotRegistry {
     }
 }
 
-
 pub(crate) fn svg_canvas(root: roxmltree::Node<'_, '_>) -> Result<(f64, f64, f64, f64)> {
     if let Some(view_box) = root.attribute("viewBox") {
         let values = view_box

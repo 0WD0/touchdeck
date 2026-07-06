@@ -673,7 +673,9 @@ impl Keymap {
         }
 
         self.find_release_binding(mode, layers, |binding| {
-            binding.trigger.matches_release(kind, &gesture, config, size)
+            binding
+                .trigger
+                .matches_release(kind, &gesture, config, size)
         })
         .map(|binding| binding.behavior.clone().into_action())
         .filter(GestureAction::is_active_swipe_action)
@@ -2565,7 +2567,9 @@ impl App {
 
         let candidate_count = self.ime_status.candidates.iter().take(6).count();
         let panel_w = 560.min(screen_w - 16).max(220);
-        let panel_h = if candidate_count == 0 { 48 } else { 88 }.min(screen_h - 16).max(44);
+        let panel_h = if candidate_count == 0 { 48 } else { 88 }
+            .min(screen_h - 16)
+            .max(44);
 
         let Some((cursor_x, cursor_y, cursor_h)) =
             self.physical_ime_anchor(cursor_rect, screen_w, screen_h)
@@ -2970,7 +2974,6 @@ impl App {
 
         Some((cursor_x, cursor_y, cursor_h))
     }
-
 }
 
 impl App {
@@ -3002,7 +3005,6 @@ impl App {
         }
         label
     }
-
 
     fn apply_input_region(&self, qh: &QueueHandle<Self>, policy: &CapturePolicy) -> Result<()> {
         let surface = self
@@ -3578,13 +3580,13 @@ impl Engine {
                 self.last_tap = None;
 
                 match action {
-            GestureAction::HoldRepeat {
-                sequence,
-                start_ms,
-                interval_ms,
-                translation,
-                route,
-            } => {
+                    GestureAction::HoldRepeat {
+                        sequence,
+                        start_ms,
+                        interval_ms,
+                        translation,
+                        route,
+                    } => {
                         self.start_hold_repeat(
                             candidate.id,
                             now_ms,
@@ -4450,11 +4452,7 @@ fn parse_behavior(
                 .as_deref()
                 .map(parse_key_translation_policy)
                 .transpose()?;
-            let route = value
-                .route
-                .as_deref()
-                .map(parse_key_route)
-                .transpose()?;
+            let route = value.route.as_deref().map(parse_key_route).transpose()?;
             if translation.is_some() || route.is_some() {
                 Ok(Behavior::KeySequenceWithOptions {
                     sequence,

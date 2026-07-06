@@ -52,7 +52,6 @@ impl std::fmt::Display for NiriAction {
     }
 }
 
-
 pub(crate) fn spawn_niri_action(action: NiriAction) {
     thread::spawn(move || {
         if let Err(err) = send_niri_action_socket(action) {
@@ -71,7 +70,6 @@ fn niri_action_request_json(action: NiriAction) -> &'static str {
     action.ipc_request_json()
 }
 
-
 pub(crate) fn parse_niri_action(value: &str) -> Result<NiriAction> {
     match normalize_name(value).as_str() {
         "focus_column_left" => Ok(NiriAction::FocusColumnLeft),
@@ -84,4 +82,3 @@ pub(crate) fn parse_niri_action(value: &str) -> Result<NiriAction> {
         )),
     }
 }
-

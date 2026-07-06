@@ -22,31 +22,31 @@ use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Sw
 use memmap2::MmapMut;
 use serde::Deserialize;
 use tempfile::tempfile;
+use touchdeck::protocol::{ImeCandidate, ImeCursorRect, ImeStatus};
+use touchdeck::rime::*;
+use touchdeck::x11_geometry::{X11GeometryProbe, X11WindowGeometry};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool,
     wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
-use touchdeck::protocol::{ImeCandidate, ImeCursorRect, ImeStatus};
-use touchdeck::rime::*;
-use touchdeck::x11_geometry::{X11GeometryProbe, X11WindowGeometry};
-use x11rb::connection::Connection as X11Connection;
-use x11rb::protocol::xproto::{KeyPressEvent, KEY_PRESS_EVENT};
-use xim::x11rb::HasConnection;
-use xim::{InputStyle, Server, ServerHandler, UserInputContext, XimConnections};
-use zbus::{interface, message::Header, object_server::SignalEmitter, ObjectServer};
-use zbus::names::OwnedBusName;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Structure, Value};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_keyboard_grab_v2::{self, ZwpInputMethodKeyboardGrabV2},
     zwp_input_method_manager_v2::{self, ZwpInputMethodManagerV2},
-    zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2},
     zwp_input_method_v2::{self, ZwpInputMethodV2},
+    zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2},
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::{self, ZwpVirtualKeyboardManagerV1},
     zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
 };
+use x11rb::connection::Connection as X11Connection;
+use x11rb::protocol::xproto::{KeyPressEvent, KEY_PRESS_EVENT};
+use xim::x11rb::HasConnection;
+use xim::{InputStyle, Server, ServerHandler, UserInputContext, XimConnections};
+use zbus::names::OwnedBusName;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Structure, Value};
+use zbus::{interface, message::Header, object_server::SignalEmitter, ObjectServer};
 
 const RIME_FALSE: c_int = 0;
 const RIME_SHIFT_MASK: u32 = 1 << 0;
@@ -543,8 +543,11 @@ fn main() -> Result<()> {
             continue;
         };
         event_queue.flush().context("flush Wayland requests")?;
-        if poll_fd(event_queue.as_fd().as_raw_fd(), Some(Duration::from_millis(16)))
-            .context("poll Wayland fd")?
+        if poll_fd(
+            event_queue.as_fd().as_raw_fd(),
+            Some(Duration::from_millis(16)),
+        )
+        .context("poll Wayland fd")?
         {
             guard.read().context("read Wayland events")?;
         }
@@ -809,12 +812,7 @@ impl ImeApp {
         self.broadcast_status("physical");
     }
 
-    fn passthrough_physical_key(
-        &self,
-        time: u32,
-        key: u32,
-        state: WEnum<wl_keyboard::KeyState>,
-    ) {
+    fn passthrough_physical_key(&self, time: u32, key: u32, state: WEnum<wl_keyboard::KeyState>) {
         if let Some(virtual_keyboard) = &self.virtual_keyboard {
             virtual_keyboard.key(time, key, state.into());
         }
@@ -869,11 +867,7 @@ impl ImeApp {
         }
     }
 
-    fn handle_fcitx_dbus_request(
-        &mut self,
-        qh: &QueueHandle<Self>,
-        request: FcitxDbusRequest,
-    ) {
+    fn handle_fcitx_dbus_request(&mut self, qh: &QueueHandle<Self>, request: FcitxDbusRequest) {
         match request {
             FcitxDbusRequest::FocusIn { target, response } => {
                 self.status.source = "fcitx-dbus".to_string();
@@ -977,15 +971,16 @@ impl ImeApp {
                     });
                     if self.active && !status_is_empty(&self.status) {
                         if let Err(err) = self.update_popup(qh, "physical") {
-                            eprintln!("touchdeck-ime: failed to update popup after cursor rect: {err:?}");
+                            eprintln!(
+                                "touchdeck-ime: failed to update popup after cursor rect: {err:?}"
+                            );
                         }
                         self.broadcast_status("physical");
                     }
                 }
             }
             FcitxDbusRequest::SetCapability { target, capability } => {
-                let client_side =
-                    (capability & FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL) != 0;
+                let client_side = (capability & FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL) != 0;
                 eprintln!(
                     "touchdeck-ime: fcitx dbus capability path={} client={} capability=0x{capability:x} client_side_input_panel={client_side}",
                     target.path.as_str(),
@@ -1002,8 +997,7 @@ impl ImeApp {
                 }
             }
             FcitxDbusRequest::SetSupportedCapability { target, capability } => {
-                let client_side =
-                    (capability & FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL) != 0;
+                let client_side = (capability & FCITX_CAPABILITY_CLIENT_SIDE_INPUT_PANEL) != 0;
                 eprintln!(
                     "touchdeck-ime: fcitx dbus supported capability path={} client={} capability=0x{capability:x} client_side_input_panel={client_side}",
                     target.path.as_str(),
@@ -1152,8 +1146,15 @@ impl ImeApp {
         }
     }
 
-    fn handle_touchdeck_event(&mut self, qh: &QueueHandle<Self>, event: TouchDeckEvent) -> ImeStatus {
-        if event.protocol != "touchdeck-ime-v1" || event.kind != "key" || event.source != "touchdeck" {
+    fn handle_touchdeck_event(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        event: TouchDeckEvent,
+    ) -> ImeStatus {
+        if event.protocol != "touchdeck-ime-v1"
+            || event.kind != "key"
+            || event.source != "touchdeck"
+        {
             eprintln!("touchdeck-ime: ignored unsupported event {event:?}");
             return self.current_status_with_source("touchdeck");
         }
@@ -1525,32 +1526,23 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ImeApp {
                 eprintln!("touchdeck-ime: bound wl_compositor");
             }
             "wl_shm" if state.shm.is_none() => {
-                state.shm = Some(registry.bind::<wl_shm::WlShm, _, _>(
+                state.shm =
+                    Some(registry.bind::<wl_shm::WlShm, _, _>(name, version.min(1), qh, ()));
+                eprintln!("touchdeck-ime: bound wl_shm");
+            }
+            "wl_seat" if state.seat.is_none() => {
+                state.seat =
+                    Some(registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(9), qh, ()));
+                eprintln!("touchdeck-ime: bound wl_seat");
+                state.maybe_init_input_method(qh);
+            }
+            "zwp_input_method_manager_v2" if state.input_method_manager.is_none() => {
+                state.input_method_manager = Some(registry.bind::<ZwpInputMethodManagerV2, _, _>(
                     name,
                     version.min(1),
                     qh,
                     (),
                 ));
-                eprintln!("touchdeck-ime: bound wl_shm");
-            }
-            "wl_seat" if state.seat.is_none() => {
-                state.seat = Some(registry.bind::<wl_seat::WlSeat, _, _>(
-                    name,
-                    version.min(9),
-                    qh,
-                    (),
-                ));
-                eprintln!("touchdeck-ime: bound wl_seat");
-                state.maybe_init_input_method(qh);
-            }
-            "zwp_input_method_manager_v2" if state.input_method_manager.is_none() => {
-                state.input_method_manager =
-                    Some(registry.bind::<ZwpInputMethodManagerV2, _, _>(
-                        name,
-                        version.min(1),
-                        qh,
-                        (),
-                    ));
                 eprintln!("touchdeck-ime: bound zwp_input_method_manager_v2");
                 state.maybe_init_input_method(qh);
             }
@@ -1859,8 +1851,8 @@ struct RimeEngine {
 impl RimeEngine {
     fn new(key_translation: KeyTranslationPolicy) -> Result<Self> {
         let shared_data_dir_path = default_rime_shared_data_dir();
-        let user_data_dir_path = env_path("TOUCHDECK_RIME_USER_DATA_DIR")
-            .unwrap_or_else(default_rime_user_data_dir);
+        let user_data_dir_path =
+            env_path("TOUCHDECK_RIME_USER_DATA_DIR").unwrap_or_else(default_rime_user_data_dir);
         let prebuilt_data_dir_path = shared_data_dir_path.join("build");
         let staging_dir_path = user_data_dir_path.join("build");
 
@@ -1872,10 +1864,7 @@ impl RimeEngine {
         }
 
         fs::create_dir_all(&user_data_dir_path).with_context(|| {
-            format!(
-                "create Rime user data dir {}",
-                user_data_dir_path.display()
-            )
+            format!("create Rime user data dir {}", user_data_dir_path.display())
         })?;
 
         eprintln!(
@@ -1996,7 +1985,6 @@ impl RimeEngine {
         }
     }
 
-
     fn api(&self) -> &RimeApi {
         unsafe { self.api.as_ref() }
     }
@@ -2086,7 +2074,6 @@ impl Drop for RimeEngine {
     }
 }
 
-
 const XIM_EVENT_MASK: u32 = 3;
 
 struct TouchDeckXimHandler {
@@ -2100,7 +2087,13 @@ impl TouchDeckXimHandler {
 
     fn request_reset(&self) -> String {
         let (response_tx, response_rx) = mpsc::channel();
-        if self.tx.send(XimRequest::Reset { response: response_tx }).is_err() {
+        if self
+            .tx
+            .send(XimRequest::Reset {
+                response: response_tx,
+            })
+            .is_err()
+        {
             return String::new();
         }
         response_rx
@@ -2645,14 +2638,7 @@ impl FcitxInputContext {
     }
 
     #[zbus(name = "SetCursorRect")]
-    fn set_cursor_rect(
-        &self,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        #[zbus(header)] header: Header<'_>,
-    ) {
+    fn set_cursor_rect(&self, x: i32, y: i32, w: i32, h: i32, #[zbus(header)] header: Header<'_>) {
         if self.check_sender(&header) {
             self.send_cursor_rect(x, y, w, h, 1.0);
         }
@@ -2790,10 +2776,7 @@ impl FcitxInputContext {
     fn hide_virtual_keyboard(&self, #[zbus(header)] _header: Header<'_>) {}
 
     #[zbus(signal, name = "CommitString")]
-    async fn commit_string_signal(
-        emitter: &SignalEmitter<'_>,
-        str: &str,
-    ) -> zbus::Result<()>;
+    async fn commit_string_signal(emitter: &SignalEmitter<'_>, str: &str) -> zbus::Result<()>;
 
     #[zbus(signal, name = "CurrentIM")]
     async fn current_im_signal(
@@ -2884,10 +2867,7 @@ async fn run_fcitx_dbus_server(
     let input_method = FcitxInputMethod { tx, next_id };
     let conn = zbus::connection::Builder::session()
         .context("connect to session D-Bus for fcitx frontend")?
-        .serve_at(
-            "/org/freedesktop/portal/inputmethod",
-            input_method.clone(),
-        )
+        .serve_at("/org/freedesktop/portal/inputmethod", input_method.clone())
         .context("serve fcitx input method object")?
         .serve_at("/inputmethod", input_method)
         .context("serve compatible fcitx input method object")?
@@ -3147,8 +3127,7 @@ impl PopupConfig {
             self.preedit_color = parse_hex_color(&color, "ime.popup.preedit_color")?;
         }
         if let Some(color) = value.candidate_text_color {
-            self.candidate_text_color =
-                parse_hex_color(&color, "ime.popup.candidate_text_color")?;
+            self.candidate_text_color = parse_hex_color(&color, "ime.popup.candidate_text_color")?;
         }
         if let Some(color) = value.highlight_background_color {
             self.highlight_background_color =
@@ -3206,7 +3185,9 @@ fn default_rime_user_data_dir() -> PathBuf {
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
-    env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from)
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn path_to_cstring(path: &Path) -> Result<CString> {
@@ -3441,12 +3422,7 @@ fn keysym_to_text(keysym: u32, rime_mask: u32) -> Option<String> {
     let shifted = rime_mask & RIME_SHIFT_MASK != 0;
     if (97..=122).contains(&keysym) {
         let ch = char::from_u32(keysym)?;
-        return Some(if shifted {
-            ch.to_ascii_uppercase()
-        } else {
-            ch
-        }
-        .to_string());
+        return Some(if shifted { ch.to_ascii_uppercase() } else { ch }.to_string());
     }
 
     let ch = match keysym {
