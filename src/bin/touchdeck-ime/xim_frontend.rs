@@ -83,19 +83,20 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
     fn new_ic_data(
         &mut self,
         _server: &mut xim::x11rb::X11rbServer<C>,
-        _input_style: InputStyle,
+        input_style: InputStyle,
     ) -> std::result::Result<Self::InputContextData, xim::ServerError> {
+        eprintln!("touchdeck-ime: xim new input context data style={input_style:?}");
         Ok(())
     }
 
     fn input_styles(&self) -> Self::InputStyleArray {
         [
-            InputStyle::PREEDIT_NOTHING | InputStyle::STATUS_NOTHING,
-            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_NONE,
-            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_NOTHING,
-            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_CALLBACKS,
-            InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_NOTHING,
             InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_CALLBACKS,
+            InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_NOTHING,
+            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_CALLBACKS,
+            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_NOTHING,
+            InputStyle::PREEDIT_POSITION | InputStyle::STATUS_NONE,
+            InputStyle::PREEDIT_NOTHING | InputStyle::STATUS_NOTHING,
         ]
     }
 
@@ -116,7 +117,10 @@ impl<C: xim::x11rb::HasConnection> ServerHandler<xim::x11rb::X11rbServer<C>>
         server: &mut xim::x11rb::X11rbServer<C>,
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> std::result::Result<(), xim::ServerError> {
-        eprintln!("touchdeck-ime: xim create input context");
+        eprintln!(
+            "touchdeck-ime: xim create input context style={:?}",
+            user_ic.ic.input_style()
+        );
         server.set_event_mask(&user_ic.ic, XIM_EVENT_MASK, 0)
     }
 
