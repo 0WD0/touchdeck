@@ -49,7 +49,6 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 
 const RIME_FALSE: c_int = 0;
-const RIME_TRUE: c_int = 1;
 const RIME_SHIFT_MASK: u32 = 1 << 0;
 const RIME_CONTROL_MASK: u32 = 1 << 2;
 const RIME_ALT_MASK: u32 = 1 << 3;
@@ -57,7 +56,6 @@ const RIME_SUPER_MASK: u32 = 1 << 26;
 const RIME_RELEASE_MASK: u32 = 1 << 30;
 const RIME_MODULE_DEFAULT: &[u8] = b"default\0";
 const RIME_MODULE_PLUGINS: &[u8] = b"plugins\0";
-const RIME_ASCII_MODE: &[u8] = b"ascii_mode\0";
 
 const XKB_SHIFT_MASK: u32 = 1 << 0;
 const XKB_CONTROL_MASK: u32 = 1 << 2;
@@ -1998,17 +1996,6 @@ impl RimeEngine {
         }
     }
 
-    fn set_ascii_mode(&mut self, ascii: bool) {
-        unsafe {
-            if let Some(set_option) = self.api().set_option {
-                set_option(
-                    self.session,
-                    RIME_ASCII_MODE.as_ptr() as *const c_char,
-                    if ascii { RIME_TRUE } else { RIME_FALSE },
-                );
-            }
-        }
-    }
 
     fn api(&self) -> &RimeApi {
         unsafe { self.api.as_ref() }

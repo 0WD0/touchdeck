@@ -27,13 +27,17 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 use touchdeck::niri;
 use touchdeck::protocol::{ImeCandidate, ImeCursorRect, ImeStatus};
 
+mod action;
 mod geometry;
 mod key;
 mod layout;
+mod mode;
 
+use action::*;
 use geometry::*;
 use key::*;
 use layout::*;
+use mode::*;
 
 const NAMESPACE: &str = "touchdeck";
 
@@ -526,31 +530,6 @@ fn spawn_ime_status_subscriber(socket_path: PathBuf) -> Receiver<ImeStatus> {
     rx
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Mode {
-    Base,
-    Text,
-    NiriMomentary,
-    NiriLocked,
-    Passthrough,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Layer {
-    Base,
-    Niri,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SlotGestureKind {
-    Tap,
-    Hold,
-    SwipeUp,
-    SwipeDown,
-    SwipeLeft,
-    SwipeRight,
-}
-
 #[derive(Clone, Debug)]
 struct Keymap {
     bindings: Vec<Binding>,
@@ -868,53 +847,6 @@ impl MacroRegistry {
             .get(&normalize_name(name))
             .cloned()
             .ok_or_else(|| anyhow!("unknown macro {name}"))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ActionStep {
-    KeyDown(u32),
-    KeyUp(u32),
-    TapKey(u32),
-    KeySequence(Vec<KeyChord>),
-    Niri(NiriAction),
-    DelayMs(u32),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NiriAction {
-    FocusColumnLeft,
-    FocusColumnRight,
-    FocusWorkspaceUp,
-    FocusWorkspaceDown,
-    ToggleOverview,
-}
-
-impl NiriAction {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::FocusColumnLeft => "focus-column-left",
-            Self::FocusColumnRight => "focus-column-right",
-            Self::FocusWorkspaceUp => "focus-workspace-up",
-            Self::FocusWorkspaceDown => "focus-workspace-down",
-            Self::ToggleOverview => "toggle-overview",
-        }
-    }
-
-    fn ipc_request_json(self) -> &'static str {
-        match self {
-            Self::FocusColumnLeft => r#"{"Action":{"FocusColumnLeft":{}}}"#,
-            Self::FocusColumnRight => r#"{"Action":{"FocusColumnRight":{}}}"#,
-            Self::FocusWorkspaceUp => r#"{"Action":{"FocusWorkspaceUp":{}}}"#,
-            Self::FocusWorkspaceDown => r#"{"Action":{"FocusWorkspaceDown":{}}}"#,
-            Self::ToggleOverview => r#"{"Action":{"ToggleOverview":{}}}"#,
-        }
-    }
-}
-
-impl std::fmt::Display for NiriAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 
@@ -4318,62 +4250,6 @@ impl Engine {
     }
 }
 
-impl Default for Mode {
-    fn default() -> Self {
-        Self::Base
-    }
-}
-
-impl Default for Layer {
-    fn default() -> Self {
-        Self::Base
-    }
-}
-
-fn default_layer_stack_for_mode(mode: Mode) -> Vec<Layer> {
-    match mode {
-        Mode::NiriMomentary | Mode::NiriLocked => vec![Layer::Niri],
-        Mode::Base | Mode::Text | Mode::Passthrough => vec![Layer::Base],
-    }
-}
-
-fn mode_name(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Base => "base",
-        Mode::Text => "text",
-        Mode::NiriMomentary => "niri-momentary",
-        Mode::NiriLocked => "niri-locked",
-        Mode::Passthrough => "passthrough",
-    }
-}
-
-fn mode_hint_label(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Base => "BASE",
-        Mode::Text => "TEXT",
-        Mode::NiriMomentary => "NIRI",
-        Mode::NiriLocked => "NIRI-LK",
-        Mode::Passthrough => "PASS",
-    }
-}
-
-fn mode_hint_color(mode: Mode) -> [u8; 4] {
-    match mode {
-        Mode::Base => [0xff, 0xff, 0xff, 0xb0],
-        Mode::Text => [0x40, 0xff, 0xb0, 0xd0],
-        Mode::NiriMomentary => [0x30, 0xa0, 0xff, 0xd0],
-        Mode::NiriLocked => [0xff, 0x90, 0x30, 0xd8],
-        Mode::Passthrough => [0xb0, 0xb0, 0xb0, 0xc0],
-    }
-}
-
-fn layer_name(layer: Layer) -> &'static str {
-    match layer {
-        Layer::Base => "base",
-        Layer::Niri => "niri",
-    }
-}
-
 impl Engine {
     fn hold_contact_ids(&self) -> Vec<i32> {
         let mut ids = self
@@ -4476,51 +4352,6 @@ fn poll_fd(fd: RawFd, timeout: Option<Duration>) -> Result<bool> {
             return Ok(false);
         }
         return Err(err.into());
-    }
-}
-
-fn spawn_niri_action(action: NiriAction) {
-    thread::spawn(move || {
-        if let Err(err) = send_niri_action_socket(action) {
-            eprintln!("touchdeck: failed to send niri action {action}: {err:?}");
-        }
-    });
-}
-
-fn send_niri_action_socket(action: NiriAction) -> Result<()> {
-    let request = niri_action_request_json(action);
-    let _ = niri::send_ipc_request_json(request)?;
-    Ok(())
-}
-
-fn niri_action_request_json(action: NiriAction) -> &'static str {
-    action.ipc_request_json()
-}
-
-#[cfg(test)]
-fn configured_target(name: &str) -> Option<SlotTarget> {
-    SlotRegistry::from_svg_file(Path::new("layouts/phone-portrait.svg"))
-        .ok()?
-        .get(name)
-        .ok()
-}
-
-fn parse_mode(value: &str) -> Result<Mode> {
-    match normalize_name(value).as_str() {
-        "base" => Ok(Mode::Base),
-        "text" | "keyboard" => Ok(Mode::Text),
-        "niri_momentary" | "niri" => Ok(Mode::NiriMomentary),
-        "niri_locked" => Ok(Mode::NiriLocked),
-        "passthrough" => Ok(Mode::Passthrough),
-        _ => Err(anyhow!("unknown mode {value}")),
-    }
-}
-
-fn parse_layer(value: &str) -> Result<Layer> {
-    match normalize_name(value).as_str() {
-        "base" => Ok(Layer::Base),
-        "niri" => Ok(Layer::Niri),
-        _ => Err(anyhow!("unknown layer {value}")),
     }
 }
 
@@ -5208,19 +5039,6 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
         Behavior::LayerMomentary(layer) => Some(format!("{}+", layer_name(*layer))),
         Behavior::Exit => Some("exit".to_string()),
         Behavior::Transparent | Behavior::NoOp => None,
-    }
-}
-
-fn parse_niri_action(value: &str) -> Result<NiriAction> {
-    match normalize_name(value).as_str() {
-        "focus_column_left" => Ok(NiriAction::FocusColumnLeft),
-        "focus_column_right" => Ok(NiriAction::FocusColumnRight),
-        "focus_workspace_up" => Ok(NiriAction::FocusWorkspaceUp),
-        "focus_workspace_down" => Ok(NiriAction::FocusWorkspaceDown),
-        "toggle_overview" => Ok(NiriAction::ToggleOverview),
-        other => Err(anyhow!(
-            "unsupported niri action {other}; supported actions: focus-column-left, focus-column-right, focus-workspace-up, focus-workspace-down, toggle-overview"
-        )),
     }
 }
 
