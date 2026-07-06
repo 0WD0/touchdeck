@@ -28,6 +28,7 @@ mod app_state;
 mod fcitx_dbus;
 mod config;
 mod key;
+mod physical_keyboard;
 mod popup;
 mod rime_engine;
 mod touchdeck_socket;
@@ -37,6 +38,7 @@ use app_state::*;
 use fcitx_dbus::*;
 use config::*;
 use key::*;
+use physical_keyboard::*;
 use popup::*;
 use rime_engine::*;
 use touchdeck_socket::*;
@@ -68,6 +70,7 @@ struct ImeApp {
     fcitx_capability: u64,
     fcitx_supported_capability: u64,
     x11_geometry: Option<X11GeometryProbe>,
+    physical_keyboard: Option<PhysicalKeyboard>,
     physical_modifiers: u32,
     virtual_keyboard_has_keymap: bool,
     running: bool,
@@ -295,7 +298,12 @@ impl ImeApp {
             return;
         }
 
-        let Some(keysym) = evdev_key_to_keysym(key) else {
+        let Some(keysym) = self
+            .physical_keyboard
+            .as_ref()
+            .and_then(|keyboard| keyboard.keysym_for_evdev_key(key))
+            .or_else(|| evdev_key_to_keysym(key))
+        else {
             self.passthrough_physical_key(time, key, state);
             return;
         };
@@ -1146,14 +1154,31 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for ImeApp {
     ) {
         match event {
             zwp_input_method_keyboard_grab_v2::Event::Keymap { format, fd, size } => {
+                let format: u32 = format.into();
                 if state.virtual_keyboard_has_keymap {
                     return;
                 }
 
                 if let Some(virtual_keyboard) = &state.virtual_keyboard {
-                    virtual_keyboard.keymap(format.into(), fd.as_fd(), size);
+                    virtual_keyboard.keymap(format, fd.as_fd(), size);
                     state.virtual_keyboard_has_keymap = true;
                     eprintln!("touchdeck-ime: forwarded physical keymap to virtual keyboard");
+                }
+
+                if format == xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1 {
+                    match PhysicalKeyboard::from_keymap_fd(fd, size) {
+                        Ok(keyboard) => {
+                            state.physical_keyboard = Some(keyboard);
+                            eprintln!("touchdeck-ime: initialized physical keyboard xkb state");
+                        }
+                        Err(err) => {
+                            state.physical_keyboard = None;
+                            eprintln!("touchdeck-ime: failed to initialize xkb keymap: {err:?}");
+                        }
+                    }
+                } else {
+                    state.physical_keyboard = None;
+                    eprintln!("touchdeck-ime: unsupported physical keymap format {format}");
                 }
             }
             zwp_input_method_keyboard_grab_v2::Event::Key {
@@ -1172,6 +1197,9 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for ImeApp {
                 ..
             } => {
                 state.physical_modifiers = mods_depressed;
+                if let Some(keyboard) = state.physical_keyboard.as_mut() {
+                    keyboard.update_modifiers(mods_depressed, mods_latched, mods_locked, group);
+                }
                 state.passthrough_physical_modifiers(
                     mods_depressed,
                     mods_latched,
