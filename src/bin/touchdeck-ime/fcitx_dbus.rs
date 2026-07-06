@@ -596,9 +596,7 @@ impl FcitxInputContext {
     ) -> zbus::Result<()>;
 }
 
-pub(super) fn spawn_fcitx_dbus_server(
-    tx: Sender<FcitxDbusRequest>,
-) -> Sender<FcitxDbusOutput> {
+pub(super) fn spawn_fcitx_dbus_server(tx: Sender<FcitxDbusRequest>) -> Sender<FcitxDbusOutput> {
     let (output_tx, output_rx) = mpsc::channel();
     thread::spawn(move || {
         if let Err(err) = zbus::block_on(run_fcitx_dbus_server(tx, output_rx)) {

@@ -10,14 +10,11 @@ use anyhow::{anyhow, Context, Result};
 use touchdeck::protocol::{ImeCandidate, ImeStatus};
 use touchdeck::rime::{
     call_ret, call_void, empty_rime_context, rime_commit_data_size, rime_get_api,
-    rime_traits_data_size, RimeApi, RimeCommit, RimeContext, RimeSessionId,
-    RimeTraits,
+    rime_traits_data_size, RimeApi, RimeCommit, RimeContext, RimeSessionId, RimeTraits,
 };
 
 use super::config::KeyTranslationPolicy;
-use super::key::{
-    rime_effective_keysym, rime_modifier_mask, KeyState, RIME_RELEASE_MASK,
-};
+use super::key::{rime_effective_keysym, rime_modifier_mask, KeyState, RIME_RELEASE_MASK};
 
 const RIME_FALSE: c_int = 0;
 const RIME_MODULE_DEFAULT: &[u8] = b"default\0";
@@ -56,7 +53,10 @@ impl RimeEngine {
         let runtime = RimeRuntime::new()?;
         let session = runtime.create_session()?;
 
-        eprintln!("touchdeck-ime: librime initialized session={}", session.id());
+        eprintln!(
+            "touchdeck-ime: librime initialized session={}",
+            session.id()
+        );
         Ok(Self {
             session,
             runtime,

@@ -25,9 +25,9 @@ mod action;
 mod action_executor;
 mod config;
 mod engine;
-mod ime_overlay;
 mod geometry;
 mod gesture;
+mod ime_overlay;
 mod key;
 mod keymap;
 mod layout;
@@ -39,7 +39,7 @@ mod wayland_overlay;
 
 use action_executor::{ActionExecutor, ExecutorOutcome};
 use config::Config;
-use engine::{CapturePolicy, Engine, EngineEffect, TraceEvent, TouchSample};
+use engine::{CapturePolicy, Engine, EngineEffect, TouchSample, TraceEvent};
 use geometry::{RectNorm, RectPx, SurfaceSize};
 use layout::{Slot, SlotRole, SlotTarget};
 use mode::{mode_hint_color, mode_hint_label, Mode, SlotGestureKind};
@@ -253,8 +253,7 @@ impl App {
             .as_ref()
             .ok_or_else(|| anyhow!("wl_touch is unavailable on this Wayland seat"))?;
 
-        self.overlay
-            .init(compositor, layer_shell, qh, NAMESPACE);
+        self.overlay.init(compositor, layer_shell, qh, NAMESPACE);
 
         self.init_virtual_keyboard(qh)?;
 

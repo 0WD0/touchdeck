@@ -5,13 +5,9 @@ use std::os::fd::AsFd;
 use anyhow::{anyhow, Context, Result};
 use memmap2::MmapMut;
 use tempfile::tempfile;
-use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_shm, wl_shm_pool, wl_surface,
-};
+use wayland_client::protocol::{wl_buffer, wl_compositor, wl_shm, wl_shm_pool, wl_surface};
 use wayland_client::QueueHandle;
-use wayland_protocols_wlr::layer_shell::v1::client::{
-    zwlr_layer_shell_v1, zwlr_layer_surface_v1,
-};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::engine::CapturePolicy;
 use crate::geometry::SurfaceSize;

@@ -8,10 +8,7 @@ use crate::geometry::{RectNorm, SurfaceSize};
 use crate::gesture::{contact_movement, is_tap_like, Contact, Gesture, TapRecord};
 use crate::key::KeyChord;
 use crate::keymap::{ActiveSwipeQuery, GestureAction, HoldQuery, KeymapContext, ReleaseQuery};
-use crate::mode::{
-    default_layer_stack_for_mode, layer_name, mode_name, Layer, Mode,
-};
-
+use crate::mode::{default_layer_stack_for_mode, layer_name, mode_name, Layer, Mode};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -150,7 +147,6 @@ struct HoldRepeatStart {
     translation: Option<KeyTranslationPolicy>,
     route: Option<KeyRoute>,
 }
-
 
 impl Engine {
     fn keymap_context(&self, size: SurfaceSize) -> KeymapContext<'_> {
@@ -837,7 +833,12 @@ impl Engine {
         effects.push(EngineEffect::Redraw);
     }
 
-    pub(crate) fn set_mode(&mut self, mode: Mode, effects: &mut Vec<EngineEffect>, config: &Config) {
+    pub(crate) fn set_mode(
+        &mut self,
+        mode: Mode,
+        effects: &mut Vec<EngineEffect>,
+        config: &Config,
+    ) {
         self.mode = mode;
         self.layer_stack = default_layer_stack_for_mode(mode);
         self.momentary = None;
@@ -976,7 +977,6 @@ impl Engine {
     }
 }
 
-
 fn redraw_if_debug(config: &Config) -> Vec<EngineEffect> {
     if config.debug_draw {
         vec![EngineEffect::Redraw]
@@ -991,7 +991,11 @@ fn push_dispatch_effect(effects: &mut Vec<EngineEffect>, action: GestureAction) 
     }
 }
 
-pub(crate) fn resolve_niri_gesture(gesture: &Gesture, config: &Config, size: SurfaceSize) -> GestureAction {
+pub(crate) fn resolve_niri_gesture(
+    gesture: &Gesture,
+    config: &Config,
+    size: SurfaceSize,
+) -> GestureAction {
     if gesture.finished.is_empty() {
         return GestureAction::None;
     }
@@ -1075,7 +1079,10 @@ fn is_top_left_corner(contact: &Contact, config: &Config, size: SurfaceSize) -> 
 mod tests {
 
     use super::*;
-    use crate::config::{default_ime_socket_path, expand_keyboard_maps, parse_action_steps, BehaviorRegistry, Config, FileConfig, TextOutputBackend, TextOutputConfig};
+    use crate::config::{
+        default_ime_socket_path, expand_keyboard_maps, parse_action_steps, BehaviorRegistry,
+        Config, FileConfig, TextOutputBackend, TextOutputConfig,
+    };
     use crate::key::*;
     use crate::keymap::{Behavior, Binding, Keymap, MacroRegistry, Trigger};
     use crate::layout::{SlotRegistry, SlotTarget};
@@ -1169,35 +1176,24 @@ mod tests {
         config.keymap.bindings.clear();
         if let Some(bindings) = file_config.bindings.take() {
             for binding in bindings {
-                config
-                    .keymap
-                    .bindings
-                    .push(
-                        Binding::from_file_config(
-                            binding,
-                            &config.slots,
-                            &config.macros,
-                            &behavior_registry,
-                        )
-                        .unwrap(),
-                    );
+                config.keymap.bindings.push(
+                    Binding::from_file_config(
+                        binding,
+                        &config.slots,
+                        &config.macros,
+                        &behavior_registry,
+                    )
+                    .unwrap(),
+                );
             }
         }
 
         if let Some(keyboard) = file_config.keyboard {
             if let Some(maps) = keyboard.layers {
-                config
-                    .keymap
-                    .bindings
-                    .extend(
-                        expand_keyboard_maps(
-                            maps,
-                            &config.slots,
-                            &config.macros,
-                            &behavior_registry,
-                        )
+                config.keymap.bindings.extend(
+                    expand_keyboard_maps(maps, &config.slots, &config.macros, &behavior_registry)
                         .unwrap(),
-                    );
+                );
             }
         }
     }
@@ -1231,13 +1227,7 @@ mod tests {
             .collect()
     }
 
-    fn sample(
-        now_ms: u64,
-        time: u32,
-        id: i32,
-        x: f64,
-        y: f64,
-    ) -> TouchSample {
+    fn sample(now_ms: u64, time: u32, id: i32, x: f64, y: f64) -> TouchSample {
         TouchSample {
             now_ms,
             time,
@@ -1411,7 +1401,8 @@ mod tests {
         let (x, y) = test_slot_center("key_h");
 
         handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
-        let mut effects = handle_motion(&mut engine, sample(60, 60, 1, x - 220.0, y), &config, size);
+        let mut effects =
+            handle_motion(&mut engine, sample(60, 60, 1, x - 220.0, y), &config, size);
         effects.extend(engine.handle_up(80, 80, 1, &config, size));
 
         assert!(
@@ -1616,7 +1607,12 @@ mod tests {
 
         handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         engine.handle_up(80, 80, 1, &config, size);
-        handle_down(&mut engine, sample(160, 160, 1, x + 4.0, y + 4.0), &config, size);
+        handle_down(
+            &mut engine,
+            sample(160, 160, 1, x + 4.0, y + 4.0),
+            &config,
+            size,
+        );
         let effects = engine.handle_up(220, 220, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::NiriLocked);
@@ -1624,7 +1620,12 @@ mod tests {
 
         handle_down(&mut engine, sample(400, 400, 1, x, y), &config, size);
         engine.handle_up(460, 460, 1, &config, size);
-        handle_down(&mut engine, sample(540, 540, 1, x + 2.0, y + 2.0), &config, size);
+        handle_down(
+            &mut engine,
+            sample(540, 540, 1, x + 2.0, y + 2.0),
+            &config,
+            size,
+        );
         let effects = engine.handle_up(600, 600, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Base);
@@ -1640,7 +1641,12 @@ mod tests {
 
         handle_down(&mut engine, sample(0, 0, 1, x, y), &config, size);
         engine.handle_up(60, 60, 1, &config, size);
-        handle_down(&mut engine, sample(140, 140, 1, x + 4.0, y + 2.0), &config, size);
+        handle_down(
+            &mut engine,
+            sample(140, 140, 1, x + 4.0, y + 2.0),
+            &config,
+            size,
+        );
         let effects = engine.handle_up(200, 200, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Passthrough);
@@ -1662,7 +1668,12 @@ mod tests {
 
         handle_down(&mut engine, sample(380, 380, 1, x, y), &config, size);
         engine.handle_up(430, 430, 1, &config, size);
-        handle_down(&mut engine, sample(500, 500, 1, x + 4.0, y + 2.0), &config, size);
+        handle_down(
+            &mut engine,
+            sample(500, 500, 1, x + 4.0, y + 2.0),
+            &config,
+            size,
+        );
         let effects = engine.handle_up(550, 550, 1, &config, size);
 
         assert_eq!(engine.mode, Mode::Base);
@@ -1677,13 +1688,28 @@ mod tests {
         let (bottom_x, bottom_y) = test_slot_center("bottom_edge");
         let (left_x, left_y) = test_slot_center("left_bottom");
 
-        handle_down(&mut engine, sample(0, 0, 1, bottom_x, bottom_y), &config, size);
+        handle_down(
+            &mut engine,
+            sample(0, 0, 1, bottom_x, bottom_y),
+            &config,
+            size,
+        );
         engine.handle_up(60, 60, 1, &config, size);
-        handle_down(&mut engine, sample(140, 140, 1, bottom_x + 4.0, bottom_y + 2.0), &config, size);
+        handle_down(
+            &mut engine,
+            sample(140, 140, 1, bottom_x + 4.0, bottom_y + 2.0),
+            &config,
+            size,
+        );
         engine.handle_up(200, 200, 1, &config, size);
         assert_eq!(engine.mode, Mode::Passthrough);
 
-        handle_down(&mut engine, sample(300, 300, 1, left_x, left_y), &config, size);
+        handle_down(
+            &mut engine,
+            sample(300, 300, 1, left_x, left_y),
+            &config,
+            size,
+        );
         engine.process_timers(481, &config, size);
         assert_eq!(engine.mode, Mode::NiriMomentary);
 

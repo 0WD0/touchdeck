@@ -251,10 +251,7 @@ impl ActionExecutor {
                     )
                 }
             }
-            action => (
-                PressedAction::None,
-                self.dispatch_action_inner(action, ctx),
-            ),
+            action => (PressedAction::None, self.dispatch_action_inner(action, ctx)),
         }
     }
 
@@ -346,7 +343,9 @@ impl ActionExecutor {
                 ActionStep::KeyDown(key) => self.send_key_state(*key, true, ctx),
                 ActionStep::KeyUp(key) => self.send_key_state(*key, false, ctx),
                 ActionStep::TapKey(key) => self.send_key(*key, ctx),
-                ActionStep::KeySequence(sequence) => self.send_key_sequence(sequence, None, None, ctx),
+                ActionStep::KeySequence(sequence) => {
+                    self.send_key_sequence(sequence, None, None, ctx)
+                }
                 ActionStep::Niri(action) => {
                     eprintln!("touchdeck: niri action {action}");
                     spawn_niri_action(*action);
@@ -375,7 +374,8 @@ impl ActionExecutor {
         route: Option<KeyRoute>,
         ctx: &mut ExecutionContext<'_>,
     ) {
-        if ctx.config.text_output.backend.uses_virtual_keyboard() && self.virtual_keyboard.is_none() {
+        if ctx.config.text_output.backend.uses_virtual_keyboard() && self.virtual_keyboard.is_none()
+        {
             eprintln!("touchdeck: virtual keyboard unavailable; ignored key state {key}");
         }
 
@@ -519,9 +519,7 @@ impl ActionExecutor {
 mod tests {
     use super::*;
     use crate::action::NiriAction;
-    use crate::config::{
-        default_ime_socket_path, TextOutputBackend, TextOutputConfig,
-    };
+    use crate::config::{default_ime_socket_path, TextOutputBackend, TextOutputConfig};
     use crate::key::*;
     use crate::keymap::MacroRegistry;
     use crate::layout::SlotRegistry;
@@ -563,7 +561,11 @@ mod tests {
         }
     }
 
-    fn press_for_test(executor: &mut ActionExecutor, action: GestureAction, config: &Config) -> PressedAction {
+    fn press_for_test(
+        executor: &mut ActionExecutor,
+        action: GestureAction,
+        config: &Config,
+    ) -> PressedAction {
         let mut ime_status = ImeStatus::default();
         let mut ime_dirty = false;
         let mut ctx = ExecutionContext {
@@ -605,7 +607,11 @@ mod tests {
         let config = test_config();
         let mut executor = ActionExecutor::default();
 
-        let shift = press_for_test(&mut executor, GestureAction::KeyHold(KEY_LEFTSHIFT), &config);
+        let shift = press_for_test(
+            &mut executor,
+            GestureAction::KeyHold(KEY_LEFTSHIFT),
+            &config,
+        );
         assert_eq!(executor.held_modifier_mask & XKB_MOD_SHIFT, XKB_MOD_SHIFT);
         assert_eq!(executor.modifier_mask & XKB_MOD_SHIFT, XKB_MOD_SHIFT);
 
@@ -644,7 +650,11 @@ mod tests {
         let config = test_config();
         let mut executor = ActionExecutor::default();
 
-        let shift = press_for_test(&mut executor, GestureAction::KeyHold(KEY_LEFTSHIFT), &config);
+        let shift = press_for_test(
+            &mut executor,
+            GestureAction::KeyHold(KEY_LEFTSHIFT),
+            &config,
+        );
         dispatch_for_test(
             &mut executor,
             GestureAction::ModMorph {

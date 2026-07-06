@@ -60,7 +60,12 @@ pub(super) fn spawn_socket_listener(socket_path: PathBuf) -> Result<Receiver<Tou
                     socket_path.display()
                 ));
             }
-            Err(err) if matches!(err.kind(), ErrorKind::ConnectionRefused | ErrorKind::NotFound) => {
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    ErrorKind::ConnectionRefused | ErrorKind::NotFound
+                ) =>
+            {
                 fs::remove_file(&socket_path)
                     .with_context(|| format!("remove stale socket {}", socket_path.display()))?;
             }
@@ -161,6 +166,3 @@ pub(super) fn handle_client(mut stream: UnixStream, tx: Sender<TouchDeckRequest>
 
     Ok(())
 }
-
-
-

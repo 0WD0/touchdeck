@@ -12,7 +12,7 @@ use crate::key::{
     normalize_name, parse_key_sequence, parse_single_key, XKB_MOD_ALT, XKB_MOD_CONTROL,
     XKB_MOD_SHIFT, XKB_MOD_SUPER,
 };
-use crate::keymap::{Binding, Behavior, Keymap, MacroRegistry, Trigger};
+use crate::keymap::{Behavior, Binding, Keymap, MacroRegistry, Trigger};
 use crate::layout::{SlotRegistry, SlotTarget};
 use crate::mode::{parse_layer, parse_mode, Layer, Mode};
 
@@ -306,7 +306,6 @@ pub(crate) fn parse_text_output_backend(value: &str) -> Result<TextOutputBackend
     }
 }
 
-
 #[derive(Deserialize)]
 pub(crate) struct FileConfig {
     pub(crate) layout: Option<LayoutFileConfig>,
@@ -446,7 +445,6 @@ pub(crate) struct BehaviorDefinitionFileConfig {
     pub(crate) morph: Option<String>,
 }
 
-
 pub(crate) fn resolve_config_relative(config_path: &Path, value: &str) -> PathBuf {
     let path = PathBuf::from(value);
     if path.is_absolute() {
@@ -458,7 +456,6 @@ pub(crate) fn resolve_config_relative(config_path: &Path, value: &str) -> PathBu
             .join(path)
     }
 }
-
 
 fn env_f64(name: &str, default: f64) -> f64 {
     env::var(name)
@@ -581,61 +578,41 @@ pub(crate) fn expand_keyboard_maps(
             repeat_interval_ms,
         };
 
-        expansion.expand_gesture(
-            "tap",
-            map.tap,
-            |target| Trigger::Tap {
-                target,
-                fingers,
-                max_ms,
-            },
-        )?;
+        expansion.expand_gesture("tap", map.tap, |target| Trigger::Tap {
+            target,
+            fingers,
+            max_ms,
+        })?;
         expansion.expand_hold(map.hold, hold_ms)?;
         expansion.expand_repeat(map.repeat)?;
-        expansion.expand_gesture(
-            "swipe_up",
-            map.swipe_up,
-            |target| Trigger::Swipe {
-                target,
-                fingers,
-                direction: SwipeDirection::Up,
-                min_px,
-                max_ms,
-            },
-        )?;
-        expansion.expand_gesture(
-            "swipe_down",
-            map.swipe_down,
-            |target| Trigger::Swipe {
-                target,
-                fingers,
-                direction: SwipeDirection::Down,
-                min_px,
-                max_ms,
-            },
-        )?;
-        expansion.expand_gesture(
-            "swipe_left",
-            map.swipe_left,
-            |target| Trigger::Swipe {
-                target,
-                fingers,
-                direction: SwipeDirection::Left,
-                min_px,
-                max_ms,
-            },
-        )?;
-        expansion.expand_gesture(
-            "swipe_right",
-            map.swipe_right,
-            |target| Trigger::Swipe {
-                target,
-                fingers,
-                direction: SwipeDirection::Right,
-                min_px,
-                max_ms,
-            },
-        )?;
+        expansion.expand_gesture("swipe_up", map.swipe_up, |target| Trigger::Swipe {
+            target,
+            fingers,
+            direction: SwipeDirection::Up,
+            min_px,
+            max_ms,
+        })?;
+        expansion.expand_gesture("swipe_down", map.swipe_down, |target| Trigger::Swipe {
+            target,
+            fingers,
+            direction: SwipeDirection::Down,
+            min_px,
+            max_ms,
+        })?;
+        expansion.expand_gesture("swipe_left", map.swipe_left, |target| Trigger::Swipe {
+            target,
+            fingers,
+            direction: SwipeDirection::Left,
+            min_px,
+            max_ms,
+        })?;
+        expansion.expand_gesture("swipe_right", map.swipe_right, |target| Trigger::Swipe {
+            target,
+            fingers,
+            direction: SwipeDirection::Right,
+            min_px,
+            max_ms,
+        })?;
     }
 
     Ok(bindings)
@@ -658,14 +635,12 @@ struct KeyboardMapExpansion<'a> {
 
 impl KeyboardMapExpansion<'_> {
     fn target(&self, gesture_name: &str, slot_id: &str) -> Result<SlotTarget> {
-        self.slots
-            .get(slot_id)
-            .with_context(|| {
-                format!(
-                    "keyboard map {} {} target {}",
-                    self.map_index, gesture_name, slot_id
-                )
-            })
+        self.slots.get(slot_id).with_context(|| {
+            format!(
+                "keyboard map {} {} target {}",
+                self.map_index, gesture_name, slot_id
+            )
+        })
     }
 
     fn behavior(&self, gesture_name: &str, slot_id: &str, invocation: &str) -> Result<Behavior> {
@@ -677,11 +652,7 @@ impl KeyboardMapExpansion<'_> {
                         self.map_index, gesture_name, slot_id, invocation
                     )
                 })?;
-        apply_hold_repeat_defaults(
-            &mut behavior,
-            self.repeat_start_ms,
-            self.repeat_interval_ms,
-        );
+        apply_hold_repeat_defaults(&mut behavior, self.repeat_start_ms, self.repeat_interval_ms);
         Ok(behavior)
     }
 

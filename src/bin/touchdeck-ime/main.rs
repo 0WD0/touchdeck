@@ -25,8 +25,8 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 };
 
 mod app_state;
-mod fcitx_dbus;
 mod config;
+mod fcitx_dbus;
 mod key;
 mod physical_keyboard;
 mod popup;
@@ -45,13 +45,15 @@ use fcitx_dbus::{
 };
 use key::{
     evdev_key_to_keysym, is_empty_state_passthrough_key, keysym_to_text, parse_key_state,
-    parse_wayland_key_state, rime_modifier_mask, x_keycode_to_keysym, KeyState,
-    RIME_ALT_MASK, RIME_CONTROL_MASK, RIME_SUPER_MASK,
+    parse_wayland_key_state, rime_modifier_mask, x_keycode_to_keysym, KeyState, RIME_ALT_MASK,
+    RIME_CONTROL_MASK, RIME_SUPER_MASK,
 };
 use physical_keyboard::PhysicalKeyboard;
 use popup::PopupRenderer;
 use rime_engine::RimeEngine;
-use touchdeck_socket::{default_socket_path, spawn_socket_listener, TouchDeckEvent, TouchDeckRequest};
+use touchdeck_socket::{
+    default_socket_path, spawn_socket_listener, TouchDeckEvent, TouchDeckRequest,
+};
 use xim_frontend::{spawn_xim_server, XimKeyResponse, XimRequest};
 
 #[derive(Default)]
@@ -1139,11 +1141,11 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for ImeApp {
         _qh: &QueueHandle<Self>,
     ) {
         if let zwp_input_popup_surface_v2::Event::TextInputRectangle {
-                x,
-                y,
-                width,
-                height,
-            } = event
+            x,
+            y,
+            width,
+            height,
+        } = event
         {
             eprintln!(
                 "touchdeck-ime: text input rectangle x={} y={} width={} height={}",

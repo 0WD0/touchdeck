@@ -314,7 +314,14 @@ pub(crate) fn draw_label_in_rect_limited(
     let y = rect.y + (rect.h - total_h) / 2;
 
     for ch in text {
-        draw_glyph(buf, width, height, GlyphPlacement { x, y, scale }, ch, color);
+        draw_glyph(
+            buf,
+            width,
+            height,
+            GlyphPlacement { x, y, scale },
+            ch,
+            color,
+        );
         x += (glyph_w + spacing) * scale;
     }
 }

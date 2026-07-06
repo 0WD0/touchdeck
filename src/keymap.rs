@@ -86,8 +86,7 @@ impl Keymap {
     }
 
     pub(crate) fn resolve_release(&self, query: ReleaseQuery<'_>) -> GestureAction {
-        let Some(kind) =
-            recognize_gesture_kind(query.gesture, query.config, query.context.size)
+        let Some(kind) = recognize_gesture_kind(query.gesture, query.config, query.context.size)
         else {
             return GestureAction::None;
         };
@@ -97,21 +96,21 @@ impl Keymap {
         };
 
         if kind == GestureKind::Tap {
-            let double_tap_binding = self.find_release_binding(
-                query.context.mode,
-                query.context.layers,
-                |binding| {
-                binding.trigger.matches_double_tap_start(
-                    query.context.size,
-                    contact.start_x,
-                    contact.start_y,
-                    query.gesture.max_active,
-                )
-                },
-            );
+            let double_tap_binding =
+                self.find_release_binding(query.context.mode, query.context.layers, |binding| {
+                    binding.trigger.matches_double_tap_start(
+                        query.context.size,
+                        contact.start_x,
+                        contact.start_y,
+                        query.gesture.max_active,
+                    )
+                });
 
             if let Some(binding) = double_tap_binding {
-                let max_ms = binding.trigger.max_ms().unwrap_or(query.config.double_tap_ms);
+                let max_ms = binding
+                    .trigger
+                    .max_ms()
+                    .unwrap_or(query.config.double_tap_ms);
                 let is_double_tap = query.last_tap.is_some_and(|last| {
                     query.now_ms.saturating_sub(last.t_ms) <= u64::from(max_ms)
                         && (contact.start_x - last.x).hypot(contact.start_y - last.y)
@@ -613,7 +612,6 @@ impl Behavior {
     }
 }
 
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum GestureAction {
     Niri(NiriAction),
@@ -654,7 +652,6 @@ impl GestureAction {
         matches!(self, Self::KeyHold(_) | Self::HoldRepeat { .. })
     }
 }
-
 
 fn behavior_label(behavior: &Behavior) -> Option<String> {
     match behavior {
@@ -698,7 +695,10 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
 mod tests {
 
     use super::*;
-    use crate::config::{default_ime_socket_path, expand_keyboard_maps, parse_action_steps, BehaviorRegistry, Config, FileConfig, TextOutputBackend, TextOutputConfig};
+    use crate::config::{
+        default_ime_socket_path, expand_keyboard_maps, parse_action_steps, BehaviorRegistry,
+        Config, FileConfig, TextOutputBackend, TextOutputConfig,
+    };
     use crate::layout::SlotRegistry;
     use crate::mode::{Layer, Mode, SlotGestureKind};
 
@@ -771,35 +771,24 @@ mod tests {
         config.keymap.bindings.clear();
         if let Some(bindings) = file_config.bindings.take() {
             for binding in bindings {
-                config
-                    .keymap
-                    .bindings
-                    .push(
-                        Binding::from_file_config(
-                            binding,
-                            &config.slots,
-                            &config.macros,
-                            &behavior_registry,
-                        )
-                        .unwrap(),
-                    );
+                config.keymap.bindings.push(
+                    Binding::from_file_config(
+                        binding,
+                        &config.slots,
+                        &config.macros,
+                        &behavior_registry,
+                    )
+                    .unwrap(),
+                );
             }
         }
 
         if let Some(keyboard) = file_config.keyboard {
             if let Some(maps) = keyboard.layers {
-                config
-                    .keymap
-                    .bindings
-                    .extend(
-                        expand_keyboard_maps(
-                            maps,
-                            &config.slots,
-                            &config.macros,
-                            &behavior_registry,
-                        )
+                config.keymap.bindings.extend(
+                    expand_keyboard_maps(maps, &config.slots, &config.macros, &behavior_registry)
                         .unwrap(),
-                    );
+                );
             }
         }
     }

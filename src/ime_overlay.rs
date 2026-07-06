@@ -94,8 +94,7 @@ fn render_touch_ime_status(
     }
 
     let gap = 6;
-    let box_w = ((panel.w - 16 - gap * (visible.len() as i32 - 1)) / visible.len() as i32)
-        .max(24);
+    let box_w = ((panel.w - 16 - gap * (visible.len() as i32 - 1)) / visible.len() as i32).max(24);
     for (index, candidate) in visible.into_iter().enumerate() {
         let rect = RectPx {
             x: panel.x + 8 + index as i32 * (box_w + gap),
@@ -391,7 +390,9 @@ fn x11_ime_anchor(
             return None;
         }
         Err(err) => {
-            eprintln!("touchdeck: failed to query niri focused window for xwayland IME popup: {err:?}");
+            eprintln!(
+                "touchdeck: failed to query niri focused window for xwayland IME popup: {err:?}"
+            );
             return None;
         }
     };
@@ -418,7 +419,9 @@ fn x11_ime_anchor(
             return None;
         }
         Err(err) => {
-            eprintln!("touchdeck: failed to query niri focused output for xwayland IME popup: {err:?}");
+            eprintln!(
+                "touchdeck: failed to query niri focused output for xwayland IME popup: {err:?}"
+            );
             return None;
         }
     };

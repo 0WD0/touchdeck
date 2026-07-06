@@ -29,7 +29,6 @@ impl SwipeDirection {
     }
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Contact {
     pub(crate) id: i32,
@@ -47,14 +46,12 @@ pub(crate) struct Gesture {
     pub(crate) max_active: usize,
 }
 
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TapRecord {
     pub(crate) t_ms: u64,
     pub(crate) x: f64,
     pub(crate) y: f64,
 }
-
 
 pub(crate) fn recognize_gesture_kind(
     gesture: &Gesture,
@@ -101,7 +98,6 @@ pub(crate) fn recognize_gesture_kind(
     }
 }
 
-
 pub(crate) fn is_tap_like(gesture: &Gesture, radius: f64, max_ms: u32) -> bool {
     let start = gesture
         .finished
@@ -131,4 +127,3 @@ pub(crate) fn contact_movement(contact: &Contact) -> f64 {
     let dy = contact.last_y - contact.start_y;
     dx.hypot(dy)
 }
-
