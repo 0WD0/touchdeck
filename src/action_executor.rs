@@ -464,7 +464,9 @@ impl ActionExecutor {
     }
 
     fn default_ime_route_for_key(&self, key: u32) -> Option<KeyRoute> {
-        if modifier_mask_for_key(key).is_some() || self.modifier_mask & XKB_MOD_SUPER != 0 {
+        if modifier_mask_for_key(key) == Some(XKB_MOD_SUPER)
+            || self.modifier_mask & XKB_MOD_SUPER != 0
+        {
             Some(KeyRoute::AppKey)
         } else {
             None
@@ -593,6 +595,30 @@ mod tests {
         assert_eq!(events[2].route.as_deref(), Some("app-key"));
         assert_eq!(events[3].key, KEY_LEFTMETA);
         assert_eq!(events[3].route.as_deref(), Some("app-key"));
+    }
+
+    #[test]
+    fn shift_modifier_stays_on_default_ime_key_route() {
+        let mut config = test_config();
+        config.text_output.backend = TextOutputBackend::Ime;
+        let mut executor = ActionExecutor::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        executor.set_ime_event_sender(tx);
+
+        dispatch_for_test(
+            &mut executor,
+            GestureAction::KeySequence(vec![KeyChord {
+                keys: vec![KEY_LEFTSHIFT],
+            }]),
+            &config,
+        );
+
+        let pressed = rx.recv().unwrap();
+        let released = rx.recv().unwrap();
+        assert_eq!(pressed.key, KEY_LEFTSHIFT);
+        assert_eq!(pressed.route, None);
+        assert_eq!(released.key, KEY_LEFTSHIFT);
+        assert_eq!(released.route, None);
     }
 
     #[test]
