@@ -7,7 +7,7 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboar
 
 use crate::action::ActionStep;
 use crate::config::{Config, KeyRoute, KeyTranslationPolicy};
-use crate::key::{modifier_mask_for_key, KeyChord};
+use crate::key::{modifier_mask_for_key, KeyChord, XKB_MOD_SUPER};
 use crate::keymap::{GestureAction, LastKeySequence};
 use crate::niri_backend::spawn_niri_action;
 use touchdeck::ime::TouchDeckEvent;
@@ -437,6 +437,7 @@ impl ActionExecutor {
             return;
         };
 
+        let effective_route = route.or_else(|| self.default_ime_route_for_key(key));
         let event = TouchDeckEvent {
             protocol: "touchdeck-ime-v1".to_string(),
             kind: "key".to_string(),
@@ -446,7 +447,7 @@ impl ActionExecutor {
             state: if pressed { "pressed" } else { "released" }.to_string(),
             modifiers: self.modifier_mask,
             translation: translation.map(|value| value.as_str().to_string()),
-            route: route.map(|value| value.as_str().to_string()),
+            route: effective_route.map(|value| value.as_str().to_string()),
         };
 
         if sender.send(event).is_err() {
@@ -461,19 +462,34 @@ impl ActionExecutor {
             1
         }
     }
+
+    fn default_ime_route_for_key(&self, key: u32) -> Option<KeyRoute> {
+        if modifier_mask_for_key(key).is_some() || self.modifier_mask & XKB_MOD_SUPER != 0 {
+            Some(KeyRoute::AppKey)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::action::NiriAction;
-    use crate::config::{TextOutputBackend, TextOutputConfig};
+    use crate::config::{InputConfig, TextOutputBackend, TextOutputConfig, TouchInputBackend};
     use crate::key::*;
     use crate::keymap::MacroRegistry;
     use crate::layout::SlotRegistry;
 
     fn test_config() -> Config {
         Config {
+            input: InputConfig {
+                touch_backend: TouchInputBackend::Wayland,
+                evdev_touch_device: None,
+                evdev_device_name_contains: None,
+                sunshine_output: None,
+                evdev_grab: true,
+            },
             action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
             action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
             action_swipe_up: Some(NiriAction::FocusColumnRight),
@@ -526,6 +542,57 @@ mod tests {
     fn release_for_test(executor: &mut ActionExecutor, pressed: PressedAction, config: &Config) {
         let mut ctx = ExecutionContext { now_ms: 0, config };
         executor.release_pressed_action(pressed, &mut ctx);
+    }
+
+    #[test]
+    fn super_modifier_defaults_to_app_key_route_for_ime_backend() {
+        let mut config = test_config();
+        config.text_output.backend = TextOutputBackend::Ime;
+        let mut executor = ActionExecutor::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        executor.set_ime_event_sender(tx);
+
+        dispatch_for_test(
+            &mut executor,
+            GestureAction::KeySequence(vec![KeyChord {
+                keys: vec![KEY_LEFTMETA],
+            }]),
+            &config,
+        );
+
+        let pressed = rx.recv().unwrap();
+        let released = rx.recv().unwrap();
+        assert_eq!(pressed.key, KEY_LEFTMETA);
+        assert_eq!(pressed.route.as_deref(), Some("app-key"));
+        assert_eq!(released.key, KEY_LEFTMETA);
+        assert_eq!(released.route.as_deref(), Some("app-key"));
+    }
+
+    #[test]
+    fn super_chords_default_to_app_key_route_for_ime_backend() {
+        let mut config = test_config();
+        config.text_output.backend = TextOutputBackend::Ime;
+        let mut executor = ActionExecutor::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        executor.set_ime_event_sender(tx);
+
+        dispatch_for_test(
+            &mut executor,
+            GestureAction::KeySequence(vec![KeyChord {
+                keys: vec![KEY_LEFTMETA, KEY_A],
+            }]),
+            &config,
+        );
+
+        let events = (0..4).map(|_| rx.recv().unwrap()).collect::<Vec<_>>();
+        assert_eq!(events[0].key, KEY_LEFTMETA);
+        assert_eq!(events[0].route.as_deref(), Some("app-key"));
+        assert_eq!(events[1].key, KEY_A);
+        assert_eq!(events[1].route.as_deref(), Some("app-key"));
+        assert_eq!(events[2].key, KEY_A);
+        assert_eq!(events[2].route.as_deref(), Some("app-key"));
+        assert_eq!(events[3].key, KEY_LEFTMETA);
+        assert_eq!(events[3].route.as_deref(), Some("app-key"));
     }
 
     #[test]

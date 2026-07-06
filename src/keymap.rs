@@ -697,13 +697,20 @@ mod tests {
     use super::*;
     use crate::config::{
         expand_keyboard_maps, parse_action_steps, BehaviorRegistry, Config, FileConfig,
-        TextOutputBackend, TextOutputConfig,
+        InputConfig, TextOutputBackend, TextOutputConfig, TouchInputBackend,
     };
     use crate::layout::SlotRegistry;
     use crate::mode::{Layer, Mode, SlotGestureKind};
 
     fn test_config() -> Config {
         let mut config = Config {
+            input: InputConfig {
+                touch_backend: TouchInputBackend::Wayland,
+                evdev_touch_device: None,
+                evdev_device_name_contains: None,
+                sunshine_output: None,
+                evdev_grab: true,
+            },
             action_swipe_left: Some(NiriAction::FocusWorkspaceDown),
             action_swipe_right: Some(NiriAction::FocusWorkspaceUp),
             action_swipe_up: Some(NiriAction::FocusColumnRight),
