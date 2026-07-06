@@ -2,8 +2,9 @@ use anyhow::{anyhow, Result};
 
 use crate::key::normalize_name;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Mode {
+    #[default]
     Base,
     Text,
     NiriMomentary,
@@ -11,8 +12,9 @@ pub(crate) enum Mode {
     Passthrough,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Layer {
+    #[default]
     Base,
     Niri,
 }
@@ -25,18 +27,6 @@ pub(crate) enum SlotGestureKind {
     SwipeDown,
     SwipeLeft,
     SwipeRight,
-}
-
-impl Default for Mode {
-    fn default() -> Self {
-        Self::Base
-    }
-}
-
-impl Default for Layer {
-    fn default() -> Self {
-        Self::Base
-    }
 }
 
 pub(crate) fn default_layer_stack_for_mode(mode: Mode) -> Vec<Layer> {

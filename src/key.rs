@@ -279,9 +279,7 @@ pub(crate) fn key_chord_label(chord: &KeyChord) -> Option<String> {
     };
 
     for modifier in modifiers.into_iter().rev() {
-        let Some(wrapper) = zmk_modifier_wrapper_label(modifier) else {
-            return None;
-        };
+        let wrapper = zmk_modifier_wrapper_label(modifier)?;
         label = format!("{wrapper}({label})");
     }
 

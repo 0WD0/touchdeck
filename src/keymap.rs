@@ -13,17 +13,9 @@ use crate::key::{key_code_label, key_sequence_label, normalize_name, KeyChord};
 use crate::layout::SlotTarget;
 use crate::mode::{layer_name, mode_name, Layer, Mode, SlotGestureKind};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Keymap {
     pub(crate) bindings: Vec<Binding>,
-}
-
-impl Default for Keymap {
-    fn default() -> Self {
-        Self {
-            bindings: Vec::new(),
-        }
-    }
 }
 
 impl Keymap {
@@ -140,7 +132,7 @@ impl Keymap {
     ) -> GestureAction {
         let gesture = Gesture {
             max_active: 1,
-            finished: vec![contact.clone()],
+            finished: vec![*contact],
         };
         let Some(kind) = recognize_gesture_kind(&gesture, config, size) else {
             return GestureAction::None;
@@ -385,39 +377,39 @@ impl Trigger {
     }
 
     fn matches_slot_gesture(&self, gesture: SlotGestureKind) -> bool {
-        match (self, gesture) {
-            (Self::Tap { .. }, SlotGestureKind::Tap) => true,
-            (Self::Hold { .. }, SlotGestureKind::Hold) => true,
-            (
-                Self::Swipe {
-                    direction: SwipeDirection::Up,
-                    ..
-                },
-                SlotGestureKind::SwipeUp,
-            ) => true,
-            (
-                Self::Swipe {
-                    direction: SwipeDirection::Down,
-                    ..
-                },
-                SlotGestureKind::SwipeDown,
-            ) => true,
-            (
-                Self::Swipe {
-                    direction: SwipeDirection::Left,
-                    ..
-                },
-                SlotGestureKind::SwipeLeft,
-            ) => true,
-            (
-                Self::Swipe {
-                    direction: SwipeDirection::Right,
-                    ..
-                },
-                SlotGestureKind::SwipeRight,
-            ) => true,
-            _ => false,
-        }
+        matches!(
+            (self, gesture),
+            (Self::Tap { .. }, SlotGestureKind::Tap)
+                | (Self::Hold { .. }, SlotGestureKind::Hold)
+                | (
+                    Self::Swipe {
+                        direction: SwipeDirection::Up,
+                        ..
+                    },
+                    SlotGestureKind::SwipeUp,
+                )
+                | (
+                    Self::Swipe {
+                        direction: SwipeDirection::Down,
+                        ..
+                    },
+                    SlotGestureKind::SwipeDown,
+                )
+                | (
+                    Self::Swipe {
+                        direction: SwipeDirection::Left,
+                        ..
+                    },
+                    SlotGestureKind::SwipeLeft,
+                )
+                | (
+                    Self::Swipe {
+                        direction: SwipeDirection::Right,
+                        ..
+                    },
+                    SlotGestureKind::SwipeRight,
+                )
+        )
     }
 
     fn max_ms(&self) -> Option<u32> {

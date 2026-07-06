@@ -1611,21 +1611,19 @@ fn poll_fd(fd: RawFd, timeout: Option<Duration>) -> Result<bool> {
         revents: 0,
     };
 
-    loop {
-        let rc = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
-        if rc > 0 {
-            return Ok(true);
-        }
-        if rc == 0 {
-            return Ok(false);
-        }
-
-        let err = std::io::Error::last_os_error();
-        if err.kind() == std::io::ErrorKind::Interrupted {
-            return Ok(false);
-        }
-        return Err(err.into());
+    let rc = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+    if rc > 0 {
+        return Ok(true);
     }
+    if rc == 0 {
+        return Ok(false);
+    }
+
+    let err = std::io::Error::last_os_error();
+    if err.kind() == std::io::ErrorKind::Interrupted {
+        return Ok(false);
+    }
+    Err(err.into())
 }
 
 fn validate_rect(rect: RectNorm, context: &str) -> Result<RectNorm> {

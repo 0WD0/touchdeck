@@ -313,7 +313,7 @@ impl Engine {
                 }
             }
 
-            moved_contact = Some(contact.clone());
+            moved_contact = Some(*contact);
         }
 
         if let Some(contact) = moved_contact {
@@ -887,7 +887,7 @@ impl Engine {
             if hold_ids.contains(&contact.id) {
                 true
             } else {
-                finished.push(contact.clone());
+                finished.push(*contact);
                 false
             }
         });
