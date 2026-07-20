@@ -918,7 +918,6 @@ fn behavior_label(behavior: &Behavior) -> Option<String> {
 mod tests {
 
     use super::*;
-    use crate::action::parse_niri_action;
     use crate::config::{
         expand_keyboard_maps, parse_action_steps, BehaviorRegistry, Config, FileConfig,
         InputConfig, TextOutputBackend, TextOutputConfig, TouchInputBackend,

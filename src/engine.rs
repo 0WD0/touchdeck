@@ -1531,6 +1531,7 @@ fn is_top_left_corner(contact: &Contact, config: &Config, size: SurfaceSize) -> 
 mod tests {
 
     use super::*;
+    use crate::action::NiriCommand;
     use crate::config::{
         expand_keyboard_maps, parse_action_steps, BehaviorRegistry, Config, FileConfig,
         InputConfig, TextOutputBackend, TextOutputConfig, TouchInputBackend,

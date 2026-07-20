@@ -489,7 +489,6 @@ impl ActionExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{parse_niri_action, NiriCommand};
     use crate::config::{InputConfig, TextOutputBackend, TextOutputConfig, TouchInputBackend};
     use crate::key::*;
     use crate::keymap::MacroRegistry;
@@ -505,11 +504,6 @@ mod tests {
                 sunshine_router_socket: std::path::PathBuf::from("/tmp/touchdeck-test.sock"),
                 evdev_grab: true,
             },
-            action_swipe_left: Some(niri("focus-workspace-down")),
-            action_swipe_right: Some(niri("focus-workspace-up")),
-            action_swipe_up: Some(niri("focus-column-right")),
-            action_swipe_down: Some(niri("focus-column-left")),
-            action_two_finger_tap: Some(niri("toggle-overview")),
             tap_radius: 48.0,
             two_finger_tap_ms: 350,
             exit_tap_ms: 450,
@@ -537,10 +531,6 @@ mod tests {
             exit_corner_ratio: 0.12,
             exit_corner_tap_ms: 350,
         }
-    }
-
-    fn niri(action: &str) -> NiriCommand {
-        parse_niri_action(action).unwrap()
     }
 
     fn press_for_test(
