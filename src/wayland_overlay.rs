@@ -1,13 +1,10 @@
 use std::collections::VecDeque;
-use std::fs::File;
 use std::os::fd::AsFd;
 
 use anyhow::{anyhow, Context, Result};
 use memmap2::MmapMut;
 use tempfile::tempfile;
-use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_output, wl_shm, wl_shm_pool, wl_surface,
-};
+use wayland_client::protocol::{wl_buffer, wl_compositor, wl_output, wl_shm, wl_surface};
 use wayland_client::QueueHandle;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -25,11 +22,8 @@ pub(crate) struct Overlay {
 }
 
 struct BufferBacking {
-    _file: File,
     _mmap: MmapMut,
-    _pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
-    released: bool,
 }
 
 impl Overlay {
@@ -40,7 +34,9 @@ impl Overlay {
         if let Some(surface) = self.surface.take() {
             surface.destroy();
         }
-        self.buffers.clear();
+        for backing in self.buffers.drain(..) {
+            backing.buffer.destroy();
+        }
         self.width = 0;
         self.height = 0;
     }
@@ -161,18 +157,18 @@ impl Overlay {
             qh,
             (),
         );
+        // A wl_buffer keeps its own reference to the pool storage. Keeping the
+        // wl_shm_pool protocol object alive for every frame leaks compositor-side
+        // resources (including an FD on niri) until the client disconnects.
+        pool.destroy();
 
         surface.attach(Some(&buffer), 0, 0);
         surface.damage_buffer(0, 0, width as i32, height as i32);
         surface.commit();
 
-        self.buffers.retain(|backing| !backing.released);
         self.buffers.push_back(BufferBacking {
-            _file: file,
             _mmap: mmap,
-            _pool: pool,
             buffer,
-            released: false,
         });
 
         Ok(())
@@ -217,12 +213,16 @@ impl Overlay {
     }
 
     pub(crate) fn mark_buffer_released(&mut self, proxy: &wl_buffer::WlBuffer) {
-        for backing in &mut self.buffers {
-            if backing.buffer == proxy.clone() {
-                backing.released = true;
-                break;
-            }
+        if let Some(index) = self
+            .buffers
+            .iter()
+            .position(|backing| backing.buffer == proxy.clone())
+        {
+            let backing = self
+                .buffers
+                .remove(index)
+                .expect("buffer index came from this queue");
+            backing.buffer.destroy();
         }
-        self.buffers.retain(|backing| !backing.released);
     }
 }

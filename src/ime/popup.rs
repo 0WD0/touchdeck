@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::env;
-use std::fs::File;
 use std::os::fd::AsFd;
 
 use crate::protocol::ImeStatus;
@@ -8,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache};
 use memmap2::MmapMut;
 use tempfile::tempfile;
-use wayland_client::protocol::{wl_buffer, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{wl_buffer, wl_shm, wl_surface};
 use wayland_client::QueueHandle;
 
 use super::config::PopupConfig;
@@ -40,26 +39,22 @@ impl PopupRenderer {
         surface.commit();
 
         self.buffers.push_back(backing);
-        self.retain_live_buffers();
-        while self.buffers.len() > 8 {
-            self.buffers.pop_front();
-        }
 
         Ok(())
     }
 
     pub(super) fn release_buffer(&mut self, buffer: &wl_buffer::WlBuffer) {
-        for backing in &mut self.buffers {
-            if backing.buffer == buffer.clone() {
-                backing.released = true;
-                break;
-            }
+        if let Some(index) = self
+            .buffers
+            .iter()
+            .position(|backing| backing.buffer == buffer.clone())
+        {
+            let backing = self
+                .buffers
+                .remove(index)
+                .expect("buffer index came from this queue");
+            backing.buffer.destroy();
         }
-        self.retain_live_buffers();
-    }
-
-    fn retain_live_buffers(&mut self) {
-        self.buffers.retain(|buffer| !buffer.released);
     }
 
     fn create_buffer(
@@ -95,14 +90,14 @@ impl PopupRenderer {
             qh,
             (),
         );
+        // The buffer remains valid after its pool is destroyed. Destroying the
+        // pool here prevents one compositor-side shm FD from leaking per redraw.
+        pool.destroy();
 
         Ok((
             PopupBuffer {
-                _file: file,
                 _mmap: mmap,
-                _pool: pool,
                 buffer,
-                released: false,
             },
             width as i32,
             height as i32,
@@ -111,11 +106,8 @@ impl PopupRenderer {
 }
 
 struct PopupBuffer {
-    _file: File,
     _mmap: MmapMut,
-    _pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
-    released: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
